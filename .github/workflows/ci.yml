@@ -40,10 +40,32 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
-      - name: ADR 0001 - llm must not depend on capture
+      - name: ADR 0001 - llm must not depend on capture or voice
         run: |
-          if cargo tree -p llm | grep -E '(^|[^a-z_-])capture '; then
-            echo "llm depends on capture"; exit 1
+          if cargo tree -p llm --all-features | grep -E '(^|[^a-z_-])(capture|voice) '; then
+            echo "llm depends on capture or voice"; exit 1
+          fi
+      - name: ADR 0002 - CloudOptIn::for_request only in core/src/consent.rs and crates/llm
+        run: |
+          # Tripwire (real control is review): match the bare identifier, and ban aliasing CloudOptIn.
+          hits=$(grep -rnE 'for_request|CloudOptIn[[:space:]]+as[[:space:]]' --include='*.rs' --include='*.ts' --include='*.tsx' \
+            apps crates tools \
+            | grep -v '^crates/llm/' | grep -v '^crates/core/src/consent.rs:' || true)
+          if [ -n "$hits" ]; then
+            echo "for_request / CloudOptIn alias used outside crates/core/src/consent.rs and crates/llm:"
+            echo "$hits"; exit 1
+          fi
+      - name: llm tests and clippy with every feature that builds on Linux
+        run: |
+          cargo test -p llm --features fakes
+          cargo test -p llm --features ollama,anthropic,keychain,fakes
+          for f in fakes ollama anthropic keychain; do
+            cargo clippy -p llm --all-targets --features "$f" -- -D warnings
+          done
+      - name: ADR 0002 - no openssl / native-tls in the llm tree
+        run: |
+          if cargo tree -p llm --all-features -e normal | grep -E '(^|[^a-z_-])(openssl|openssl-sys|native-tls) v'; then
+            echo "openssl/native-tls in llm tree"; exit 1
           fi
       - name: ADR 0001 - fakes feature must not be enabled in desktop app tree
         run: |

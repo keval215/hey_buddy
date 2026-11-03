@@ -29,6 +29,12 @@ allow = [
 
 [bans]
 multiple-versions = "allow"
+# ADR 0002 section 7: one TLS stack (rustls + ring). No OpenSSL / native-tls anywhere.
+deny = [
+  { name = "openssl-sys" },
+  { name = "openssl" },
+  { name = "native-tls" },
+]
 
 [sources]
 unknown-registry = "deny"

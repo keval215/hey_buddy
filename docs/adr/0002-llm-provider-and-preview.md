@@ -172,6 +172,9 @@ Known limitation (unchanged from ADR 0001): a password drawn on a canvas and inv
 6. Turn-flow steps 1 and 3 replaced by A7.
 7. New deps: bytes, base64, serde_json, secrecy, reqwest, rustls, rustls-platform-verifier, ring, keyring (permissive).
 
+## Amendment notes from T9.2
+`RequestPreview` also carries `system: Arc<str>` (same Arc as in the body). `secure_fields_hidden` is a UI hint (screen-text count when text is present, else frame redaction count). Error tokens: `Config("request_provider_mismatch")` = request prepared by another provider/endpoint; `NotOptedIn` = missing opt-in or digest mismatch. Anthropic model id has no default (settings must supply it). Reviewer note: the CI `for_request` grep is a tripwire, real enforcement is review of consent.rs.
+
 ## Consequences
 Text path is default: less data/tokens, no capture for most turns; VLM path costs a second walk + model swap (several seconds cold on 4 GB). Firewall public surface grows; screen-text v1 is a prompt contract. T12 depends on new T13 (real AX/UIA text walkers); until T13, `check_text` is `Blocked(Unsupported)` everywhere so routed turns are voice-only. Walker latency and cross-check false-block rate are unverified on real machines. Reversibility: moderate (types additive; image-first is a `route()`/settings change).
 
