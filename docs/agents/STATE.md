@@ -19,8 +19,8 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 | T4 | Local STT: whisper.cpp + Silero VAD | DONE | 1 | follow-ups: integration tests should fail (not skip) on non-ModelMissing load errors; abort whisper on stream drop; Silero input.clone per window; cap mic channel |
 | T5 | Local TTS: Phonon 31m, Kokoro fallback | DONE | 1 | Phonon complete; Kokoro PARTIAL (no phonemiser: espeak-ng is GPL) -> follow-up needs decision on licence-clean G2P + voice style files |
 | T6 | Latency bench | DONE | 1 | follow-ups: `targets.pass` as Option<bool> when not meaningful; --wav input; median/p95; README to label real paths untested |
-| T7 | Capture crate and app deny-list | IN PROGRESS | 0 | |
-| T8 | Privacy firewall v0 | TODO | 0 | |
+| T7 | Capture crate and app deny-list | CODE APPROVED (round 2) | 2 | waiting on user sign-off: no banking apps in default deny-list (user-added instead). Mark DONE on sign-off |
+| T8 | Privacy firewall v0 | IN PROGRESS | 0 | |
 | T9 | [ARCH] LLM provider and request preview | TODO | 0 | |
 | T10 | Desktop shell: tray, hotkey, overlay, pointing | TODO | 0 | |
 | T11 | Preview panel | TODO | 0 | |
@@ -29,9 +29,10 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 Statuses: TODO · ARCH-PENDING · IN PROGRESS · IN REVIEW · CHANGES · DONE · BLOCKED · SKIPPED
 
 ## In progress
-T7: coder
+T8: coder
 
 ## Blockers / waiting on user
+- T7 sign-off: defer banking apps in default deny-list (recommended) or add well-known finance apps?
 
 ## User must verify locally (macOS / Windows)
 - T1: macOS/Windows CI jobs, `tauri build`, icon.ico/icns have never run (check first CI run on GitHub)
@@ -39,6 +40,8 @@ T7: coder
 - T4 (untested here): real Whisper + Silero inference with model files (`SILERO_VAD_MODEL`, `ORT_DYLIB_PATH`, `HEY_BUDDY_MODELS_DIR`); real mic via cpal; whisper.cpp (cmake, C++, libclang) + cpal builds on macOS/Windows; CI does not build `stt-whisper`/`mic-cpal` features yet
 - T5 (untested here): real Phonon 31m checkpoint (assumed dir layout `<models_dir>/phonon-31m/config.json`), real speakers (cpal), Kokoro model; ptts needs Rust >=1.85 (workspace MSRV bumped); build with --release for latency
 - T6 (untested here): real STT/VAD/TTS bench paths and Apple-silicon target selection; run on your Mac/Windows per README "Latency benchmark"
+- T7 (untested here): all of capture/macos.rs (never compiled; needs swiftc/macOS 14+, Screen Recording permission); Windows WGC runtime (D3D11 readback, exe lookup, foreground re-check); UWP apps can't be deny-listed by exe; unverified deny-list ids (Keeper, NordPass, Enpass, RoboForm, Dashlane exe, bitwarden safari)
+- Follow-ups for desktop/core: call `exclude_window_from_capture` for every overlay/panel window (Win); capture before overlay takes focus; show LoadedDenyList.error/removed_defaults and tell user to add banking apps; platform capture() is blocking -> spawn_blocking; confirm per-monitor DPI awareness in Tauri manifest
 - Follow-ups: Kokoro text frontend; shared ort_util module; speaker_cpal should surface stream errors; CI job for tts-phonon/speaker-cpal + `cargo deny --all-features`; real 1024px app icon; tighten CSP `unsafe-inline` later
 
 ## Done

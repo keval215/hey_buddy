@@ -4,8 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "hey_buddy frame crate"
-
+description = "hey_buddy frame crate: pure data types for captured frames"
 
 [dependencies]
-
+thiserror = "1"
