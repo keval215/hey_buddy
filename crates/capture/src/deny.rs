@@ -202,6 +202,12 @@ pub fn config_path(config_dir: &Path) -> PathBuf {
     config_dir.join(CONFIG_FILE)
 }
 
+impl frame::AppDenyPolicy for DenyList {
+    fn is_denied(&self, app_id: &str) -> bool {
+        self.matches(app_id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,5 +346,15 @@ mod tests {
     fn error_messages_have_no_path_or_content() {
         let m = DenyListError::Invalid.to_string();
         assert!(!m.contains('/'));
+    }
+
+    #[test]
+    fn app_deny_policy_is_case_insensitive() {
+        use frame::AppDenyPolicy;
+        let l = DenyList::defaults();
+        assert!(l.is_denied("KeePass.exe"));
+        assert!(!l.is_denied("com.example.app"));
+        let dynref: &dyn AppDenyPolicy = &l;
+        assert!(dynref.is_denied("keepass.EXE"));
     }
 }

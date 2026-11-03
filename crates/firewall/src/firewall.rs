@@ -4,13 +4,18 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use frame::{Frame, Rect};
+use frame::{AppDenyPolicy, Frame, Rect};
 
 use crate::blackout::{blackout, DEFAULT_PADDING_PX};
 use crate::error::*;
 use crate::redacted::RedactedFrame;
+use crate::text::{
+    redact_tree, RawWindowTree, ScreenTextSource, TextVerdict, UnsupportedTextSource,
+};
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_millis(200);
+/// Default deadline for the foreground-window tree read of `check_text`.
+pub const DEFAULT_TEXT_TIMEOUT: Duration = Duration::from_millis(1500);
 /// Default maximum age of a preflight record (and maximum gap between record and capture).
 pub const DEFAULT_MAX_RECORD_AGE: Duration = Duration::from_secs(2);
 
@@ -52,6 +57,16 @@ pub trait Firewall: Send + Sync {
     fn preflight(&self) -> SessionState;
     /// Call with the captured frame. Takes the frame by value: the caller keeps no raw pixels.
     fn check(&self, frame: Frame) -> Verdict;
+    /// Text-first screen context (ADR 0002 Addendum A): reads the foreground window's
+    /// accessibility tree and returns firewall-redacted text.
+    ///
+    /// Consumes the preflight record exactly like `check`: ONE preflight authorises exactly ONE
+    /// `check` OR ONE `check_text`, whichever runs first; a second call of either blocks.
+    ///
+    /// Default: fail closed, so a firewall without text support never yields text.
+    fn check_text(&self, _deny: &dyn AppDenyPolicy) -> TextVerdict {
+        TextVerdict::Blocked(BlockReason::Unsupported)
+    }
 }
 
 enum Deadline<T> {
@@ -117,26 +132,35 @@ struct Record {
     taken: Instant,
 }
 
-/// Real firewall logic, generic over the detector and session probe.
-pub struct PrivacyFirewall<D: SecureFieldDetector, S: SessionProbe> {
+/// Real firewall logic, generic over the detector, session probe and (optional) text source.
+pub struct PrivacyFirewall<D: SecureFieldDetector, S: SessionProbe, T = UnsupportedTextSource> {
     detector: Arc<D>,
     probe: Arc<S>,
+    text_source: Arc<T>,
+    text_timeout: Duration,
+    text_busy: Arc<AtomicBool>,
     padding_px: u32,
     timeout: Duration,
     detector_timeout: Option<Duration>,
     max_record_age: Duration,
     detector_busy: Arc<AtomicBool>,
     probe_busy: Arc<AtomicBool>,
-    /// Pre-capture record from the last successful `preflight`; consumed by `check`.
+    /// Pre-capture record from the last successful `preflight`; consumed by `check` or
+    /// `check_text`, whichever runs first.
     /// Concurrent preflights: the last writer wins; one record authorises one check.
     preflight_record: Mutex<Option<Record>>,
 }
 
-impl<D: SecureFieldDetector + 'static, S: SessionProbe + 'static> PrivacyFirewall<D, S> {
+impl<D: SecureFieldDetector + 'static, S: SessionProbe + 'static>
+    PrivacyFirewall<D, S, UnsupportedTextSource>
+{
     pub fn new(detector: D, probe: S) -> Self {
         Self {
             detector: Arc::new(detector),
             probe: Arc::new(probe),
+            text_source: Arc::new(UnsupportedTextSource),
+            text_timeout: DEFAULT_TEXT_TIMEOUT,
+            text_busy: Arc::new(AtomicBool::new(false)),
             padding_px: DEFAULT_PADDING_PX,
             timeout: DEFAULT_TIMEOUT,
             detector_timeout: None,
@@ -145,6 +169,40 @@ impl<D: SecureFieldDetector + 'static, S: SessionProbe + 'static> PrivacyFirewal
             probe_busy: Arc::new(AtomicBool::new(false)),
             preflight_record: Mutex::new(None),
         }
+    }
+}
+
+impl<
+        D: SecureFieldDetector + 'static,
+        S: SessionProbe + 'static,
+        T: ScreenTextSource + 'static,
+    > PrivacyFirewall<D, S, T>
+{
+    /// Install the foreground-tree reader used by `check_text`.
+    pub fn with_text_source<T2: ScreenTextSource + 'static>(
+        self,
+        source: T2,
+    ) -> PrivacyFirewall<D, S, T2> {
+        PrivacyFirewall {
+            detector: self.detector,
+            probe: self.probe,
+            text_source: Arc::new(source),
+            text_timeout: self.text_timeout,
+            text_busy: Arc::new(AtomicBool::new(false)),
+            padding_px: self.padding_px,
+            timeout: self.timeout,
+            detector_timeout: self.detector_timeout,
+            max_record_age: self.max_record_age,
+            detector_busy: self.detector_busy,
+            probe_busy: self.probe_busy,
+            preflight_record: self.preflight_record,
+        }
+    }
+
+    /// Deadline for the foreground-tree read (default 1500 ms).
+    pub fn with_text_timeout(mut self, t: Duration) -> Self {
+        self.text_timeout = t;
+        self
     }
 
     pub fn with_padding(mut self, px: u32) -> Self {
@@ -284,10 +342,57 @@ impl<D: SecureFieldDetector + 'static, S: SessionProbe + 'static> PrivacyFirewal
             None => Verdict::Blocked(BlockReason::detection("blackout failed")),
         }
     }
+
+    fn read_tree(&self) -> Result<RawWindowTree, BlockReason> {
+        let src = Arc::clone(&self.text_source);
+        match with_deadline(&self.text_busy, self.text_timeout, move || {
+            src.foreground_tree()
+        }) {
+            Deadline::Done(Ok(t)) => Ok(t),
+            Deadline::Done(Err(e)) => Err(e.into()),
+            Deadline::TimedOut | Deadline::Busy => Err(BlockReason::DetectionTimeout),
+            Deadline::Panicked => Err(BlockReason::detection("screen text read failed")),
+        }
+    }
+
+    fn check_text_inner(&self, deny: &dyn AppDenyPolicy) -> TextVerdict {
+        // 1. Always consume the record: one preflight authorises exactly one check/check_text.
+        let record = self
+            .preflight_record
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        // 2. Session probe.
+        match self.session() {
+            Ok(()) => {}
+            Err(SessionState::Paused(p)) => return TextVerdict::Paused(p),
+            Err(SessionState::Blocked(b)) => return TextVerdict::Blocked(b),
+            Err(SessionState::Active) => {
+                return TextVerdict::Blocked(BlockReason::detection("firewall internal error"))
+            }
+        }
+        let Some(record) = record else {
+            return TextVerdict::Blocked(BlockReason::UnstableLayout);
+        };
+        // 3. Foreground tree on a deadline worker.
+        let tree = match self.read_tree() {
+            Ok(t) => t,
+            Err(b) => return TextVerdict::Blocked(b),
+        };
+        // The record must still be fresh at the time the tree was read.
+        if Instant::now().saturating_duration_since(record.taken) > self.max_record_age {
+            return TextVerdict::Blocked(BlockReason::UnstableLayout);
+        }
+        // 4-11.
+        redact_tree(tree, &record.rects, deny)
+    }
 }
 
-impl<D: SecureFieldDetector + 'static, S: SessionProbe + 'static> Firewall
-    for PrivacyFirewall<D, S>
+impl<
+        D: SecureFieldDetector + 'static,
+        S: SessionProbe + 'static,
+        T: ScreenTextSource + 'static,
+    > Firewall for PrivacyFirewall<D, S, T>
 {
     fn preflight(&self) -> SessionState {
         catch_unwind(AssertUnwindSafe(|| self.preflight_inner())).unwrap_or_else(|_| {
@@ -299,5 +404,11 @@ impl<D: SecureFieldDetector + 'static, S: SessionProbe + 'static> Firewall
     fn check(&self, frame: Frame) -> Verdict {
         catch_unwind(AssertUnwindSafe(|| self.check_inner(frame)))
             .unwrap_or_else(|_| Verdict::Blocked(BlockReason::detection("firewall internal error")))
+    }
+
+    fn check_text(&self, deny: &dyn AppDenyPolicy) -> TextVerdict {
+        catch_unwind(AssertUnwindSafe(|| self.check_text_inner(deny))).unwrap_or_else(|_| {
+            TextVerdict::Blocked(BlockReason::detection("firewall internal error"))
+        })
     }
 }

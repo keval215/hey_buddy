@@ -5,8 +5,10 @@
 
 mod frame;
 mod geometry;
+mod policy;
 mod window;
 
 pub use frame::{Frame, FrameError, FrameParts};
 pub use geometry::{DisplayId, DisplayInfo, Rect};
+pub use policy::AppDenyPolicy;
 pub use window::WindowInfo;

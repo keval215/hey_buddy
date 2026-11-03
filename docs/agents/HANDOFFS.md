@@ -13,6 +13,11 @@ Key points: <2–4 bullets>
 Next: <what orch does next>
 ```
 
+## H-010 2026-11-03 T9.1 → coder, reviewer
+Asked: Firewall text API (check_text, RedactedScreenText, FakeTextSource), core::route, manual-tests.md.
+Result: APPROVED round 1 with 6 MINOR hardening items (geometric containment around secure rects, strip tag chars/variation selectors, cap/sanitise app id, intersects in cross-check, reject 2nd depth-0 root, meaningful_nodes semantics).
+Next: hardening pass, then T9.2.
+
 ## H-009 2026-11-03 T8 → coder (x2), reviewer (x2)
 Asked: Firewall v0 (sealed RedactedFrame, blackout, fail-closed PrivacyFirewall, mac/Win detectors, fakes).
 Result: APPROVED round 2.

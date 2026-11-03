@@ -1,4 +1,4 @@
-//! Test fakes for the detector and session probe. There is deliberately NO fake `Firewall`.
+//! Test fakes for the detector, session probe and screen-text source. There is deliberately NO fake `Firewall`.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -7,7 +7,10 @@ use std::time::Duration;
 
 use frame::Rect;
 
-use crate::{FirewallError, SecureFieldDetector, SessionProbe, SessionProbeState};
+use crate::{
+    FirewallError, RawWindowTree, ScreenTextSource, SecureFieldDetector, SessionProbe,
+    SessionProbeState,
+};
 
 /// Pops scripted results front to back; the last one repeats forever.
 fn next<T: Clone>(q: &Mutex<VecDeque<T>>) -> T {
@@ -121,6 +124,76 @@ impl SessionProbe for FakeSessionProbe {
         }
         if self.panics {
             panic!("fake probe panic");
+        }
+        next(&self.script)
+    }
+}
+
+/// What a fake text source was asked for. `ScreenTextSource` has a single, parameterless
+/// request, so the log proves nothing but the foreground window is ever requested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextRequest {
+    ForegroundWindow,
+}
+
+/// Scripted `ScreenTextSource`. Like the other fakes the last scripted result repeats.
+/// It happily returns whatever tree it is given, including trees that violate the source
+/// contract (secrets in secure nodes), so tests can prove the firewall does not rely on it.
+pub struct FakeTextSource {
+    script: Mutex<VecDeque<Result<RawWindowTree, FirewallError>>>,
+    delay: Duration,
+    panics: bool,
+    calls: Arc<AtomicUsize>,
+    requests: Arc<Mutex<Vec<TextRequest>>>,
+}
+
+impl FakeTextSource {
+    pub fn new(tree: RawWindowTree) -> Self {
+        Self::sequence(vec![Ok(tree)])
+    }
+    pub fn failing(e: FirewallError) -> Self {
+        Self::sequence(vec![Err(e)])
+    }
+    pub fn sequence(results: Vec<Result<RawWindowTree, FirewallError>>) -> Self {
+        assert!(!results.is_empty());
+        Self {
+            script: Mutex::new(results.into()),
+            delay: Duration::ZERO,
+            panics: false,
+            calls: Arc::new(AtomicUsize::new(0)),
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+    pub fn with_delay(mut self, d: Duration) -> Self {
+        self.delay = d;
+        self
+    }
+    pub fn panicking(mut self) -> Self {
+        self.panics = true;
+        self
+    }
+    /// Shared counter of started `foreground_tree` calls.
+    pub fn call_counter(&self) -> Arc<AtomicUsize> {
+        Arc::clone(&self.calls)
+    }
+    /// Shared request log (usable after the fake is moved into a firewall).
+    pub fn request_log(&self) -> Arc<Mutex<Vec<TextRequest>>> {
+        Arc::clone(&self.requests)
+    }
+}
+
+impl ScreenTextSource for FakeTextSource {
+    fn foreground_tree(&self) -> Result<RawWindowTree, FirewallError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(TextRequest::ForegroundWindow);
+        if !self.delay.is_zero() {
+            std::thread::sleep(self.delay);
+        }
+        if self.panics {
+            panic!("fake text source panic");
         }
         next(&self.script)
     }

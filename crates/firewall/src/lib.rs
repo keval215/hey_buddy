@@ -44,6 +44,15 @@
 //! - Real-world detector latency on both platforms is unverified; the platform firewalls use a
 //!   longer detector timeout ([`PrivacyFirewall::with_detector_timeout`]).
 //!
+//! # Text path (ADR 0002 Addendum A)
+//! `Firewall::check_text` reads the foreground window's accessibility tree through a
+//! [`ScreenTextSource`] and returns [`TextVerdict`]; the only producer of [`RedactedScreenText`]
+//! is the pure `redact_tree`. It shares the preflight record with `check`: one preflight
+//! authorises exactly one `check` OR one `check_text`. The default `check_text` and
+//! `platform_firewall()` (until the T13 tree readers exist) block with
+//! `Blocked(Unsupported)`, so turns are voice-only. Non-password text-field values and
+//! window/page titles are never emitted.
+//!
 //! Errors, `Debug` output and logs contain no pixels, window titles or field values.
 
 mod blackout;
@@ -51,6 +60,8 @@ mod error;
 mod firewall;
 mod platform;
 mod redacted;
+mod redacted_text;
+mod text;
 
 #[cfg(any(test, feature = "fakes"))]
 pub mod fake;
@@ -58,10 +69,18 @@ pub mod fake;
 pub use error::{BlockReason, FirewallError, PauseReason, SessionProbeState, SessionState};
 pub use firewall::{
     Firewall, PrivacyFirewall, SecureFieldDetector, SessionProbe, Verdict, DEFAULT_MAX_RECORD_AGE,
-    DEFAULT_TIMEOUT,
+    DEFAULT_TEXT_TIMEOUT, DEFAULT_TIMEOUT,
 };
 pub use platform::{platform_firewall, UnsupportedDetector, UnsupportedSessionProbe};
 pub use redacted::RedactedFrame;
+pub use redacted_text::RedactedScreenText;
+pub use text::{
+    NodeRole, RawTextNode, RawWindowTree, ScreenTextSource, TextCoverage, TextVerdict,
+    UnsupportedTextSource, WithheldReason, MAX_EMITTED_NODES, MAX_LABEL_CHARS, MAX_TEXT_CHARS,
+    MAX_VALUE_CHARS, TRUNCATED_MARKER,
+};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod text_tests;
