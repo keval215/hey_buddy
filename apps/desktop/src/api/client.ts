@@ -60,6 +60,8 @@ export const api = {
   /** Preview window only. */
   previewDecision: (requestId: number, decision: Decision) =>
     invoke<void>("preview_decision", { requestId, decision }),
+  /** Preview window only: the preview waiting for a decision (a panel that mounts late). */
+  getPendingPreview: () => invoke<PreviewDto | null>("get_pending_preview"),
   getLastRequest: () => invoke<LastRequestDto | null>("get_last_request"),
   /** The key goes to the OS keychain; it is never returned. Provider allowlist: "anthropic". */
   setApiKey: (provider: string, key: string) => invoke<Settings>("set_api_key", { provider, key }),

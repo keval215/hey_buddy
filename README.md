@@ -9,9 +9,11 @@ asks before it acts.**
 
 ## Status
 
-Early development (Step 1: voice + screen-aware buddy). The repo currently contains the
-workspace scaffold only: empty Rust crates, a Tauri 2 + React app shell and CI. Nothing is
-usable yet. See `docs/STEP1.md` for the plan and `docs/adr/` for architecture decisions.
+Early development (Step 1: voice + screen-aware buddy). The whole push-to-talk turn is wired
+(hotkey, firewall, screen text, speech to text, local LLM, text to speech, overlay pointing) and
+tested end to end on fakes; running it for real needs the `real-voice` build below and is still
+being verified on macOS and Windows. See `docs/STEP1.md` for the plan and `docs/adr/` for
+architecture decisions.
 
 ## Principles
 
@@ -30,6 +32,22 @@ cargo test --workspace
 pnpm install && pnpm lint && pnpm typecheck && pnpm test
 pnpm --filter desktop tauri dev
 ```
+
+### Real voice engines
+
+By default the app is built WITHOUT the voice engines (CI and Linux stay light): it starts with
+a "Voice engines not built" status. To run the real thing (whisper.cpp STT, Silero VAD, Phonon
+TTS, cpal microphone/speaker):
+
+```
+cd apps/desktop && pnpm tauri dev --features real-voice
+# or: cd apps/desktop/src-tauri && cargo tauri dev --features real-voice
+```
+
+It needs cmake + clang at build time (and `libasound2-dev` on Linux), the model files in
+`<app data folder>/models` (or `HEY_BUDDY_MODELS_DIR`; nothing is downloaded for you),
+`ORT_DYLIB_PATH` pointing at onnxruntime, and Ollama with `qwen3:4b` pulled. Step by step:
+`docs/manual-tests.md` ("Step 1 EXIT TEST").
 
 On Linux the desktop crate needs the Tauri system libraries (webkit2gtk 4.1, GTK 3,
 libayatana-appindicator, librsvg). Without them, plain `cargo build`/`cargo test` skip the

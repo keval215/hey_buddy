@@ -1,11 +1,14 @@
 //! `Buddy`: the app-level state the Tauri glue talks to (ADR 0001: the app depends only on
-//! this crate). T10 skeleton: settings, displays, hotkey state. The turn pipeline (capture ->
-//! firewall -> STT -> LLM -> TTS) is wired in T12 at the marked hooks.
+//! this crate): settings, displays, hotkey state, consent and the turn engine (T12).
 //!
-//! Every method returns the events to emit; the glue does the emitting. No audio, frames or
-//! transcripts pass through here in T10. Push-to-talk only: nothing here opens a microphone.
+//! Events go out through the installed [`EventSink`] (default: dropped). The hotkey starts a
+//! turn on the engine's runtime ([`crate::turn`]); a press during a running turn cancels it
+//! and starts a new one. Push-to-talk only: the microphone is opened after a press and closed
+//! on release or cancel; nothing here opens it otherwise. Without an engine (voice engines not
+//! built) a press reports `voice_not_built` and does nothing else.
 
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use capture::CaptureSource;
@@ -23,9 +26,11 @@ use crate::consent::{
     last_request_dto, provider_allowed, ConsentError, ConsentGate, PreviewSink, PreviewStore,
     LAST_KEY,
 };
-use crate::error::{CoreError, KeyError};
+use crate::error::{simple_turn_error, CoreError, KeyError};
+use crate::events::{EventSink, NullSink};
 use crate::point::sanitize_label;
 use crate::settings::{SettingsError, SettingsStore};
+use crate::turn::{self, EngineDeps, ProviderSource, TurnControl, TurnCtx};
 
 /// Result of a settings update; the glue re-registers the hotkey when `hotkey_changed`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,7 +54,7 @@ const MAX_KEY_LEN: usize = 512;
 pub struct Buddy {
     settings: Mutex<SettingsStore>,
     inner: Mutex<Inner>,
-    capture: Box<dyn CaptureSource>,
+    pub(crate) capture: Arc<dyn CaptureSource>,
     store: Arc<PreviewStore>,
     pub(crate) consent: Arc<ConsentGate>,
     credentials: Arc<dyn CredentialStore>,
@@ -57,6 +62,13 @@ pub struct Buddy {
     has_key: Mutex<Option<bool>>,
     /// Most recent turn's request (in memory only, replaced each turn).
     last: Mutex<Option<LastRequestDto>>,
+    sink: Mutex<Arc<dyn EventSink>>,
+    /// The turn engine's dependencies; `None` = voice engines not built.
+    engine: Mutex<Option<Arc<EngineDeps>>>,
+    current: Mutex<Option<TurnControl>>,
+    notices: Mutex<Vec<String>>,
+    /// Why there is no engine (reported on a hotkey press): `(code, message)`.
+    engine_unavailable: Mutex<Option<(String, String)>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -85,12 +97,61 @@ impl Buddy {
                 firewall: FirewallStatus::default(),
                 hotkey_registered: false,
             }),
-            capture,
+            capture: Arc::from(capture),
             store,
             consent,
             credentials,
             has_key: Mutex::new(None),
             last: Mutex::new(None),
+            sink: Mutex::new(Arc::new(NullSink)),
+            engine: Mutex::new(None),
+            current: Mutex::new(None),
+            notices: Mutex::new(Vec::new()),
+            engine_unavailable: Mutex::new(None),
+        }
+    }
+
+    /// Where events go (the glue installs this once at startup).
+    pub fn set_event_sink(&self, sink: Arc<dyn EventSink>) {
+        *lock(&self.sink) = sink;
+    }
+
+    pub(crate) fn sink(&self) -> Arc<dyn EventSink> {
+        lock(&self.sink).clone()
+    }
+
+    /// Install the turn engine. Until this is called a hotkey press reports `voice_not_built`.
+    pub fn attach_engine(&self, deps: EngineDeps) {
+        *lock(&self.engine) = Some(Arc::new(deps));
+    }
+
+    /// Why no engine is attached, for the `turn:error` a hotkey press reports (`code` and
+    /// `message` must be fixed text: no content).
+    pub fn set_engine_unavailable(&self, code: &str, message: &str) {
+        *lock(&self.engine_unavailable) = Some((code.to_string(), message.to_string()));
+    }
+
+    pub fn has_engine(&self) -> bool {
+        lock(&self.engine).is_some()
+    }
+
+    /// The provider source for the real adapters (Ollama on loopback, Anthropic with the key
+    /// from this buddy's credential store).
+    pub fn default_providers(&self) -> Arc<dyn ProviderSource> {
+        Arc::new(crate::providers::DefaultProviders::new(
+            self.credentials.clone(),
+        ))
+    }
+
+    /// Replace the display-only notes shown in `Status.notices`.
+    pub fn set_notices(&self, notices: Vec<String>) {
+        *lock(&self.notices) = notices;
+    }
+
+    pub fn add_notice(&self, notice: String) {
+        let mut n = lock(&self.notices);
+        if !n.contains(&notice) {
+            n.push(notice);
         }
     }
 
@@ -188,6 +249,12 @@ impl Buddy {
         lock(&self.last).clone()
     }
 
+    /// `get_pending_preview` command (preview window only): the preview currently waiting for
+    /// a decision, so a panel that mounts after `turn:preview` was emitted still shows it.
+    pub fn pending_preview(&self) -> Option<crate::api::PreviewDto> {
+        self.consent.pending_preview()
+    }
+
     fn record_last(&self, preview: &RequestPreview) {
         let turn_id = lock(&self.inner).turn_id;
         self.store.put(LAST_KEY, preview);
@@ -237,6 +304,7 @@ impl Buddy {
             firewall: i.firewall.clone(),
             hotkey_registered: i.hotkey_registered,
             settings_error,
+            notices: lock(&self.notices).clone(),
         }
     }
 
@@ -254,46 +322,156 @@ impl Buddy {
             .unwrap_or_default()
     }
 
-    /// Push-to-talk pressed. Returns the `turn:state` to emit, or `None` when a turn is already
-    /// running (key auto-repeat, or pressed during a turn).
+    /// Push-to-talk pressed.
     ///
-    /// T12 HOOK: start the turn here (preflight, route, capture at press time, start the mic).
-    pub fn on_hotkey_pressed(&self) -> Option<TurnState> {
+    /// - while listening (key auto-repeat): ignored;
+    /// - during a running turn (transcribing, thinking, speaking): that turn is cancelled
+    ///   (streams dropped, playback stopped, pending consent cancelled) and a new one starts;
+    /// - otherwise a new turn starts: `turn:state Listening`, mic opened.
+    pub fn on_hotkey_pressed(self: &Arc<Self>) {
+        let Some(deps) = lock(&self.engine).clone() else {
+            let (code, msg) = lock(&self.engine_unavailable).clone().unwrap_or_else(|| {
+                (
+                    "voice_not_built".into(),
+                    "Voice engines are not available. See the status notices.".into(),
+                )
+            });
+            self.sink().error(simple_turn_error(&code, &msg));
+            return;
+        };
+        let sink = self.sink();
+        {
+            let i = lock(&self.inner);
+            if i.phase == Phase::Listening {
+                return;
+            }
+        }
+        if let Some(old) = self.cancel_current() {
+            sink.turn_state(old);
+        }
+        // A new turn supersedes any preview still waiting from an earlier one.
+        self.consent.cancel_all();
         let ev = {
             let mut i = lock(&self.inner);
-            if i.phase != Phase::Idle {
-                return None;
-            }
             i.turn_id = i.turn_id.wrapping_add(1);
             i.phase = Phase::Listening;
+            let turn_id = i.turn_id;
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let (release_tx, release_rx) = tokio::sync::watch::channel(false);
+            let ctx = TurnCtx {
+                buddy: self.clone(),
+                deps: deps.clone(),
+                turn_id,
+                cancelled: cancelled.clone(),
+                release: release_rx,
+            };
+            let task = deps.runtime.spawn(turn::run(ctx));
+            *lock(&self.current) = Some(TurnControl {
+                turn_id,
+                cancelled,
+                release: release_tx,
+                task,
+            });
+            TurnState {
+                turn_id,
+                phase: Phase::Listening,
+            }
+        };
+        sink.turn_state(ev);
+    }
+
+    /// Push-to-talk released: the mic is closed and the turn moves to `Transcribing`.
+    pub fn on_hotkey_released(&self) {
+        let ev = {
+            let mut i = lock(&self.inner);
+            if i.phase != Phase::Listening {
+                return;
+            }
+            i.phase = Phase::Transcribing;
             TurnState {
                 turn_id: i.turn_id,
                 phase: i.phase,
             }
         };
-        // A new turn supersedes any preview still waiting from an earlier one.
-        self.consent.cancel_all();
-        Some(ev)
+        if let Some(c) = lock(&self.current).as_ref() {
+            let _ = c.release.send(true);
+        }
+        self.sink().turn_state(ev);
     }
 
-    /// Push-to-talk released. T10: straight back to `Idle`.
-    ///
-    /// T12 HOOK: stop the mic and move to `Transcribing` instead of `Idle`.
-    pub fn on_hotkey_released(&self) -> Option<TurnState> {
+    /// `cancel_turn` command: stop the running turn (if any) and cancel pending previews.
+    pub fn cancel_turn(&self) {
+        let ev = self.cancel_current();
+        self.consent.cancel_all();
+        if let Some(ev) = ev {
+            self.sink().turn_state(ev);
+        }
+    }
+
+    /// Abort the running turn. Returns the `Idle` state to emit when a turn was in progress.
+    fn cancel_current(&self) -> Option<TurnState> {
         let mut i = lock(&self.inner);
-        if i.phase != Phase::Listening {
+        if let Some(c) = lock(&self.current).take() {
+            c.cancel();
+        }
+        if i.phase == Phase::Idle {
             return None;
         }
         i.phase = Phase::Idle;
         Some(TurnState {
             turn_id: i.turn_id,
-            phase: i.phase,
+            phase: Phase::Idle,
         })
     }
 
-    /// `cancel_turn` command. T12 HOOK: also stop STT/LLM/TTS. Pending previews are cancelled.
-    pub fn cancel_turn(&self) {
-        self.consent.cancel_all();
+    /// Engine -> state: move the running turn to `phase` (ignored for a stale turn).
+    pub(crate) fn advance_phase(&self, turn_id: u32, phase: Phase) {
+        let ev = {
+            let mut i = lock(&self.inner);
+            if i.turn_id != turn_id
+                || i.phase == phase
+                || i.phase == Phase::Idle
+                // Never step back from Speaking (a spoken explanation can start before the
+                // model is called).
+                || (phase == Phase::Thinking && i.phase == Phase::Speaking)
+            {
+                return;
+            }
+            i.phase = phase;
+            TurnState { turn_id, phase }
+        };
+        self.sink().turn_state(ev);
+    }
+
+    /// Engine -> state: the turn is over.
+    pub(crate) fn finish_turn(&self, turn_id: u32) {
+        let ev = {
+            let mut i = lock(&self.inner);
+            if i.turn_id != turn_id {
+                return;
+            }
+            {
+                let mut cur = lock(&self.current);
+                if cur.as_ref().is_some_and(|c| c.turn_id == turn_id) {
+                    *cur = None;
+                }
+            }
+            if i.phase == Phase::Idle {
+                return;
+            }
+            i.phase = Phase::Idle;
+            TurnState {
+                turn_id,
+                phase: Phase::Idle,
+            }
+        };
+        self.sink().turn_state(ev);
+    }
+
+    /// Engine -> state: remember and announce the firewall's state for this turn.
+    pub(crate) fn set_firewall_status(&self, st: FirewallStatus) {
+        lock(&self.inner).firewall = st.clone();
+        self.sink().firewall_status(st);
     }
 
     /// Dev-only point for manual overlay tests: `(x, y)` in global points; the display is the
@@ -336,19 +514,30 @@ mod tests {
     }
 
     #[test]
-    fn hotkey_press_release_cycle() {
+    fn hotkey_without_an_engine_reports_voice_not_built_and_stays_idle() {
+        #[derive(Default)]
+        struct Rec(Mutex<Vec<String>>);
+        impl EventSink for Rec {
+            fn turn_state(&self, e: TurnState) {
+                lock(&self.0).push(format!("state:{:?}", e.phase));
+            }
+            fn transcript(&self, _: crate::api::TranscriptEvent) {}
+            fn reply_delta(&self, _: crate::api::ReplyDelta) {}
+            fn point(&self, _: PointEvent) {}
+            fn firewall_status(&self, _: FirewallStatus) {}
+            fn error(&self, e: crate::api::TurnError) {
+                lock(&self.0).push(format!("error:{}", e.code));
+            }
+        }
         let (_d, b) = buddy();
+        let b = Arc::new(b);
+        let rec = Arc::new(Rec::default());
+        b.set_event_sink(rec.clone());
+        assert!(!b.has_engine());
+        b.on_hotkey_pressed();
+        b.on_hotkey_released();
         assert_eq!(b.get_status().phase, Phase::Idle);
-        let p = b.on_hotkey_pressed().unwrap();
-        assert_eq!((p.turn_id, p.phase), (1, Phase::Listening));
-        assert_eq!(b.get_status().phase, Phase::Listening);
-        // Auto-repeat press is ignored.
-        assert!(b.on_hotkey_pressed().is_none());
-        let r = b.on_hotkey_released().unwrap();
-        assert_eq!((r.turn_id, r.phase), (1, Phase::Idle));
-        // Release without press is ignored.
-        assert!(b.on_hotkey_released().is_none());
-        assert_eq!(b.on_hotkey_pressed().unwrap().turn_id, 2);
+        assert_eq!(*lock(&rec.0), vec!["error:voice_not_built".to_string()]);
     }
 
     #[test]

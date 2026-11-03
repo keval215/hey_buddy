@@ -4,8 +4,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use buddy_core::api::{Phase, TurnState, EVT_TURN_STATE};
-use buddy_core::Buddy;
+use buddy_core::api::{
+    FirewallStatus, Phase, PointEvent, ReplyDelta, TranscriptEvent, TurnError, TurnState,
+    EVT_FIREWALL_STATUS, EVT_TURN_ERROR, EVT_TURN_POINT, EVT_TURN_REPLY_DELTA, EVT_TURN_STATE,
+    EVT_TURN_TRANSCRIPT,
+};
+use buddy_core::{Buddy, EventSink};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, Wry};
@@ -29,12 +33,41 @@ fn phase_text(p: Phase) -> &'static str {
     }
 }
 
-/// Emit `turn:state` and refresh the tray status line.
-pub fn emit_turn_state(app: &AppHandle, ev: TurnState) {
-    if let Some(item) = app.try_state::<StatusItem>() {
-        let _ = item.0.set_text(phase_text(ev.phase));
+/// Turns core events into Tauri events (ADR 0001). Called from any thread.
+///
+/// Privacy: `turn:transcript` and `turn:reply_delta` carry what the user said and what the
+/// buddy answered, so they go to the settings window only (never the overlays or the preview
+/// panel). Everything else is fixed tokens, points and states.
+pub struct TauriEvents(pub AppHandle);
+
+impl EventSink for TauriEvents {
+    fn turn_state(&self, ev: TurnState) {
+        // Queue the tray update instead of waiting for the main thread: the caller may hold
+        // locks the main thread is waiting for (hotkey handler).
+        let app = self.0.clone();
+        let phase = ev.phase;
+        let _ = self.0.run_on_main_thread(move || {
+            if let Some(item) = app.try_state::<StatusItem>() {
+                let _ = item.0.set_text(phase_text(phase));
+            }
+        });
+        let _ = self.0.emit(EVT_TURN_STATE, ev);
     }
-    let _ = app.emit(EVT_TURN_STATE, ev);
+    fn transcript(&self, ev: TranscriptEvent) {
+        let _ = self.0.emit_to(MAIN, EVT_TURN_TRANSCRIPT, ev);
+    }
+    fn reply_delta(&self, ev: ReplyDelta) {
+        let _ = self.0.emit_to(MAIN, EVT_TURN_REPLY_DELTA, ev);
+    }
+    fn point(&self, ev: PointEvent) {
+        let _ = self.0.emit(EVT_TURN_POINT, ev);
+    }
+    fn firewall_status(&self, st: FirewallStatus) {
+        let _ = self.0.emit(EVT_FIREWALL_STATUS, st);
+    }
+    fn error(&self, e: TurnError) {
+        let _ = self.0.emit(EVT_TURN_ERROR, e);
+    }
 }
 
 pub fn setup(app: &AppHandle, buddy: &Arc<Buddy>) -> tauri::Result<()> {

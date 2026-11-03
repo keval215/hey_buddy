@@ -10,7 +10,9 @@ use std::sync::OnceLock;
 use serde::{Deserialize, Serialize};
 use voice::registry::Registry;
 
-use crate::api::{Settings, SettingsPatch, VisionMode, DEFAULT_HOTKEY, DEFAULT_PROFILE};
+use crate::api::{
+    ProviderChoice, Settings, SettingsPatch, VisionMode, DEFAULT_HOTKEY, DEFAULT_PROFILE,
+};
 use crate::route::effective_vision_mode;
 
 /// Fixed-text errors (no paths, no content).
@@ -35,6 +37,11 @@ fn registry() -> &'static Registry {
         Registry::from_json_str(include_str!("../../../models/registry.json"))
             .expect("models/registry.json is validated by the voice crate tests")
     })
+}
+
+/// The model registry compiled into the binary.
+pub fn builtin_registry() -> &'static Registry {
+    registry()
 }
 
 /// Profile names the registry knows, sorted.
@@ -150,6 +157,7 @@ struct Stored {
     local_only: bool,
     vision_mode: VisionMode,
     profile: String,
+    provider: ProviderChoice,
     hotkey: String,
     anthropic_model: String,
 }
@@ -161,6 +169,7 @@ impl Default for Stored {
             local_only: d.local_only,
             vision_mode: d.vision_mode,
             profile: DEFAULT_PROFILE.into(),
+            provider: ProviderChoice::Ollama,
             hotkey: DEFAULT_HOTKEY.into(),
             anthropic_model: String::new(),
         }
@@ -223,6 +232,7 @@ impl SettingsStore {
             local_only: self.stored.local_only,
             vision_mode: effective_vision(self.stored.vision_mode, &self.stored.profile),
             profile: self.stored.profile.clone(),
+            provider: self.stored.provider,
             hotkey: self.stored.hotkey.clone(),
             has_api_key: false,
             anthropic_model: self.stored.anthropic_model.clone(),
@@ -240,6 +250,9 @@ impl SettingsStore {
         }
         if let Some(v) = &patch.profile {
             next.profile = v.clone();
+        }
+        if let Some(v) = patch.provider {
+            next.provider = v;
         }
         if let Some(v) = &patch.hotkey {
             next.hotkey = v.clone();
@@ -421,6 +434,30 @@ mod tests {
             .unwrap_err();
         assert_eq!(err, SettingsError::Io);
         assert!(s.settings().local_only);
+    }
+
+    #[test]
+    fn provider_defaults_to_local_ollama_persists_and_rejects_unknown_values() {
+        let (d, mut s) = store();
+        assert_eq!(s.settings().provider, ProviderChoice::Ollama);
+        let out = s
+            .apply(&SettingsPatch {
+                provider: Some(ProviderChoice::Anthropic),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(out.provider, ProviderChoice::Anthropic);
+        let path = d.path().join("cfg").join("settings.json");
+        assert_eq!(
+            SettingsStore::load(&path).settings().provider,
+            ProviderChoice::Anthropic
+        );
+        // An unknown provider in the file is a corrupt file: defaults (local) and an error.
+        fs::write(&path, br#"{"provider":"openai"}"#).unwrap();
+        let bad = SettingsStore::load(&path);
+        assert_eq!(bad.settings().provider, ProviderChoice::Ollama);
+        assert_eq!(bad.load_error(), Some(ERR_SETTINGS_CORRUPT));
+        assert!(serde_json::from_str::<SettingsPatch>(r#"{"provider":"openai"}"#).is_err());
     }
 
     #[test]

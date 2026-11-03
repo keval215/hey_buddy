@@ -69,7 +69,9 @@ docs/                  STEP1.md, adr/, agents/ (team memory)
 
 - Rust: `cargo fmt --all`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`
 - JS/TS: `pnpm install`, `pnpm lint`, `pnpm typecheck`, `pnpm test`
-- App: `pnpm --filter desktop tauri dev`
+- App: `pnpm --filter desktop tauri dev` (no voice engines); real voice: `pnpm --filter desktop tauri dev --features real-voice`
+  (cmake + clang, models in `<app data>/models` or `HEY_BUDDY_MODELS_DIR`, `ORT_DYLIB_PATH`; see `docs/manual-tests.md`)
+- Core e2e (fakes): `cargo test -p buddy-core --test e2e`; `cargo clippy -p buddy-core --features real-voice` checks the real adapters compile
 
 (Update this list when tooling changes.)
 

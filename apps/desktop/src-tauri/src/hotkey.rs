@@ -1,5 +1,5 @@
-//! Global push-to-talk hotkey (`tauri-plugin-global-shortcut`). Pressed/Released go to
-//! `Buddy::on_hotkey_pressed/released`; the glue only emits the resulting events.
+//! Global push-to-talk hotkey (`tauri-plugin-global-shortcut`). Pressed/Released go straight to
+//! `Buddy::on_hotkey_pressed/released` (the turn engine).
 
 use std::sync::Arc;
 
@@ -8,20 +8,16 @@ use tauri::plugin::TauriPlugin;
 use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
-use crate::shell;
-
 pub fn plugin() -> TauriPlugin<Wry> {
     tauri_plugin_global_shortcut::Builder::new()
         .with_handler(|app, _shortcut, event| {
             let Some(buddy) = app.try_state::<Arc<Buddy>>() else {
                 return;
             };
-            let ev = match event.state() {
+            // The turn engine reports its state through the event sink (shell::TauriEvents).
+            match event.state() {
                 ShortcutState::Pressed => buddy.on_hotkey_pressed(),
                 ShortcutState::Released => buddy.on_hotkey_released(),
-            };
-            if let Some(ev) = ev {
-                shell::emit_turn_state(app, ev);
             }
         })
         .build()

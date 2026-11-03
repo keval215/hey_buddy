@@ -24,7 +24,19 @@ export default function Preview() {
     const unClose = onThisWindow("turn:preview_closed", (c) =>
       setDto((cur) => (cur && cur.request_id === c.request_id ? null : cur)),
     );
+    // The event may have fired before this page mounted: pull what is pending now.
+    let cancelled = false;
+    void api
+      .getPendingPreview()
+      .then((p) => {
+        if (cancelled || !p) return;
+        setDto((cur) => cur ?? p);
+        setDeadline((d) => d || Date.now() + p.timeout_secs * 1000);
+        setNow(Date.now());
+      })
+      .catch(() => undefined);
     return () => {
+      cancelled = true;
       void unShow.then((f) => f());
       void unClose.then((f) => f());
     };

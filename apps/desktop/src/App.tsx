@@ -7,6 +7,7 @@ import { RequestFields } from "./request/RequestView";
 import type { Status } from "./ipc/Status";
 import {
   PROFILES,
+  PROVIDERS,
   VISION_MODES,
   buildPatch,
   errorText,
@@ -24,6 +25,7 @@ export default function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [phase, setPhase] = useState<Phase>("Idle");
   const [error, setError] = useState<string | null>(null);
+  const [lastError, setLastError] = useState<string | null>(null);
 
   useEffect(() => {
     void api.getSettings().then((s) => {
@@ -35,7 +37,17 @@ export default function App() {
       setPhase(s.phase);
     });
     const un = on("turn:state", (e) => setPhase(e.phase));
-    return () => void un.then((f) => f());
+    // Fixed messages from the core, never content. Cleared when the next turn starts.
+    const unErr = on("turn:error", (e) => setLastError(e.message));
+    const unListen = on("turn:state", (e) => {
+      if (e.phase === "Listening") setLastError(null);
+    });
+    const unFw = on("firewall:status", (f) =>
+      setStatus((s) => (s ? { ...s, firewall: f } : s)),
+    );
+    return () => {
+      for (const u of [un, unErr, unListen, unFw]) void u.then((f) => f());
+    };
   }, []);
 
   const save = useCallback(async () => {
@@ -115,6 +127,23 @@ export default function App() {
       </label>
 
       <label className="block">
+        Language model
+        <select
+          className="ml-2 rounded border px-1"
+          value={draft.provider}
+          onChange={(e) =>
+            setDraft({ ...draft, provider: e.target.value as Settings["provider"] })
+          }
+        >
+          {PROVIDERS.map((p) => (
+            <option key={p} value={p}>
+              {p === "Ollama" ? "Ollama (local)" : "Anthropic (cloud, asks before sending)"}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="block">
         Anthropic model id
         <input
           className="ml-2 w-64 rounded border px-1 font-mono"
@@ -140,6 +169,16 @@ export default function App() {
         <div>
           Hotkey: {status?.hotkey_registered ? "registered" : "not registered"}
         </div>
+        {(status?.notices ?? []).map((n) => (
+          <div key={n} role="status" className="text-amber-700">
+            {n}
+          </div>
+        ))}
+        {lastError && (
+          <div role="alert" className="text-red-600">
+            {lastError}
+          </div>
+        )}
         {status?.settings_error && (
           <div role="alert" className="text-red-600">
             Settings file was unreadable; defaults in use ({status.settings_error})

@@ -9,4 +9,10 @@ export type Status = { phase: Phase, firewall: FirewallStatus, hotkey_registered
 /**
  * Fixed token when the settings file was unreadable and defaults are in use.
  */
-settings_error: string | null, };
+settings_error: string | null, 
+/**
+ * Fixed, display-only notes: voice engines not built, a missing model file (id and the
+ * expected path), deny-list problems, apps removed from the default deny list. Never
+ * transcripts, replies or screen text.
+ */
+notices: Array<string>, };

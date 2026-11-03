@@ -6,6 +6,7 @@
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
-    "allow-preview-decision"
+    "allow-preview-decision",
+    "allow-get-pending-preview"
   ]
 }

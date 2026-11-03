@@ -37,3 +37,62 @@ impl From<LlmError> for KeyError {
         }
     }
 }
+
+// ---------------------------------------------------------------- turn:error mapping
+
+use crate::api::TurnError;
+
+fn te(code: &str, message: &str) -> TurnError {
+    TurnError {
+        code: code.into(),
+        message: message.into(),
+    }
+}
+
+/// `turn:error` for an LLM failure. Fixed code and message per variant; the payload of the
+/// error (status codes, provider tokens) is deliberately left out.
+pub fn llm_turn_error(e: &LlmError) -> TurnError {
+    match e {
+        LlmError::NotOptedIn => te("llm_not_opted_in", "The request was not approved."),
+        LlmError::NoCredentials => te("llm_no_credentials", "No API key is stored."),
+        LlmError::Auth => te("llm_auth", "The language model rejected the API key."),
+        LlmError::RateLimited => te("llm_rate_limited", "The language model is rate limited."),
+        LlmError::Timeout => te("llm_timeout", "The language model took too long."),
+        LlmError::Http { .. } => te("llm_http", "The language model returned an error."),
+        LlmError::Network(_) => te(
+            "llm_network",
+            "Could not reach the language model. Is Ollama running?",
+        ),
+        LlmError::Provider(_) => te("llm_provider", "The language model reported an error."),
+        LlmError::Protocol(_) => te(
+            "llm_protocol",
+            "The language model sent an unexpected reply.",
+        ),
+        LlmError::Encode(_) => te("llm_encode", "The request could not be built."),
+        LlmError::Config(_) => te("llm_config", "The language model is not configured."),
+        LlmError::Cancelled => te("cancelled", "Cancelled."),
+    }
+}
+
+/// `turn:error` for a voice failure. `ModelMissing` names the expected file (a path, never
+/// user content) so the user knows what to place where.
+pub fn voice_turn_error(e: &voice::VoiceError) -> Option<TurnError> {
+    use voice::VoiceError as V;
+    Some(match e {
+        V::ModelMissing { path } => te(
+            "model_missing",
+            &format!("A voice model file is missing: {}", path.display()),
+        ),
+        V::DeviceUnavailable(_) => te(
+            "audio_device_unavailable",
+            "The microphone or speaker is unavailable.",
+        ),
+        V::InvalidAudio(_) => te("audio_invalid", "The audio could not be processed."),
+        V::Backend(_) => te("voice_failed", "A voice engine failed."),
+        V::Cancelled => return None,
+    })
+}
+
+pub fn simple_turn_error(code: &str, message: &str) -> TurnError {
+    te(code, message)
+}

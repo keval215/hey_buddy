@@ -284,12 +284,15 @@ dependencies = [
 name = "buddy-core"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "base64 0.23.1",
  "bytes",
  "capture",
  "firewall",
  "frame",
  "futures",
  "llm",
+ "png",
  "secrecy",
  "serde",
  "serde_json",
@@ -297,6 +300,8 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "ts-rs",
  "voice",
 ]

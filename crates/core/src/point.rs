@@ -203,7 +203,7 @@ pub struct NodeContext<'a> {
     /// Displays, to resolve the display of the pointed-at point.
     pub displays: &'a [DisplayInfo],
     /// `RedactedScreenText::node_rect(id)`, global points.
-    pub node_rect: &'a dyn Fn(u32) -> Option<Rect>,
+    pub node_rect: &'a (dyn Fn(u32) -> Option<Rect> + Send + Sync),
 }
 
 /// Which tag form this request allows.

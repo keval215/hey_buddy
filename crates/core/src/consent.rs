@@ -268,6 +268,8 @@ pub fn last_request_dto(turn_id: u32, p: &RequestPreview) -> LastRequestDto {
 
 struct Pending {
     tx: oneshot::Sender<Decision>,
+    /// What the panel was told to show (for `pending_preview`).
+    dto: PreviewDto,
 }
 
 pub struct ConsentGate {
@@ -337,7 +339,13 @@ impl ConsentGate {
         let dto = preview_dto(request_id, &preview, self.timeout);
         let (tx, rx) = oneshot::channel();
         self.store.put(&request_id.to_string(), &preview);
-        lock(&self.pending).insert(request_id, Pending { tx });
+        lock(&self.pending).insert(
+            request_id,
+            Pending {
+                tx,
+                dto: dto.clone(),
+            },
+        );
         let pending = PendingConsent {
             gate: Arc::clone(self),
             request_id,
@@ -376,6 +384,15 @@ impl ConsentGate {
             self.store.remove(&id.to_string());
             self.sink().close(id);
         }
+    }
+
+    /// The undecided request the panel should be showing (the newest), for a panel that
+    /// mounts after `turn:preview` was emitted. Same data as the event.
+    pub fn pending_preview(&self) -> Option<PreviewDto> {
+        lock(&self.pending)
+            .iter()
+            .max_by_key(|(id, _)| **id)
+            .map(|(_, p)| p.dto.clone())
     }
 
     /// Number of undecided requests.
@@ -827,16 +844,7 @@ mod tests {
         assert_eq!(r.buddy.preview_decision(idb, Decision::Send), Ok(()));
         assert!(pb.wait().await.is_ok());
 
-        // A hotkey press (new turn) cancels a pending preview too.
-        let c = r.cloud.prepare(&text_request("third")).unwrap();
-        let pc = r.buddy.consent.request_consent(&c, 3).unwrap();
-        let idc = pc.request_id();
-        r.buddy.on_hotkey_pressed().unwrap();
-        assert_eq!(
-            r.buddy.preview_decision(idc, Decision::Send),
-            Err(ConsentError::UnknownRequest)
-        );
-        assert_eq!(pc.wait().await.err(), Some(ConsentError::Cancelled));
+        // (A hotkey press during a turn cancels a pending preview too: tests/e2e.rs.)
         // cancel_turn too.
         let d = r.cloud.prepare(&text_request("fourth")).unwrap();
         let pd = r.buddy.consent.request_consent(&d, 4).unwrap();

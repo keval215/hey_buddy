@@ -11,6 +11,7 @@ const COMMANDS: &[&str] = &[
     "debug_point",
     "preview_decision",
     "get_last_request",
+    "get_pending_preview",
     "set_api_key",
     "clear_api_key",
 ];

@@ -16,6 +16,7 @@ const base: Settings = {
   profile: "default",
   hotkey: "Ctrl+Alt+Space",
   has_api_key: false,
+  provider: "Ollama",
   anthropic_model: "",
 };
 
@@ -34,6 +35,12 @@ describe("buildPatch", () => {
       anthropic_model: "some-model",
     });
     expect(isEmptyPatch(buildPatch(base, { ...base, anthropic_model: "  " }))).toBe(true);
+  });
+  it("sends the provider only when changed", () => {
+    expect(buildPatch(base, { ...base, provider: "Anthropic" })).toEqual({
+      provider: "Anthropic",
+    });
+    expect(isEmptyPatch(buildPatch(base, { ...base, provider: "Ollama" }))).toBe(true);
   });
   it("never puts has_api_key in a patch", () => {
     expect(buildPatch(base, { ...base, has_api_key: true })).toEqual({});

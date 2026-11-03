@@ -11,6 +11,10 @@ pub const EVT_TURN_STATE: &str = "turn:state";
 pub const EVT_TURN_POINT: &str = "turn:point";
 pub const EVT_FIREWALL_STATUS: &str = "firewall:status";
 pub const EVT_TURN_ERROR: &str = "turn:error";
+/// The final speech-to-text transcript of the turn (display-only; sent to the settings window).
+pub const EVT_TURN_TRANSCRIPT: &str = "turn:transcript";
+/// A piece of the reply with `[POINT:..]` tags already removed (sent to the settings window).
+pub const EVT_TURN_REPLY_DELTA: &str = "turn:reply_delta";
 /// Sent only to the `preview` window.
 pub const EVT_TURN_PREVIEW: &str = "turn:preview";
 /// Sent only to the `preview` window: the pending preview ended (decided, timed out, cancelled).
@@ -43,6 +47,22 @@ pub struct PointEvent {
     /// Model output, sanitised and capped; display-only.
     pub label: String,
     pub display_id: u32,
+}
+
+/// Event `turn:transcript`: what the user said (intended content, display-only).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TranscriptEvent {
+    pub turn_id: u32,
+    pub text: String,
+}
+
+/// Event `turn:reply_delta`: part of the model's reply, tags removed (intended content).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ReplyDelta {
+    pub turn_id: u32,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -135,6 +155,16 @@ impl From<crate::route::VisionMode> for VisionMode {
     }
 }
 
+/// Which language-model provider answers. Local Ollama is the default; `Anthropic` is cloud
+/// and additionally needs `local_only` off, a model id, a stored key and a per-request Send.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum ProviderChoice {
+    #[default]
+    Ollama,
+    Anthropic,
+}
+
 /// Settings as the UI sees them. `vision_mode` is the EFFECTIVE mode (Off on `low-memory`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -142,6 +172,8 @@ pub struct Settings {
     pub local_only: bool,
     pub vision_mode: VisionMode,
     pub profile: String,
+    /// Language-model provider for new turns (default local Ollama).
+    pub provider: ProviderChoice,
     /// Push-to-talk shortcut, e.g. `Ctrl+Alt+Space`.
     pub hotkey: String,
     /// Whether an API key is stored in the OS keychain (best effort); never persisted here and
@@ -160,6 +192,7 @@ impl Default for Settings {
             local_only: true,
             vision_mode: VisionMode::Auto,
             profile: DEFAULT_PROFILE.into(),
+            provider: ProviderChoice::Ollama,
             hotkey: DEFAULT_HOTKEY.into(),
             has_api_key: false,
             anthropic_model: String::new(),
@@ -185,6 +218,8 @@ pub struct SettingsPatch {
     pub vision_mode: Option<VisionMode>,
     #[ts(optional)]
     pub profile: Option<String>,
+    #[ts(optional)]
+    pub provider: Option<ProviderChoice>,
     #[ts(optional)]
     pub hotkey: Option<String>,
     #[ts(optional)]
@@ -264,6 +299,10 @@ pub struct Status {
     pub hotkey_registered: bool,
     /// Fixed token when the settings file was unreadable and defaults are in use.
     pub settings_error: Option<String>,
+    /// Fixed, display-only notes: voice engines not built, a missing model file (id and the
+    /// expected path), deny-list problems, apps removed from the default deny list. Never
+    /// transcripts, replies or screen text.
+    pub notices: Vec<String>,
 }
 
 #[cfg(test)]
@@ -276,6 +315,7 @@ mod tests {
         assert!(s.local_only);
         assert_eq!(s.vision_mode, VisionMode::Auto);
         assert_eq!(s.profile, "default");
+        assert_eq!(s.provider, ProviderChoice::Ollama);
         assert!(!s.has_api_key);
         assert!(!s.cloud_configured());
     }

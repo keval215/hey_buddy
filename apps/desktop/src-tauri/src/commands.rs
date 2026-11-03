@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use buddy_core::api::{Decision, DisplayDto, LastRequestDto, Settings, SettingsPatch, Status};
+use buddy_core::api::{
+    Decision, DisplayDto, LastRequestDto, PreviewDto, Settings, SettingsPatch, Status,
+};
 use buddy_core::Buddy;
 use tauri::{AppHandle, State};
 
@@ -43,6 +45,13 @@ pub fn update_settings(app: AppHandle, b: B, patch: SettingsPatch) -> Result<Set
 pub fn preview_decision(b: B, request_id: u64, decision: Decision) -> Result<(), String> {
     b.preview_decision(request_id, decision)
         .map_err(|e| e.to_string())
+}
+
+/// Preview window only (capability `preview`): the preview currently waiting for a decision,
+/// so a panel that mounts after `turn:preview` was emitted still shows it.
+#[tauri::command]
+pub fn get_pending_preview(b: B) -> Option<PreviewDto> {
+    b.pending_preview()
 }
 
 /// Settings window only: the most recent turn's request (local or cloud).

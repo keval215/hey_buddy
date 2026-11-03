@@ -9,6 +9,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod engine;
 mod hotkey;
 mod overlay;
 mod preview;
@@ -29,8 +30,10 @@ fn main() {
                 dir.join("settings.json"),
                 buddy_core::platform_capture(),
             ));
+            buddy.set_event_sink(Arc::new(shell::TauriEvents(app.handle().clone())));
             app.manage(buddy.clone());
             shell::setup(app.handle(), &buddy)?;
+            engine::start(app.handle(), &buddy, &dir);
             Ok(())
         });
 
@@ -44,6 +47,7 @@ fn main() {
         commands::debug_point,
         commands::preview_decision,
         commands::get_last_request,
+        commands::get_pending_preview,
         commands::set_api_key,
         commands::clear_api_key,
     ]);
@@ -56,6 +60,7 @@ fn main() {
         commands::cancel_turn,
         commands::preview_decision,
         commands::get_last_request,
+        commands::get_pending_preview,
         commands::set_api_key,
         commands::clear_api_key,
     ]);

@@ -182,13 +182,103 @@ and an OS network monitor (Little Snitch / `nettop` / Resource Monitor) to see t
       after quitting the app. This is how the Step 1 exit test inspects the saved preview: the
       password field shows `[hidden]` in the text and is blacked out in the image.
 
-## Step 1 manual tests (outline)
+## Step 1 EXIT TEST (T12) - UNTESTED on this machine (everything below)
 
-Filled in by later tickets (T10 POINT/overlay, T12 turn flow and exit tests).
+The Linux CI proves the whole turn on fakes (`cargo test -p buddy-core --test e2e`): synthetic
+login form, the real firewall, the real Ollama and Anthropic providers over a fake transport.
+Real microphones, speakers, models, browsers and OS accessibility APIs can only be checked on a
+Mac or a Windows PC. Do this once per OS.
 
-- [ ] T10: see "Desktop shell (T10)" above
-- [ ] T11: see "Preview panel, consent gate, keys (T11)" above
-- [ ] T12: TODO (exit test: saved request preview shows the password field redacted)
+### Prerequisites
+
+1. Build with the real voice engines (they are OFF by default so CI stays light):
+   `cd apps/desktop && pnpm tauri dev --features real-voice` (or
+   `cd apps/desktop/src-tauri && cargo tauri dev --features real-voice`). Needs cmake, a C++
+   toolchain and clang (whisper.cpp) at build time. Without the feature the app starts, the
+   settings window shows "Voice engines not built" and a hotkey press reports it (no mic is
+   opened).
+2. Model files go in `<app data folder>/models` (macOS
+   `~/Library/Application Support/dev.heybuddy.desktop/models`, Windows
+   `%APPDATA%\dev.heybuddy.desktop\models`) or in the folder named by the environment variable
+   `HEY_BUDDY_MODELS_DIR`. Nothing is downloaded for you (the registry URLs are still TODO);
+   get them yourself and place:
+   - `whisper-small.bin` (whisper.cpp ggml model; `whisper-base.bin` for the `low-memory` profile)
+   - `silero-vad-v5.onnx`
+   - `phonon-31m/` (the Phonon 31m checkpoint folder)
+   A missing file is named in the settings window status ("Missing model file for <id>: place
+   it at <path>") and a hotkey press reports `model_missing`. Restart the app after placing files.
+3. `ORT_DYLIB_PATH` must point to the onnxruntime shared library (`libonnxruntime.dylib` /
+   `onnxruntime.dll`, 1.2x) before starting the app (Silero VAD loads it dynamically).
+4. Ollama running on `127.0.0.1:11434` with the text model pulled: `ollama pull qwen3:4b`; for
+   the vision path also `ollama pull qwen3-vl:2b` (the `low-memory` profile uses `qwen3:1.7b`).
+5. Permissions: macOS Accessibility, Screen Recording and Microphone for the app (System
+   Settings > Privacy & Security; restart the app after granting). Windows: microphone access;
+   the app declares PerMonitorV2 DPI awareness in its manifest (check the firewall status is not
+   `Blocked` on a 150 % display, T8).
+6. Settings: profile `default`, `local_only` on (default), provider "Ollama (local)", vision
+   `Auto`. Hotkey `Ctrl+Alt+Space` unless you changed it.
+
+### A. Exit test, text path (the default)
+
+For each of: Safari (macOS), Chrome, and a native login dialog (a macOS app sign-in sheet /
+a Windows credential prompt or any desktop app with a password box):
+
+- [ ] Open a login page with a visible username and password field (type a recognisable fake
+      value like `hunter2-FAKE` in the password box if you want to prove it never leaves).
+- [ ] Hold the hotkey, say "what does this button do?", release.
+- [ ] The tray status goes Listening, Transcribing, Thinking, Speaking, Idle. You HEAR a spoken
+      answer from the local TTS (Phonon). Nothing is sent to the internet (network monitor).
+- [ ] If the answer names a button, the overlay marker moves onto that button (`[POINT:#n:..]`).
+- [ ] Settings window > "Last request" > Show: LOCAL badge, the screen text lists the page
+      elements and shows `password field [hidden]` for the password box; neither the real
+      password value nor its label text appears anywhere (also not in the raw request). No image.
+- [ ] `vision_mode` Auto sent no screenshot on a normal page (no Screen Recording indicator
+      flashed). On a page whose text is thin (a canvas-only page) Auto may use the screenshot.
+
+### B. Exit test, vision path
+
+- [ ] Settings: Vision = Always, Save. Repeat A on the same login page.
+- [ ] Last request shows an image; the password box is a solid black rectangle (a little larger
+      than the box); the username box and the rest of the page are intact. The raw request
+      contains the base64 of that same image. The text still shows `password field [hidden]`.
+- [ ] The answer is spoken; the marker (if any) lands on the right spot, also on a second
+      monitor and on a scaled (Retina / 150 %) display.
+- [ ] Windows only: with a deny-listed app (e.g. KeePassXC) visible on the same display, the
+      full-display capture is refused and the foreground window alone is used when it is not
+      deny-listed; the buddy says the screenshot could not be taken if even that is not possible.
+
+### C. Negative tests
+
+- [ ] Secure input / lock screen: macOS, click into a password field of any app (macOS turns
+      secure keyboard input on while it has focus), or show a lock/auth prompt, then use the
+      hotkey. The buddy still answers by voice, says out loud that it did not look at the screen and
+      why (secure input / locked), and the settings window shows `firewall: Paused`. Last
+      request: no screen text, no image.
+- [ ] Deny-listed app frontmost (1Password, Terminal, Signal, ...): the buddy says the app is
+      on your privacy list and answers without the screen; `firewall: Blocked (denied_app)`.
+      No screenshot is taken (no capture indicator).
+- [ ] Accessibility or Screen Recording permission removed: spoken explanation about missing
+      permission; nothing shared.
+- [ ] Banking apps: the settings status line says banking apps are NOT on the default deny
+      list and must be added by hand in `deny_list.json` (app data folder, `{"add": ["app.id"]}`).
+      Add one, restart, confirm it is withheld. A corrupt `deny_list.json` shows a notice and the
+      defaults are used.
+- [ ] `local_only` on + provider "Anthropic": the buddy says out loud that local-only mode is on,
+      nothing is sent (network monitor), no panel opens. Provider Anthropic with no model id or no
+      key: spoken explanation, nothing sent.
+- [ ] Cloud: `local_only` off, provider Anthropic, model id set, key saved: after a question the
+      preview panel appears (also if it was opened late: it pulls the pending request when it
+      loads). Nothing is sent while it is open. Cancel / Esc / countdown / closing it: the buddy
+      says it did not send anything and the network monitor shows no connection. Send: exactly one
+      request, the answer is spoken. The saved "Last request" is the same request.
+- [ ] Hold the hotkey while the buddy is speaking: playback stops at once and a new turn starts
+      listening. Releasing with no speech ends the turn quietly (no spoken output, no error).
+- [ ] Unplug/disable the microphone: error "microphone or speaker is unavailable" in the
+      settings window; no crash.
+- [ ] Stop Ollama: the buddy says it could not get an answer; settings window shows "Could not
+      reach the language model. Is Ollama running?".
+- [ ] Push-to-talk only: the microphone indicator (macOS orange dot / Windows mic icon) is on
+      only while the key is held and a moment after, never at idle.
 
 ## Untested on the dev machine (to verify locally)
 
