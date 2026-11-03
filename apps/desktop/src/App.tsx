@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, on } from "./api/client";
 import type { Phase } from "./ipc/Phase";
+import type { LastRequestDto } from "./ipc/LastRequestDto";
 import type { Settings } from "./ipc/Settings";
+import { RequestFields } from "./request/RequestView";
 import type { Status } from "./ipc/Status";
 import {
   PROFILES,
@@ -9,6 +11,8 @@ import {
   buildPatch,
   errorText,
   isEmptyPatch,
+  keyErrorText,
+  keyStatusText,
   phaseText,
   shownVision,
   visionLocked,
@@ -110,6 +114,16 @@ export default function App() {
         />
       </label>
 
+      <label className="block">
+        Anthropic model id
+        <input
+          className="ml-2 w-64 rounded border px-1 font-mono"
+          placeholder="empty = cloud unavailable"
+          value={draft.anthropic_model}
+          onChange={(e) => setDraft({ ...draft, anthropic_model: e.target.value })}
+        />
+      </label>
+
       <div className="flex items-center gap-3">
         <button
           className="rounded bg-neutral-800 px-3 py-1 text-white disabled:opacity-40"
@@ -133,8 +147,79 @@ export default function App() {
         )}
       </section>
 
+      <ApiKey
+        hasKey={current.has_api_key}
+        onChange={(s) => {
+          setCurrent(s);
+          setDraft((d) => (d ? { ...d, has_api_key: s.has_api_key } : d));
+        }}
+      />
+
+      <LastRequest />
+
       {import.meta.env.DEV && <DebugPoint />}
     </main>
+  );
+}
+
+/** The key goes straight to the OS keychain; this page only ever shows a masked status. */
+function ApiKey({ hasKey, onChange }: { hasKey: boolean; onChange: (s: Settings) => void }) {
+  const [key, setKey] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const run = (p: Promise<Settings>) =>
+    p
+      .then((s) => {
+        setKey("");
+        setMsg(null);
+        onChange(s);
+      })
+      .catch((e) => setMsg(keyErrorText(e)));
+  return (
+    <section className="space-y-2 border-t pt-3">
+      <div className="font-medium">{keyStatusText(hasKey)}</div>
+      <input
+        type="password"
+        autoComplete="off"
+        spellCheck={false}
+        className="w-64 rounded border px-1"
+        placeholder="paste key"
+        value={key}
+        onChange={(e) => setKey(e.target.value)}
+      />
+      <button
+        className="ml-2 rounded border px-2 disabled:opacity-40"
+        disabled={key.trim() === ""}
+        onClick={() => void run(api.setApiKey("anthropic", key))}
+      >
+        Save key
+      </button>
+      <button
+        className="ml-2 rounded border px-2 disabled:opacity-40"
+        disabled={!hasKey}
+        onClick={() => void run(api.clearApiKey("anthropic"))}
+      >
+        Clear key
+      </button>
+      {msg && <div role="alert" className="text-red-600">{msg}</div>}
+    </section>
+  );
+}
+
+/** The most recent turn's request (local or cloud), exactly as prepared. */
+function LastRequest() {
+  const [last, setLast] = useState<LastRequestDto | null | undefined>(undefined);
+  const load = () => void api.getLastRequest().then(setLast).catch(() => setLast(null));
+  return (
+    <section className="space-y-2 border-t pt-3">
+      <div className="flex items-center gap-2">
+        <span className="font-medium">Last request</span>
+        <button className="rounded border px-2" onClick={load}>
+          {last === undefined ? "Show" : "Refresh"}
+        </button>
+      </div>
+      {last === null && <div className="text-neutral-500">No request yet.</div>}
+      {last && <RequestFields r={last} cacheKey={last.digest_hex} />}
+    </section>
   );
 }
 

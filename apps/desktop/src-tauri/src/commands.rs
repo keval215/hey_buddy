@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use buddy_core::api::{DisplayDto, Settings, SettingsPatch, Status};
+use buddy_core::api::{Decision, DisplayDto, LastRequestDto, Settings, SettingsPatch, Status};
 use buddy_core::Buddy;
 use tauri::{AppHandle, State};
 
@@ -32,8 +32,36 @@ pub fn update_settings(app: AppHandle, b: B, patch: SettingsPatch) -> Result<Set
             });
             return Err("hotkey unavailable".into());
         }
+        // The new shortcut is live (also heals a failed registration at startup).
+        b.set_hotkey_registered(true);
     }
     Ok(update.settings)
+}
+
+/// Preview window only (capability `preview`): Send or Cancel for a pending cloud request.
+#[tauri::command]
+pub fn preview_decision(b: B, request_id: u64, decision: Decision) -> Result<(), String> {
+    b.preview_decision(request_id, decision)
+        .map_err(|e| e.to_string())
+}
+
+/// Settings window only: the most recent turn's request (local or cloud).
+#[tauri::command]
+pub fn get_last_request(b: B) -> Option<LastRequestDto> {
+    b.get_last_request()
+}
+
+/// Store the API key in the OS keychain. The key is never logged, stored in settings or
+/// returned; errors are fixed tokens (`unsupported_provider`, `invalid_key`,
+/// `credential_store_unsupported`, `keychain_error`).
+#[tauri::command]
+pub fn set_api_key(b: B, provider: String, key: String) -> Result<Settings, String> {
+    b.set_api_key(&provider, key).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn clear_api_key(b: B, provider: String) -> Result<Settings, String> {
+    b.clear_api_key(&provider).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

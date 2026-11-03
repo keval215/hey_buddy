@@ -2,6 +2,8 @@
 
 pub mod api;
 pub mod buddy;
+pub mod consent;
+pub mod error;
 pub mod point;
 pub mod route;
 pub mod settings;

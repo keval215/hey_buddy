@@ -25,6 +25,8 @@ export function buildPatch(current: Settings, draft: Settings): SettingsPatch {
   if (!visionLocked(draft.profile) && draft.vision_mode !== current.vision_mode) {
     patch.vision_mode = draft.vision_mode;
   }
+  const model = draft.anthropic_model.trim();
+  if (model !== current.anthropic_model) patch.anthropic_model = model;
   const hk = draft.hotkey.trim();
   if (hk !== current.hotkey) patch.hotkey = hk;
   return patch;
@@ -42,4 +44,25 @@ export function phaseText(p: Phase): string {
 export function errorText(e: unknown): string {
   if (typeof e === "string" && e.length > 0) return e;
   return "Something went wrong";
+}
+
+/** Fixed core tokens for key errors -> user text. */
+export function keyErrorText(e: unknown): string {
+  switch (e) {
+    case "credential_store_unsupported":
+      return "Key storage is not available on this platform yet";
+    case "invalid_key":
+      return "That does not look like a valid key";
+    case "unsupported_provider":
+      return "Unknown provider";
+    case "keychain_error":
+      return "The OS keychain refused the request";
+    default:
+      return errorText(e);
+  }
+}
+
+/** Shown instead of the key: never the key itself. */
+export function keyStatusText(hasKey: boolean): string {
+  return hasKey ? "Anthropic API key: stored in the OS keychain (hidden)" : "Anthropic API key: not set";
 }

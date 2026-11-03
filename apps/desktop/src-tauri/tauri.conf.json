@@ -21,8 +21,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost",
-      "devCsp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost ws://localhost:1420 http://localhost:1420"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: preview: http://preview.localhost; connect-src ipc: http://ipc.localhost preview: http://preview.localhost",
+      "devCsp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: preview: http://preview.localhost; connect-src ipc: http://ipc.localhost preview: http://preview.localhost ws://localhost:1420 http://localhost:1420"
     },
     "macOSPrivateApi": true
   },

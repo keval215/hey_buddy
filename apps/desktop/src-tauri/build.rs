@@ -9,6 +9,10 @@ const COMMANDS: &[&str] = &[
     "list_displays",
     "cancel_turn",
     "debug_point",
+    "preview_decision",
+    "get_last_request",
+    "set_api_key",
+    "clear_api_key",
 ];
 
 fn main() {

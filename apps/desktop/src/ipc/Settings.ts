@@ -10,6 +10,11 @@ export type Settings = { local_only: boolean, vision_mode: VisionMode, profile: 
  */
 hotkey: string, 
 /**
- * Placeholder until the key store lands (T11); never persisted.
+ * Whether an API key is stored in the OS keychain (best effort); never persisted here and
+ * the key itself is never returned.
  */
-has_api_key: boolean, };
+has_api_key: boolean, 
+/**
+ * Anthropic model id. Empty = cloud unavailable (no default on purpose).
+ */
+anthropic_model: string, };

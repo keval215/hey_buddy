@@ -13,14 +13,22 @@ fakes = []
 voice = { path = "../voice" }
 capture = { path = "../capture" }
 firewall = { path = "../firewall" }
-llm = { path = "../llm" }
+llm = { path = "../llm", features = ["keychain"] }
 frame = { path = "../frame" }
 serde_json = "1"
 ts-rs = "11"
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"
+bytes = "1"
+secrecy = "0.10"
+tokio = { version = "1", default-features = false, features = ["sync", "time"] }
 
 [dev-dependencies]
 capture = { path = "../capture", features = ["fakes"] }
 firewall = { path = "../firewall", features = ["fakes"] }
 tempfile = "3"
+sha2 = "0.10"
+# Test doubles only (L-006): never reaches the desktop tree.
+llm = { path = "../llm", features = ["fakes"] }
+futures = { version = "0.3", default-features = false, features = ["std", "alloc"] }
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "time", "test-util", "sync"] }

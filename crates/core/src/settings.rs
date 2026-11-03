@@ -20,6 +20,8 @@ pub enum SettingsError {
     InvalidProfile,
     #[error("invalid hotkey")]
     InvalidHotkey,
+    #[error("invalid model id")]
+    InvalidModel,
     #[error("could not save settings")]
     Io,
 }
@@ -48,9 +50,27 @@ pub fn effective_vision(mode: VisionMode, profile: &str) -> VisionMode {
     }
 }
 
-/// Validate and canonicalise a push-to-talk shortcut: one or more modifiers (Ctrl, Alt, Shift,
-/// Super) plus exactly one key (A-Z, 0-9, F1-F24, Space), e.g. `ctrl+alt+space` ->
-/// `Ctrl+Alt+Space`. A bare key is rejected so the hotkey never steals typing.
+/// Longest accepted model id.
+pub const MAX_MODEL_ID_LEN: usize = 80;
+
+/// Anthropic model id: empty (cloud unavailable) or at most [`MAX_MODEL_ID_LEN`] chars of
+/// `[A-Za-z0-9._:-]`. Returned trimmed.
+pub fn validate_model_id(s: &str) -> Result<String, SettingsError> {
+    let s = s.trim();
+    if s.len() > MAX_MODEL_ID_LEN
+        || !s
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'-'))
+    {
+        return Err(SettingsError::InvalidModel);
+    }
+    Ok(s.to_string())
+}
+
+/// Validate and canonicalise a push-to-talk shortcut: at least one of Ctrl, Alt or Super (Cmd)
+/// (optionally with Shift) plus exactly one key (A-Z, 0-9, F1-F24, Space), e.g.
+/// `ctrl+alt+space` -> `Ctrl+Alt+Space`. A bare key or a Shift-only chord is rejected so the
+/// hotkey never steals typing.
 pub fn normalize_hotkey(s: &str) -> Result<String, SettingsError> {
     if s.len() > 64 {
         return Err(SettingsError::InvalidHotkey);
@@ -82,7 +102,7 @@ pub fn normalize_hotkey(s: &str) -> Result<String, SettingsError> {
         }
     }
     let key = key.ok_or(SettingsError::InvalidHotkey)?;
-    if !(ctrl || alt || shift || sup) {
+    if !(ctrl || alt || sup) {
         return Err(SettingsError::InvalidHotkey);
     }
     let mut out = Vec::new();
@@ -131,6 +151,7 @@ struct Stored {
     vision_mode: VisionMode,
     profile: String,
     hotkey: String,
+    anthropic_model: String,
 }
 
 impl Default for Stored {
@@ -141,6 +162,7 @@ impl Default for Stored {
             vision_mode: d.vision_mode,
             profile: DEFAULT_PROFILE.into(),
             hotkey: DEFAULT_HOTKEY.into(),
+            anthropic_model: String::new(),
         }
     }
 }
@@ -152,6 +174,7 @@ impl Stored {
         }
         Ok(Stored {
             hotkey: normalize_hotkey(&self.hotkey)?,
+            anthropic_model: validate_model_id(&self.anthropic_model)?,
             ..self.clone()
         })
     }
@@ -202,6 +225,7 @@ impl SettingsStore {
             profile: self.stored.profile.clone(),
             hotkey: self.stored.hotkey.clone(),
             has_api_key: false,
+            anthropic_model: self.stored.anthropic_model.clone(),
         }
     }
 
@@ -219,6 +243,9 @@ impl SettingsStore {
         }
         if let Some(v) = &patch.hotkey {
             next.hotkey = v.clone();
+        }
+        if let Some(v) = &patch.anthropic_model {
+            next.anthropic_model = v.clone();
         }
         let next = next.validate()?;
         let json = serde_json::to_vec_pretty(&next).map_err(|_| SettingsError::Io)?;
@@ -417,6 +444,8 @@ mod tests {
             "Ctrl",
             "Ctrl+",
             "Ctrl+Alt",
+            "Shift+A",
+            "Shift+Space",
             "Ctrl+AB",
             "Ctrl+A+B",
             "Ctrl+Ctrl+A",
@@ -433,6 +462,28 @@ mod tests {
             );
         }
         assert!(normalize_hotkey(&format!("Ctrl+{}", "a".repeat(100))).is_err());
+    }
+
+    #[test]
+    fn model_id_validation() {
+        let (_d, mut s) = store();
+        let ok = |m: &str| SettingsPatch {
+            anthropic_model: Some(m.into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            s.apply(&ok(" some-model.v1:x_2 ")).unwrap().anthropic_model,
+            "some-model.v1:x_2"
+        );
+        assert!(s.apply(&ok("")).unwrap().anthropic_model.is_empty());
+        for bad in ["a b", "a/b", "m\u{e9}", &"x".repeat(81), "a\nb"] {
+            assert_eq!(
+                s.apply(&ok(bad)),
+                Err(SettingsError::InvalidModel),
+                "{bad:?}"
+            );
+        }
+        assert!(s.apply(&ok(&"x".repeat(80))).is_ok());
     }
 
     #[test]

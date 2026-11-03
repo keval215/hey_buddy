@@ -1,7 +1,7 @@
 //! hey_buddy desktop shell (T10): tray, settings window, push-to-talk hotkey, per-display
 //! click-through overlay. Thin glue: all logic lives in `buddy-core` (ADR 0001).
 //!
-//! Privacy: overlays and the settings window are excluded from screen capture (Windows:
+//! Privacy: overlays, the settings window and the preview panel are excluded from screen capture (Windows:
 //! `exclude_window_from_capture`; macOS: the capture crate excludes this process by pid).
 //! Nothing here logs labels or any model/user content.
 
@@ -11,6 +11,7 @@
 mod commands;
 mod hotkey;
 mod overlay;
+mod preview;
 mod shell;
 
 use std::sync::Arc;
@@ -21,6 +22,7 @@ use tauri::Manager;
 fn main() {
     let builder = tauri::Builder::default()
         .plugin(hotkey::plugin())
+        .register_uri_scheme_protocol(preview::SCHEME, preview::handle)
         .setup(|app| {
             let dir = app.path().app_config_dir()?;
             let buddy = Arc::new(Buddy::new(
@@ -40,6 +42,10 @@ fn main() {
         commands::list_displays,
         commands::cancel_turn,
         commands::debug_point,
+        commands::preview_decision,
+        commands::get_last_request,
+        commands::set_api_key,
+        commands::clear_api_key,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -48,9 +54,21 @@ fn main() {
         commands::update_settings,
         commands::list_displays,
         commands::cancel_turn,
+        commands::preview_decision,
+        commands::get_last_request,
+        commands::set_api_key,
+        commands::clear_api_key,
     ]);
 
     builder
-        .run(tauri::generate_context!())
-        .expect("error while running hey_buddy");
+        .build(tauri::generate_context!())
+        .expect("error while building hey_buddy")
+        .run(|app, event| {
+            // Quitting cancels any pending cloud preview (nothing is ever sent on quit).
+            if let tauri::RunEvent::Exit = event {
+                if let Some(b) = app.try_state::<Arc<Buddy>>() {
+                    b.cancel_pending_consents();
+                }
+            }
+        });
 }

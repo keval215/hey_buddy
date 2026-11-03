@@ -10,7 +10,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
-use crate::{hotkey, overlay};
+use crate::{hotkey, overlay, preview};
 
 const MAIN: &str = "main";
 const DISPLAY_POLL: Duration = Duration::from_secs(3);
@@ -81,6 +81,10 @@ pub fn setup(app: &AppHandle, buddy: &Arc<Buddy>) -> tauri::Result<()> {
         tray = tray.icon(icon.clone());
     }
     tray.build(app)?;
+
+    // Preview panel: the core shows cloud previews through it (no panel = no cloud, fail closed).
+    buddy.set_preview_sink(Arc::new(preview::TauriSink(app.clone())));
+    preview::create(app, buddy)?;
 
     hotkey::register_initial(app, buddy);
     start_display_watcher(app, buddy);

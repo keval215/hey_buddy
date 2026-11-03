@@ -11,6 +11,9 @@
     "allow-update-settings",
     "allow-list-displays",
     "allow-cancel-turn",
-    "allow-debug-point"
+    "allow-debug-point",
+    "allow-get-last-request",
+    "allow-set-api-key",
+    "allow-clear-api-key"
   ]
 }

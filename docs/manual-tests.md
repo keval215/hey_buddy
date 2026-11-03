@@ -127,11 +127,67 @@ Run each on BOTH macOS and Windows:
 - [ ] macOS: transparent overlay really is transparent (needs `macOSPrivateApi`, enabled in
       `tauri.conf.json`), also over full-screen apps and on all Spaces.
 
+- [ ] macOS: the 3 s display polling (`list_displays` via the capture crate) may trigger the
+      Screen Recording permission prompt at launch, before any hotkey press. Note whether it
+      does and when; if it is a problem, polling needs a non-prompting display query.
+- [ ] Hotkey rebinding: after changing the hotkey in settings the status line says "registered"
+      (also after an initial registration failure that you then fixed by choosing a free
+      shortcut). `Shift+A` / `Shift+Space` are rejected; `Ctrl+Shift+K` and `Cmd+Shift+K` work.
+
+## Preview panel, consent gate, keys (T11) - UNTESTED on this machine (all runtime behaviour)
+
+Needs macOS or Windows (Linux has no keychain backend: `set_api_key` returns
+`credential_store_unsupported`). Cloud calls are wired in T12; until then drive the panel from a
+dev build of T12, or from a debug harness that calls `Buddy::prepare_and_consent` with the
+Anthropic provider (the Rust tests cover the logic with fakes). Use a throwaway Anthropic key
+and an OS network monitor (Little Snitch / `nettop` / Resource Monitor) to see traffic.
+
+- [ ] Cloud preview: with `local_only` off, a model id set and a key stored, a cloud turn opens
+      the preview window on top with a red CLOUD badge, provider/model, the exact screen text
+      (monospace, password fields as `[hidden]`), what you said, the image (if the vision path
+      was used; secure fields blacked out), the hidden-field count, the short digest, and a
+      countdown (120 s). The wording says nothing is sent until you press Send. There is no
+      "always allow" anywhere.
+- [ ] "Show raw request" shows the exact JSON body; its content matches the text above and (with
+      an image) contains the base64 PNG. The image shown is the one in the body.
+- [ ] Nothing is sent before Send: with the network monitor running, no connection to
+      api.anthropic.com appears while the panel is open.
+- [ ] Send: exactly one request to api.anthropic.com, the reply is spoken. Pressing Send twice
+      (double click) still sends once.
+- [ ] Cancel button, Esc, closing the window with the X, and letting the countdown reach 0 each
+      hide the panel and send nothing (no connection in the network monitor). Quitting the app
+      while the panel is open sends nothing either.
+- [ ] A new push-to-talk turn while a preview is still open closes the old preview (nothing sent
+      for it).
+- [ ] `local_only` on: a cloud provider is never used and no panel appears (the turn is refused
+      with `local_only`). Switching `local_only` on while a preview is open closes it.
+- [ ] Local (Ollama) turns show no panel at all.
+- [ ] The preview window is not visible in our own capture: Windows Win+Shift+S / Snipping Tool
+      while it is open (absent, not black); macOS: our capture path (T7) does not contain it and
+      `content_protected` is set. On Windows, if exclusion fails the window is not created and
+      cloud turns are cancelled.
+- [ ] The preview window is normal (focusable, in Alt+Tab while open, always on top) and hides
+      itself after each decision. Overlays and settings still never take focus.
+- [ ] Windows: the image and raw body load (`http://preview.localhost/<id>`); macOS: they load
+      from `preview://<id>`. Neither works from a browser or the overlay windows.
+- [ ] API key: Settings > "Save key" with a key; the status shows "stored in the OS keychain
+      (hidden)", the input is cleared and never shows the key again. The key is in Keychain
+      Access (service `hey_buddy`, account `anthropic`) / Credential Manager, and NOT in
+      `settings.json` (open the file and search for it). "Clear key" removes it. On Linux the
+      error is "Key storage is not available on this platform yet".
+- [ ] Anthropic model id: empty means cloud unavailable; values with spaces or `/` are rejected.
+- [ ] "Last request" (settings window, press Show/Refresh): after a local turn it shows the
+      LOCAL badge, the exact text, the image if any and the raw request; after a cloud turn
+      (also a cancelled one) the CLOUD request that was prepared. It is in memory only: gone
+      after quitting the app. This is how the Step 1 exit test inspects the saved preview: the
+      password field shows `[hidden]` in the text and is blacked out in the image.
+
 ## Step 1 manual tests (outline)
 
 Filled in by later tickets (T10 POINT/overlay, T12 turn flow and exit tests).
 
 - [ ] T10: see "Desktop shell (T10)" above
+- [ ] T11: see "Preview panel, consent gate, keys (T11)" above
 - [ ] T12: TODO (exit test: saved request preview shows the password field redacted)
 
 ## Untested on the dev machine (to verify locally)

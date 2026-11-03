@@ -11,6 +11,10 @@ pub const EVT_TURN_STATE: &str = "turn:state";
 pub const EVT_TURN_POINT: &str = "turn:point";
 pub const EVT_FIREWALL_STATUS: &str = "firewall:status";
 pub const EVT_TURN_ERROR: &str = "turn:error";
+/// Sent only to the `preview` window.
+pub const EVT_TURN_PREVIEW: &str = "turn:preview";
+/// Sent only to the `preview` window: the pending preview ended (decided, timed out, cancelled).
+pub const EVT_PREVIEW_CLOSED: &str = "turn:preview_closed";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -140,8 +144,11 @@ pub struct Settings {
     pub profile: String,
     /// Push-to-talk shortcut, e.g. `Ctrl+Alt+Space`.
     pub hotkey: String,
-    /// Placeholder until the key store lands (T11); never persisted.
+    /// Whether an API key is stored in the OS keychain (best effort); never persisted here and
+    /// the key itself is never returned.
     pub has_api_key: bool,
+    /// Anthropic model id. Empty = cloud unavailable (no default on purpose).
+    pub anthropic_model: String,
 }
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+Space";
@@ -155,7 +162,15 @@ impl Default for Settings {
             profile: DEFAULT_PROFILE.into(),
             hotkey: DEFAULT_HOTKEY.into(),
             has_api_key: false,
+            anthropic_model: String::new(),
         }
+    }
+}
+
+impl Settings {
+    /// Cloud calls need a model id; empty means cloud is unavailable.
+    pub fn cloud_configured(&self) -> bool {
+        !self.anthropic_model.trim().is_empty()
     }
 }
 
@@ -172,6 +187,72 @@ pub struct SettingsPatch {
     pub profile: Option<String>,
     #[ts(optional)]
     pub hotkey: Option<String>,
+    #[ts(optional)]
+    pub anthropic_model: Option<String>,
+}
+
+/// Where a request goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum LocalityDto {
+    Local,
+    Cloud,
+}
+
+/// The user's answer to a cloud preview (`preview_decision`). Step 1 has no "always allow".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum Decision {
+    Send,
+    Cancel,
+}
+
+/// Event `turn:preview`, sent to the preview window only. Text fields are the exact content of
+/// the request (display-only); the image and raw body are fetched from `preview://`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PreviewDto {
+    #[ts(type = "number")]
+    pub request_id: u64,
+    pub provider_id: String,
+    pub model: String,
+    pub locality: LocalityDto,
+    /// Full sha256 hex of the request (provider, endpoint, model, body).
+    pub digest_hex: String,
+    pub transcript: String,
+    pub screen_text: Option<String>,
+    /// `preview://<request_id>` (image/png), when an image is part of the request.
+    pub image_url: Option<String>,
+    /// `preview://<request_id>/body`: the exact JSON bytes that will be sent.
+    pub body_url: String,
+    pub secure_fields_hidden: u32,
+    /// Seconds until the core cancels the request by itself.
+    pub timeout_secs: u32,
+}
+
+/// Event `turn:preview_closed` (preview window only): clear the panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PreviewClosed {
+    #[ts(type = "number")]
+    pub request_id: u64,
+}
+
+/// Result of `get_last_request`: the most recent turn's request, local or cloud (in memory
+/// only, replaced each turn). Image/body come from `preview://last` and `preview://last/body`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LastRequestDto {
+    pub turn_id: u32,
+    pub provider_id: String,
+    pub model: String,
+    pub locality: LocalityDto,
+    pub digest_hex: String,
+    pub transcript: String,
+    pub screen_text: Option<String>,
+    pub image_url: Option<String>,
+    pub body_url: String,
+    pub secure_fields_hidden: u32,
 }
 
 /// Result of `get_status`.
@@ -196,6 +277,7 @@ mod tests {
         assert_eq!(s.vision_mode, VisionMode::Auto);
         assert_eq!(s.profile, "default");
         assert!(!s.has_api_key);
+        assert!(!s.cloud_configured());
     }
 
     #[test]
