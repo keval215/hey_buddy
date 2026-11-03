@@ -43,4 +43,4 @@ Status: accepted (user)
 Decision: PreparedRequest (exact body bytes) is the single object for preview/digest/CloudOptIn/transport; cloud calls need a digest-bound one-use CloudOptIn minted only in core/consent.rs from preview Send (no always-allow). Local-only default (Ollama loopback). Single-shot turns. Default screen context = firewall-redacted accessibility-tree text (RedactedScreenText, sealed in firewall; `Firewall::check_text` additive, fail-closed default); VLM only for firewall-Clear frames via pure `core::route`. reqwest+rustls(ring); keyring macOS/Windows only. Amends ADR 0001 (check_text, AppDenyPolicy, LlmRequest/ScreenContext, IPC).
 Why: previewed bytes == sent bytes; redaction in our code before any model; unreadable tree never yields an image.
 ADR: docs/adr/0002-llm-provider-and-preview.md
-Status: core accepted; Addendum A (check_text amendment) awaiting user ack
+Status: accepted (user ack of Addendum A + defaults 2026-11-03)

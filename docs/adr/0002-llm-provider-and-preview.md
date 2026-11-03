@@ -1,6 +1,6 @@
 # ADR 0002 — LLM provider, exact-bytes request preview, text-first screen context
 
-Status: core design (§1–13) accepted by user 2026-11-03; Addendum A (text-first) pending user ack of the `Firewall::check_text` amendment · Ticket: T9 · Decision: D-003 · Amends ADR 0001 (see end)
+Status: core design (§1–13) accepted by user 2026-11-03; Addendum A (text-first) and the `Firewall::check_text` amendment approved by user 2026-11-03 (open-question defaults 1-3 approved) · Ticket: T9 · Decision: D-003 · Amends ADR 0001 (see end)
 
 ## Summary
 A neutral `LlmRequest` becomes a `PreparedRequest` via `provider.prepare`: exact HTTP body bytes, endpoint, model, provider id, locality, digest. Preview, digest, cloud opt-in and transport all use that one object, so previewed bytes == sent bytes. Cloud calls need a non-cloneable `CloudOptIn` bound to the digest, consumed by `stream`, minted only in `crates/core/src/consent.rs` from a preview "Send". Local-only by default (Ollama, loopback only). Single-shot turns. **Default screen context is firewall-redacted accessibility-tree text, no image (Addendum A).** The vision model only gets a firewall-`Clear` `RedactedFrame`, as a deterministic fallback.
@@ -175,7 +175,7 @@ Known limitation (unchanged from ADR 0001): a password drawn on a canvas and inv
 ## Consequences
 Text path is default: less data/tokens, no capture for most turns; VLM path costs a second walk + model swap (several seconds cold on 4 GB). Firewall public surface grows; screen-text v1 is a prompt contract. T12 depends on new T13 (real AX/UIA text walkers); until T13, `check_text` is `Blocked(Unsupported)` everywhere so routed turns are voice-only. Walker latency and cross-check false-block rate are unverified on real machines. Reversibility: moderate (types additive; image-first is a `route()`/settings change).
 
-## Open questions (recommended answers; defaults used until the user says otherwise)
+## Open questions (all three answered YES by the user 2026-11-03)
 1. Exclude values of normal (non-password) text fields from screen text — YES (`[has text]`/`[empty]` only).
 2. `vision_mode` Off|Auto|Always (default Auto; Off on low-memory); exit test passes both the text path and the Always-image path — YES.
 3. Exclude window/page titles from screen text — YES (app id only).
