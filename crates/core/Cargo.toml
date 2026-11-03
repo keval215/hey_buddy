@@ -15,6 +15,12 @@ capture = { path = "../capture" }
 firewall = { path = "../firewall" }
 llm = { path = "../llm" }
 frame = { path = "../frame" }
+serde_json = "1"
+ts-rs = "11"
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
 
 [dev-dependencies]
+capture = { path = "../capture", features = ["fakes"] }
 firewall = { path = "../firewall", features = ["fakes"] }
+tempfile = "3"

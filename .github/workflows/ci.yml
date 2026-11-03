@@ -37,6 +37,12 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: ts-rs generated IPC types are up to date (cargo test regenerates them)
+        run: |
+          if [ -n "$(git status --porcelain -- apps/desktop/src/ipc)" ]; then
+            echo "apps/desktop/src/ipc is stale: run 'cargo test -p buddy-core' and commit"
+            git status --porcelain -- apps/desktop/src/ipc; exit 1
+          fi
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test

@@ -1,8 +1,56 @@
+//! hey_buddy desktop shell (T10): tray, settings window, push-to-talk hotkey, per-display
+//! click-through overlay. Thin glue: all logic lives in `buddy-core` (ADR 0001).
+//!
+//! Privacy: overlays and the settings window are excluded from screen capture (Windows:
+//! `exclude_window_from_capture`; macOS: the capture crate excludes this process by pid).
+//! Nothing here logs labels or any model/user content.
+
 // Prevents an extra console window on Windows in release.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod commands;
+mod hotkey;
+mod overlay;
+mod shell;
+
+use std::sync::Arc;
+
+use buddy_core::Buddy;
+use tauri::Manager;
+
 fn main() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
+        .plugin(hotkey::plugin())
+        .setup(|app| {
+            let dir = app.path().app_config_dir()?;
+            let buddy = Arc::new(Buddy::new(
+                dir.join("settings.json"),
+                buddy_core::platform_capture(),
+            ));
+            app.manage(buddy.clone());
+            shell::setup(app.handle(), &buddy)?;
+            Ok(())
+        });
+
+    #[cfg(debug_assertions)]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        commands::get_status,
+        commands::get_settings,
+        commands::update_settings,
+        commands::list_displays,
+        commands::cancel_turn,
+        commands::debug_point,
+    ]);
+    #[cfg(not(debug_assertions))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        commands::get_status,
+        commands::get_settings,
+        commands::update_settings,
+        commands::list_displays,
+        commands::cancel_turn,
+    ]);
+
+    builder
         .run(tauri::generate_context!())
         .expect("error while running hey_buddy");
 }

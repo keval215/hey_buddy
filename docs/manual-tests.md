@@ -80,11 +80,58 @@ happens to display the password (a "show password" mirror in another part of the
 a copy in a notes field) cannot be recognised and would be emitted as ordinary text. Check this on
 the T13 readers (macOS AX / Windows UIA) with a "reveal password" toggle and note how each platform reports it.
 
+## Desktop shell (T10) - UNTESTED on this machine (all runtime behaviour)
+
+Only the Linux build was started (under Xvfb: it runs, no tray host, no overlay because Linux has
+no display list from the capture crate). Windows was cargo-checked (`x86_64-pc-windows-gnu`,
+including the embedded manifest); macOS cannot be cross-compiled here at all.
+
+Run: `pnpm install && pnpm --filter desktop tauri dev` (dev build: the settings window has a
+"Debug: point" box that calls `debug_point`; release builds have no such command). Needs a
+multi-monitor setup for the display tests, ideally with different scales (e.g. Retina + 1x) and a
+monitor left of / above the primary one (negative origin).
+
+Run each on BOTH macOS and Windows:
+
+- [ ] Tray / menu-bar icon appears with a disabled "Status: idle" line, "Settings...", "Quit".
+      macOS: no Dock icon (accessory app).
+- [ ] "Settings..." opens the settings window; closing it hides it (tray still works); "Quit" exits.
+- [ ] Settings: local_only toggle, profile and vision selects, hotkey text; Save persists
+      (restart the app and the values are back). Choosing `low-memory` shows vision Off (locked);
+      switching back to `default` restores the earlier vision choice. An invalid hotkey (`Space`,
+      `Ctrl`) shows an error and nothing changes. A hotkey taken by another app shows
+      "hotkey unavailable" and the old one keeps working.
+- [ ] Hold the default hotkey `Ctrl+Alt+Space`: tray status becomes "listening", the settings
+      window status line too; release: back to "idle". Holding it down does not flicker
+      (auto-repeat is ignored). No microphone indicator appears (T10 has no mic).
+- [ ] Overlay never takes focus: type in a text editor, run `debug_point`; the editor keeps the
+      caret and focus, the overlay never appears in Alt+Tab / Cmd+Tab or the taskbar.
+- [ ] Overlay never blocks clicks: while the marker is visible, click and drag text in the editor
+      underneath, click links in a browser, use window title bars and the menu bar / taskbar.
+- [ ] Marker lands on the right display: `debug_point` with a point on each monitor (use global
+      coordinates, e.g. a point on the left monitor is negative). It must animate to the spot and
+      fade out after about 3 s, on that monitor only. On the Retina / 150 % monitor the marker is
+      where the coordinates say, not 2x / 1.5x off.
+- [ ] Display changes: unplug / plug a monitor or change resolution; within ~3 s the overlays match
+      the new layout (no stale full-screen window left behind, none on a missing monitor).
+- [ ] Overlay and settings windows are not in screenshots or in our own capture. Windows: take a
+      Win+Shift+S screenshot and a Snipping Tool capture while the marker and settings are
+      visible (`WDA_EXCLUDEFROMCAPTURE`: the windows are absent, not black). macOS: the capture crate
+      excludes our process by pid; verify with the T7 capture path that the marker does not show,
+      and note the result for macOS 15+ (tauri's `content_protected` / sharingType is also set).
+- [ ] Windows: if exclusion fails the overlay is not shown at all (fail closed); nothing to test
+      unless you can force the failure.
+- [ ] Windows DPI manifest is effective: Task Manager > Details > "DPI awareness" column shows
+      "Per-monitor v2" for hey_buddy. The firewall no longer fails closed for DPI reasons (see
+      the Text path section above).
+- [ ] macOS: transparent overlay really is transparent (needs `macOSPrivateApi`, enabled in
+      `tauri.conf.json`), also over full-screen apps and on all Spaces.
+
 ## Step 1 manual tests (outline)
 
 Filled in by later tickets (T10 POINT/overlay, T12 turn flow and exit tests).
 
-- [ ] T10: TODO
+- [ ] T10: see "Desktop shell (T10)" above
 - [ ] T12: TODO (exit test: saved request preview shows the password field redacted)
 
 ## Untested on the dev machine (to verify locally)
