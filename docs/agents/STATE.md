@@ -6,7 +6,7 @@ _Owner: orch. Keep under 150 lines._
 Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 
 ## Branch
-`claude/trusting-pascal-ie39fj` (session-designated; used instead of `step1/foreground-buddy`)
+`claude/trusting-pascal-ie39fj` (user decision: keep for all of Step 1; open PR to `main` when Step 1 is done)
 
 ## Board
 
