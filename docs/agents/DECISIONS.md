@@ -18,3 +18,9 @@ Decision: All agents run on Sonnet 5.5; Opus 5.5 is used only for architecture d
 Why: Keep Claude Pro usage within limits; spend the strongest model only where mistakes are expensive.
 ADR: none (team policy)
 Status: accepted
+
+## D-001 Step 1 architecture — 2026-11-03
+Decision: Seven crates incl. new pure-data `frame`; `RedactedFrame` sealed in `firewall`, `llm` takes only it (compile-time). Async traits (tokio, async-trait, BoxStream). Only `core` wires crates; app depends only on `core`. Fail closed; blocked/paused turns continue voice-only and tell the user aloud why. Unreadable AX tree: try enabling accessibility first, then block. Windows deny-listed app visible: refuse full-display capture, fall back to foreground-window capture if not deny-listed. LLM local-only by default; cloud needs per-request opt-in (T9).
+Why: Real compile-time privacy guarantee; swappable, testable-on-Linux parts.
+ADR: docs/adr/0001-step1-architecture.md
+Status: accepted (user approved)

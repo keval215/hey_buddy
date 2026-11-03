@@ -13,4 +13,9 @@ Key points: <2–4 bullets>
 Next: <what orch does next>
 ```
 
-(no entries yet)
+## H-001 2026-11-03 T0 → reviewer-ARCH
+Asked: Propose Step 1 architecture ADR.
+Result: decision proposed; user approved with amendments (AX enable-first + spoken block notice; Windows foreground-window fallback; add `frame`; local-only default LLM).
+Key points: sealed RedactedFrame in firewall; async traits; Tauri commands+events; fail-closed table.
+Next: T1 → coder.
+

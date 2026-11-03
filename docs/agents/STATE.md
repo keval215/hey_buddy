@@ -12,8 +12,8 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 
 | Ticket | Title | Status | Rounds | Notes |
 |---|---|---|---|---|
-| T0 | [ARCH] Step 1 architecture | ARCH-PENDING | 0 | |
-| T1 | Repo scaffold and CI | TODO | 0 | |
+| T0 | [ARCH] Step 1 architecture | DONE | 0 | D-001, ADR 0001 |
+| T1 | Repo scaffold and CI | IN PROGRESS | 0 | |
 | T2 | Model registry | TODO | 0 | |
 | T3 | Voice traits and fakes | TODO | 0 | |
 | T4 | Local STT: whisper.cpp + Silero VAD | TODO | 0 | |
@@ -29,7 +29,7 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 Statuses: TODO · ARCH-PENDING · IN PROGRESS · IN REVIEW · CHANGES · DONE · BLOCKED · SKIPPED
 
 ## In progress
-T0: running ARCHITECTURE MODE (Opus)
+T1: coder
 
 ## Blockers / waiting on user
 none
@@ -38,4 +38,4 @@ none
 none yet
 
 ## Done
-none
+T0
