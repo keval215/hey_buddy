@@ -13,6 +13,12 @@ Key points: <2–4 bullets>
 Next: <what orch does next>
 ```
 
+## H-005 2026-11-03 T4 → coder (x3 runs), reviewer
+Asked: Whisper STT, Silero VAD, cpal mic, behind features.
+Result: APPROVED round 1 (after licence hard stop resolved by user: D-002 Unlicense).
+Key points: Silero tensor names read from ONNX at load, mapped by dtype/rank; ids versioned (`silero-vad-v5`); whisper batch-only; model tests skip when absent.
+Next: T5 → coder.
+
 ## H-004 2026-11-03 T3 → coder, reviewer
 Asked: Voice traits, fakes, resampler, e2e test.
 Result: APPROVED round 1.

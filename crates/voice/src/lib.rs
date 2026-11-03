@@ -14,6 +14,8 @@ pub mod vad;
 
 #[cfg(feature = "mic-cpal")]
 pub mod mic_cpal;
+#[cfg(feature = "stt-whisper")]
+pub mod stt_whisper;
 #[cfg(feature = "vad-silero")]
 pub mod vad_silero;
 

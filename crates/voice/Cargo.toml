@@ -9,9 +9,10 @@ description = "hey_buddy voice crate"
 [features]
 fakes = ["dep:tokio"]
 # Optional local backends. None are default; default builds need no cmake/ONNX/ALSA.
-# `stt-whisper` is intentionally absent: see ticket T4 licence stop (whisper-rs is Unlicense).
+# `stt-whisper` needs cmake + a C++ toolchain (builds whisper.cpp). whisper-rs is Unlicense (D-002).
 vad-silero = ["dep:ort"]
 mic-cpal = ["dep:cpal"]
+stt-whisper = ["dep:whisper-rs"]
 
 [dependencies]
 async-trait = "0.1"
@@ -23,6 +24,7 @@ serde_json = "1"
 thiserror = "1"
 ort = { version = "=2.0.0-rc.15", optional = true, default-features = false, features = ["std", "ndarray", "load-dynamic", "api-24"] }
 cpal = { version = "0.18", optional = true }
+whisper-rs = { version = "0.16", optional = true }
 
 [dev-dependencies]
 hound = "3"
