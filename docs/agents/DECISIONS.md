@@ -38,3 +38,6 @@ Target dev machine RTX 2050 / 4 GB VRAM: STT Whisper small on CPU (base fallback
 Why: Reduce friction; match real hardware.
 ADR: none
 Status: accepted (user)
+
+## D-003 (pending record) T9 decisions from user — 2026-11-03
+User approved ADR 0002 draft (PreparedRequest exact-bytes, CloudOptIn digest-bound, loopback-only Ollama, reqwest+rustls/ring, keyring macOS/Windows only). Answers: Qwen3-VL 2B only receives firewall-passed frames (blocked frames never sent); NO always-allow in Step 1 (every cloud call via preview panel); single-shot turns; banking defaults deferred (T7). New requirement: default request = accessibility-tree text + transcript, no image; same PreparedRequest/preview (previewed bytes = sent bytes); firewall redacts secure-field values from tree text. Full record: ADR 0002 (being written).

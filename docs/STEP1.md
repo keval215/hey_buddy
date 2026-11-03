@@ -184,8 +184,8 @@ Then implement:
 - Local-only mode skips the panel and never calls cloud providers.
 
 **Acceptance criteria**
-- [ ] Cloud call cannot happen without passing through the panel (or a saved
-      per-app "always allow" the user set)
+- [ ] Every cloud call passes through the preview panel; no per-app "always
+      allow" bypass in Step 1 (user decision)
 - [ ] Panel shows the same image the provider would receive
 
 ## T12 End-to-end wiring and exit test

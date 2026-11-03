@@ -19,9 +19,9 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 | T4 | Local STT: whisper.cpp + Silero VAD | DONE | 1 | follow-ups: integration tests should fail (not skip) on non-ModelMissing load errors; abort whisper on stream drop; Silero input.clone per window; cap mic channel |
 | T5 | Local TTS: Phonon 31m, Kokoro fallback | DONE | 1 | Phonon complete; Kokoro PARTIAL (no phonemiser: espeak-ng is GPL) -> follow-up needs decision on licence-clean G2P + voice style files |
 | T6 | Latency bench | DONE | 1 | follow-ups: `targets.pass` as Option<bool> when not meaningful; --wav input; median/p95; README to label real paths untested |
-| T7 | Capture crate and app deny-list | CODE APPROVED (round 2) | 2 | waiting on user sign-off: no banking apps in default deny-list (user-added instead). Mark DONE on sign-off |
+| T7 | Capture crate and app deny-list | DONE | 2 | banking defaults deferred (user sign-off, users add own); see local-verify list |
 | T8 | Privacy firewall v0 | DONE | 2 | follow-ups: macos is_system_path must also reject `/System/Volumes/`; tune macOS AX error propagation after real-Mac test |
-| T9 | [ARCH] LLM provider and request preview | ARCH-PENDING | 0 | ARCHITECTURE MODE running |
+| T9 | [ARCH] LLM provider and request preview | ARCH-PENDING | 0 | ADR 0002 approved by user; Opus addendum for text-only (AX tree) variant running |
 | T10 | Desktop shell: tray, hotkey, overlay, pointing | TODO | 0 | |
 | T11 | Preview panel | TODO | 0 | |
 | T12 | End-to-end wiring and exit test | TODO | 0 | |
@@ -29,12 +29,10 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 Statuses: TODO · ARCH-PENDING · IN PROGRESS · IN REVIEW · CHANGES · DONE · BLOCKED · SKIPPED
 
 ## In progress
-T9: ARCHITECTURE MODE (Opus) running
+T9: ARCH addendum (Opus) then coder
 
 ## Blockers / waiting on user
-- T9 [ARCH] draft awaiting approval + 3 questions (always-allow cropping, single-turn, default Ollama model -> now Qwen3 4B per D-004). Draft vision model Qwen3-VL 2B routing needs clarification: 'only when AX tree unreadable' conflicts with fail-closed (D-001: unreadable tree => frame BLOCKED, nothing sent). Proposal: vision model only sees firewall-Clear frames.
-- Hardware-profile work (registry gate removal, defaults, bench, low-memory profile) in progress (coder).
-- T7 sign-off: defer banking apps in default deny-list (recommended) or add well-known finance apps?
+none (T9 questions answered)
 
 ## User must verify locally (macOS / Windows)
 - T1: macOS/Windows CI jobs, `tauri build`, icon.ico/icns have never run (check first CI run on GitHub)
@@ -49,4 +47,4 @@ T9: ARCHITECTURE MODE (Opus) running
 - Follow-ups: Kokoro text frontend; shared ort_util module; speaker_cpal should surface stream errors; CI job for tts-phonon/speaker-cpal + `cargo deny --all-features`; real 1024px app icon; tighten CSP `unsafe-inline` later
 
 ## Done
-T0, T1, T2, T3, T4, T5, T6, T8 (T7 code approved, awaiting banking sign-off)
+T0, T1, T2, T3, T4, T5, T6, T7, T8
