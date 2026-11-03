@@ -10,8 +10,11 @@ pub enum VoiceError {
     LicenceNotAccepted { model: String },
     #[error("audio device unavailable: {0}")]
     DeviceUnavailable(String),
+    /// The message must describe the problem only (e.g. lengths, rates), never audio content.
     #[error("invalid audio: {0}")]
     InvalidAudio(String),
+    /// Wrap backend errors with a fixed description; never include transcript text,
+    /// audio samples or other user content in the message.
     #[error("backend error: {0}")]
     Backend(String),
     #[error("cancelled")]

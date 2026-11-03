@@ -12,6 +12,11 @@ pub mod stt;
 pub mod tts;
 pub mod vad;
 
+#[cfg(feature = "mic-cpal")]
+pub mod mic_cpal;
+#[cfg(feature = "vad-silero")]
+pub mod vad_silero;
+
 #[cfg(feature = "fakes")]
 pub mod fake;
 
