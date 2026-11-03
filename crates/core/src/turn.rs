@@ -293,7 +293,10 @@ async fn record(ctx: &TurnCtx, stream: BoxStream<'static, AudioChunk>) -> Vec<f3
                     Some(c) => {
                         push(&mut samples, c);
                         if samples.len() >= cap {
-                            stream = None; // full: close the mic early
+                            // Full: finish exactly as if the key had been released (the
+                            // mic closes and the turn moves on), so the engine can never sit
+                            // in Listening with auto-repeat presses ignored.
+                            break;
                         }
                     }
                     None => stream = None,

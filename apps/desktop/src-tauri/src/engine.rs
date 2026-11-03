@@ -15,6 +15,11 @@ pub fn start(app: &AppHandle, buddy: &Arc<Buddy>, config_dir: &Path) {
     for n in &deny.notices {
         buddy.add_notice(n.clone());
     }
+    // One keychain read, off the runtime workers, so the first turn does not block on it.
+    let b = buddy.clone();
+    drop(tauri::async_runtime::spawn_blocking(move || {
+        b.prime_api_key_cache();
+    }));
     start_voice(app, buddy, deny.list);
 }
 

@@ -25,15 +25,16 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 | T13 | [NEW] (notes: labelled form groups around a password field vanish from text by design; platform sources must read only frontmost app's focused window and share is_secure/frame_of helpers; measure cross-check false-block rate) macOS AX / Windows UIA ScreenTextSource (foreground window, secure-first) wired into platform_firewall() | DONE | 2 | title leak (TitleBar) fixed round 2; follow-ups: Opaque role mapping once real trees seen; mac focused-window read twice |
 | T10 | Desktop shell: tray, hotkey, overlay, pointing | DONE | 1 | follow-ups folded into T11: set_hotkey_registered(true) after rebind; hotkey must include Ctrl/Alt/Super (not Shift-only); manual-test note on 3 s display polling / Screen Recording prompt |
 | T11 | Preview panel | DONE | 1 | follow-ups for T12: preview window pulls pending dto on mount (`get_pending_preview`) to avoid blank panel race; check Settings::cloud_configured() before building Anthropic provider |
-| T12 | End-to-end wiring and exit test | DONE (hardening pass pending) | 1 | reviewer APPROVED; 8 MINOR items -> hardening pass |
+| T12 | End-to-end wiring and exit test | DONE | 1 | + hardening pass approved (round 1); open optional: stale Released after capped hold can end next turn's recording early (low severity) |
 
 Statuses: TODO · ARCH-PENDING · IN PROGRESS · IN REVIEW · CHANGES · DONE · BLOCKED · SKIPPED
 
 ## In progress
-T12-hardening: coder
+none - Step 1 complete; waiting for user go-ahead to open PR to `main`
 
 ## Blockers / waiting on user
-none
+- User go-ahead to push/open the PR to `main` (branch is already pushed)
+- Definition of done still needs: CI green on GitHub (first run ever of macOS/Windows jobs) and the manual exit test on at least one real machine
 
 ## User must verify locally (macOS / Windows)
 - T1: macOS/Windows CI jobs, `tauri build`, icon.ico/icns have never run (check first CI run on GitHub)
@@ -52,4 +53,15 @@ none
 - Follow-ups: Kokoro text frontend; shared ort_util module; speaker_cpal should surface stream errors; CI job for tts-phonon/speaker-cpal + `cargo deny --all-features`; real 1024px app icon; tighten CSP `unsafe-inline` later
 
 ## Done
-T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T13
+T0-T13 (all tickets approved by reviewer)
+
+- T12 (untested here): real-voice end-to-end (`pnpm --filter desktop tauri dev --features real-voice`), models placed (whisper-small.bin, silero-vad-v5.onnx, phonon-31m/), ORT_DYLIB_PATH, Ollama qwen3:4b / qwen3-vl:2b; exit test text path + vision_mode=Always path; negatives (lock screen, secure input, deny-listed app, local_only); Windows foreground-fallback POINT origin; macOS Info.plist (NSMicrophoneUsageDescription) before bundling
+
+## Step 2 candidates
+- Kokoro text frontend (licence-clean G2P + voice styles); model download UI showing licences + real registry URLs/sha256
+- Reload voice engines on profile change / new models without restart; load-progress UI
+- Native display-change events instead of 3 s polling; Opaque role mapping from real trees
+- Partial STT events, abort Whisper on drop; shared ort_util; CI jobs for real-voice features
+- Prompt-injection hardening before ANY agent action (on-screen text is untrusted); background agents, harness server, agent-desktop
+- Packaging: Info.plist, real 1024 px icon, Mac App Store ineligible (macos-private-api), CSP tightening
+- Turn-id guard / hold-state for stale Released events; proxy support for cloud calls

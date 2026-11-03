@@ -477,6 +477,7 @@ struct Opts {
     capture_fail: Option<CaptureError>,
     audio: Vec<AudioChunk>,
     endless_mic: bool,
+    mic: Option<Arc<dyn AudioInput>>,
     stall_llm: bool,
     stt: Option<Arc<dyn SttProvider>>,
     patch: SettingsPatch,
@@ -499,6 +500,7 @@ impl Default for Opts {
             capture_fail: None,
             audio: speech(),
             endless_mic: false,
+            mic: None,
             stall_llm: false,
             stt: None,
             patch: SettingsPatch::default(),
@@ -583,11 +585,13 @@ fn rig(o: Opts) -> Rig {
     buddy.attach_engine(EngineDeps {
         firewall,
         deny: Arc::new(DenyList::defaults()),
-        audio_in: Arc::new(CountMic {
-            inner: FakeAudioIn::new(o.audio),
-            opens: opens.clone(),
-            live: live.clone(),
-            endless: o.endless_mic,
+        audio_in: o.mic.unwrap_or_else(|| {
+            Arc::new(CountMic {
+                inner: FakeAudioIn::new(o.audio),
+                opens: opens.clone(),
+                live: live.clone(),
+                endless: o.endless_mic,
+            })
         }),
         audio_out: out,
         vad: Arc::new(|| Ok(Box::new(FakeVad::new()) as Box<dyn Vad>)),
@@ -996,13 +1000,11 @@ async fn vision_failures_keep_the_text_and_never_send_an_image() {
 async fn windows_deny_list_fallback_captures_the_foreground_window_and_still_goes_through_check() {
     // A deny-listed app is visible: the display capture is refused, the (not deny-listed)
     // foreground window is captured instead and passes through the firewall like any frame.
+    // The window sits at a NON-ZERO origin so a missing origin override would be detected.
+    const FG_WINDOW: Rect = Rect::new(200, 100, 600, 500);
     let fake = FakeCapture::new(FakeMode::WindowsPolicy)
         .with_window("keepassxc.exe", Rect::new(650, 0, 100, 100), [1, 2, 3, 255])
-        .with_window(
-            "com.example.browser",
-            Rect::new(0, 0, 600, 600),
-            [9, 9, 9, 255],
-        )
+        .with_window("com.example.browser", FG_WINDOW, [9, 9, 9, 255])
         .with_foreground(1);
     let r = rig(Opts {
         fake: Some(fake),
@@ -1011,7 +1013,14 @@ async fn windows_deny_list_fallback_captures_the_foreground_window_and_still_goe
             ..Default::default()
         },
         detector: FakeDetector::new(vec![]),
-        tree: Ok(sparse_tree()),
+        tree: Ok(RawWindowTree {
+            app_id: "com.example.browser".into(),
+            window_rect: FG_WINDOW,
+            nodes: vec![
+                node(0, NodeRole::Window, None, FG_WINDOW),
+                node(1, NodeRole::Button, Some("Sign in"), BUTTON),
+            ],
+        }),
         reply: vec!["Click it. [POINT:100,50:Sign in]"],
         ..Opts::default()
     });
@@ -1028,11 +1037,12 @@ async fn windows_deny_list_fallback_captures_the_foreground_window_and_still_goe
         r.rec.firewall()
     );
     let (w, h, _) = decode_png(&r.buddy.preview_store().image_arc("last").unwrap());
-    assert_eq!((w, h), (600, 600), "only the window, not the display");
-    // Window-origin geometry: the image pixel (100,50) is global (100,50) for a window at 0,0.
+    assert_eq!((w, h), (600, 500), "only the window, not the display");
+    // Window-origin geometry: the image pixel (100,50) is global (300,150) for a window at
+    // (200,100).
     let pts = r.rec.points();
     assert_eq!(pts.len(), 1, "{pts:?}");
-    assert_eq!((pts[0].x, pts[0].y), (100, 50));
+    assert_eq!((pts[0].x, pts[0].y), (300, 150));
 }
 
 // ================================================================== voice only
@@ -1459,6 +1469,72 @@ async fn push_to_talk_opens_after_the_press_and_closes_on_release_or_cancel() {
     r.buddy.cancel_turn();
 }
 
+#[tokio::test(start_paused = true)]
+async fn the_recording_cap_finishes_the_turn_like_a_release_and_a_later_press_starts_a_new_one() {
+    // A mic that never ends and never gets a release: after 60 s of audio the cap closes it
+    // and the turn moves on exactly as on a release.
+    struct Firehose(Arc<AtomicUsize>);
+    impl AudioInput for Firehose {
+        fn open_push_to_talk(&self) -> Result<BoxStream<'static, AudioChunk>, VoiceError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            let mut first = true;
+            Ok(stream::unfold((), move |()| {
+                let speak = std::mem::take(&mut first);
+                async move {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    let samples = if speak {
+                        (0..16_000).map(|i| 0.5 * (i as f32 * 0.1).sin()).collect()
+                    } else {
+                        vec![0.0; 16_000]
+                    };
+                    Some((
+                        AudioChunk {
+                            samples,
+                            sample_rate: 16_000,
+                        },
+                        (),
+                    ))
+                }
+            })
+            .boxed())
+        }
+    }
+    let opens = Arc::new(AtomicUsize::new(0));
+    let r = rig(Opts {
+        mic: Some(Arc::new(Firehose(opens.clone()))),
+        ..Opts::default()
+    });
+    r.buddy.on_hotkey_pressed();
+    r.buddy.on_hotkey_pressed(); // auto-repeat while listening: ignored
+    assert_eq!(r.buddy.get_status().phase, Phase::Listening);
+    // 30 s of audio in: still listening.
+    for _ in 0..30 {
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(r.buddy.get_status().phase, Phase::Listening);
+    // No Released event ever arrives: the 60 s cap ends the recording.
+    for _ in 0..40 {
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+    }
+    r.wait_idle().await;
+    let phases = r.rec.phases();
+    assert!(
+        subsequence(
+            &phases,
+            &[Phase::Listening, Phase::Transcribing, Phase::Idle]
+        ),
+        "{phases:?}"
+    );
+    assert_eq!(opens.load(Ordering::SeqCst), 1);
+    // A later press starts a new turn (no stuck state).
+    r.buddy.on_hotkey_pressed();
+    assert_eq!(r.buddy.get_status().phase, Phase::Listening);
+    wait_until("second mic open", || opens.load(Ordering::SeqCst) == 2).await;
+    r.buddy.cancel_turn();
+}
+
 #[tokio::test]
 async fn silence_and_empty_transcripts_end_quietly() {
     // No speech at all: STT never runs.
@@ -1558,6 +1634,10 @@ async fn private_text_never_leaks_into_events_errors_or_logs() {
     // The secure node's own text (label and value) is never anywhere.
     // (It is the same marker string, so use the dedicated check in the password test below.)
     assert!(
+        logs().contains("turn start"),
+        "log capture must be alive for the absence check to mean anything"
+    );
+    assert!(
         !logs().contains(MARKER),
         "tracing output must not contain content"
     );
@@ -1573,6 +1653,7 @@ async fn private_text_never_leaks_into_events_errors_or_logs() {
     for e in r.rec.errors() {
         assert!(!format!("{e:?}").contains(MARKER));
     }
+    assert!(logs().contains("turn start"));
     assert!(!logs().contains(MARKER));
 }
 
@@ -1586,6 +1667,7 @@ async fn secure_field_text_is_in_no_request_event_tts_or_log() {
         ..Opts::default()
     });
     r.turn().await;
+    assert!(logs().contains("turn start"), "log capture must be alive");
     let everything = format!(
         "{:?} {:?} {} {} {}",
         r.rec.all(),

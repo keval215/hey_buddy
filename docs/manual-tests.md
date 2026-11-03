@@ -137,9 +137,9 @@ Run each on BOTH macOS and Windows:
 ## Preview panel, consent gate, keys (T11) - UNTESTED on this machine (all runtime behaviour)
 
 Needs macOS or Windows (Linux has no keychain backend: `set_api_key` returns
-`credential_store_unsupported`). Cloud calls are wired in T12; until then drive the panel from a
-dev build of T12, or from a debug harness that calls `Buddy::prepare_and_consent` with the
-Anthropic provider (the Rust tests cover the logic with fakes). Use a throwaway Anthropic key
+`credential_store_unsupported`). Cloud calls are wired (T12): drive the panel with a real cloud
+turn, see the cloud section of the Step 1 EXIT TEST below (the Rust tests cover the logic with
+fakes). Use a throwaway Anthropic key
 and an OS network monitor (Little Snitch / `nettop` / Resource Monitor) to see traffic.
 
 - [ ] Cloud preview: with `local_only` off, a model id set and a key stored, a cloud turn opens
@@ -246,6 +246,12 @@ a Windows credential prompt or any desktop app with a password box):
 - [ ] Windows only: with a deny-listed app (e.g. KeePassXC) visible on the same display, the
       full-display capture is refused and the foreground window alone is used when it is not
       deny-listed; the buddy says the screenshot could not be taken if even that is not possible.
+- [ ] Windows only, UNTESTED: verify the foreground-fallback POINT origin. The marker for a
+      window-only capture is placed using the window's top-left from the UIA `BoundingRectangle`
+      (text path) as the image origin. Check that it lands on the right control: UIA
+      `BoundingRectangle` may differ from the WGC window extents (DWM invisible resize borders,
+      about 7-8 px), and the foreground window can change between `check_text` and the capture.
+      Test with the window not at the screen corner, on a second monitor and at 150 % scaling.
 
 ### C. Negative tests
 
@@ -279,6 +285,12 @@ a Windows credential prompt or any desktop app with a password box):
       reach the language model. Is Ollama running?".
 - [ ] Push-to-talk only: the microphone indicator (macOS orange dot / Windows mic icon) is on
       only while the key is held and a moment after, never at idle.
+
+## Step 2 packaging note
+
+- [ ] macOS bundled builds (not `tauri dev`) need an `Info.plist` with
+      `NSMicrophoneUsageDescription` (and usage text for screen recording) before bundling, or the
+      system denies the microphone / shows no useful prompt. Add it before the first bundle.
 
 ## Untested on the dev machine (to verify locally)
 

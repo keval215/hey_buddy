@@ -270,6 +270,8 @@ struct Pending {
     tx: oneshot::Sender<Decision>,
     /// What the panel was told to show (for `pending_preview`).
     dto: PreviewDto,
+    /// When it was shown, so a late pull reports the time left, not the full timeout.
+    shown_at: tokio::time::Instant,
 }
 
 pub struct ConsentGate {
@@ -344,6 +346,7 @@ impl ConsentGate {
             Pending {
                 tx,
                 dto: dto.clone(),
+                shown_at: tokio::time::Instant::now(),
             },
         );
         let pending = PendingConsent {
@@ -392,7 +395,14 @@ impl ConsentGate {
         lock(&self.pending)
             .iter()
             .max_by_key(|(id, _)| **id)
-            .map(|(_, p)| p.dto.clone())
+            .map(|(_, p)| {
+                // `timeout_secs` is "seconds until the core cancels it": on a late pull that
+                // is what is left, so the panel's countdown matches the real deadline.
+                let mut dto = p.dto.clone();
+                let left = self.timeout.saturating_sub(p.shown_at.elapsed());
+                dto.timeout_secs = u32::try_from(left.as_secs()).unwrap_or(u32::MAX);
+                dto
+            })
     }
 
     /// Number of undecided requests.
@@ -850,6 +860,16 @@ mod tests {
         let pd = r.buddy.consent.request_consent(&d, 4).unwrap();
         r.buddy.cancel_turn();
         assert_eq!(pd.wait().await.err(), Some(ConsentError::Cancelled));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_late_pull_reports_the_time_left_not_the_full_timeout() {
+        let r = rig(false);
+        let d = r.cloud.prepare(&text_request("late")).unwrap();
+        let _pd = r.buddy.consent.request_consent(&d, 1).unwrap();
+        assert_eq!(r.buddy.pending_preview().unwrap().timeout_secs, 120);
+        tokio::time::advance(Duration::from_secs(50)).await;
+        assert_eq!(r.buddy.pending_preview().unwrap().timeout_secs, 70);
     }
 
     #[tokio::test]

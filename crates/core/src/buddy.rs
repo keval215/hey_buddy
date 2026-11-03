@@ -160,6 +160,12 @@ impl Buddy {
         *c.get_or_insert_with(|| matches!(self.credentials.get(ANTHROPIC_ACCOUNT), Ok(Some(_))))
     }
 
+    /// Fill the "is a key stored" cache (one keychain read). Call it off the async workers at
+    /// startup so the first turn's `get_settings` does not block a runtime worker on the keychain.
+    pub fn prime_api_key_cache(&self) {
+        let _ = self.has_api_key();
+    }
+
     fn refresh_has_api_key(&self) {
         *lock(&self.has_key) = None;
     }
