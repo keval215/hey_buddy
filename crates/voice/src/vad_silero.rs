@@ -168,7 +168,7 @@ impl SileroVad {
         id: &str,
         models_dir: &Path,
     ) -> Result<Self, VoiceError> {
-        Self::from_path(&registry.model_path(id, false, models_dir, "onnx")?)
+        Self::from_path(&registry.model_path(id, models_dir, "onnx")?)
     }
 }
 

@@ -21,6 +21,11 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 pub const TARGET_APPLE_SILICON_MS: f64 = 1000.0;
 pub const TARGET_CPU_LAPTOP_MS: f64 = 1500.0;
+/// Provisional (D-004): CPU STT (whisper-small) + Ollama GPU LLM on a 4 GB RTX 2050.
+pub const TARGET_RTX2050_4GB_MS: f64 = 2000.0;
+pub const DEFAULT_PROFILE: &str = "default";
+/// Profile whose hardware the `rtx2050-4gb` target is defined for.
+const RTX2050_PROFILE: &str = "default";
 const SCRIPT: [&str; 6] = [
     "Sure, ",
     "I can ",
@@ -38,6 +43,8 @@ const RATE: u32 = 16_000;
 pub struct Config {
     pub models_dir: Option<PathBuf>,
     pub stt_model: Option<String>,
+    /// Registry profile name (`--profile`).
+    pub profile: String,
     pub force_fake: bool,
     pub stt_delay_ms: u64,
     pub llm_first_token_delay_ms: u64,
@@ -50,6 +57,7 @@ impl Default for Config {
         Self {
             models_dir: None,
             stt_model: None,
+            profile: DEFAULT_PROFILE.into(),
             force_fake: false,
             stt_delay_ms: 20,
             llm_first_token_delay_ms: 30,
@@ -75,6 +83,46 @@ pub struct Parts {
     pub stt: Box<dyn SttProvider>,
     pub tts: Box<dyn TtsProvider>,
     pub components: Vec<Component>,
+    pub profile: ProfileInfo,
+}
+
+/// The registry profile in use (ids and device hints only).
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileInfo {
+    pub name: String,
+    pub stt_model: String,
+    pub stt_device: String,
+    pub tts_model: String,
+    pub tts_device: String,
+    pub llm_model: String,
+    pub llm_device: String,
+    /// None = vision disabled in this profile.
+    pub vlm_model: Option<String>,
+}
+
+fn dev(d: voice::registry::Device) -> String {
+    match d {
+        voice::registry::Device::Cpu => "cpu",
+        voice::registry::Device::Gpu => "gpu",
+    }
+    .into()
+}
+
+fn profile_info(name: &str) -> Result<ProfileInfo> {
+    let reg = load_registry()?;
+    let p = reg
+        .profile(name)
+        .ok_or_else(|| format!("unknown profile `{name}` (see models/registry.json)"))?;
+    Ok(ProfileInfo {
+        name: name.into(),
+        stt_model: p.stt.model.clone(),
+        stt_device: dev(p.stt.device),
+        tts_model: p.tts.model.clone(),
+        tts_device: dev(p.tts.device),
+        llm_model: p.llm.model.clone(),
+        llm_device: dev(p.llm.device),
+        vlm_model: p.vlm.as_ref().map(|v| v.model.clone()),
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -101,9 +149,16 @@ pub struct Host {
 pub struct Targets {
     pub apple_silicon_ms: f64,
     pub cpu_laptop_ms: f64,
-    /// Which target applies to this host: "apple_silicon" or "cpu_laptop".
+    pub rtx2050_4gb_ms: f64,
+    /// Which target applies: "rtx2050_4gb" (profile `default`), else by host
+    /// "apple_silicon" or "cpu_laptop".
     pub applies: String,
     pub target_ms: f64,
+    /// True when the applied target is a provisional estimate (rtx2050_4gb).
+    pub provisional: bool,
+    /// Ollama model swap / cold load is excluded from the steady-state number. The LLM is a
+    /// bench fake, so it is not measured here (always null).
+    pub llm_cold_load_ms: Option<f64>,
     /// total < target_ms. Only meaningful when `meaningful` is true.
     pub pass: bool,
     /// True only when both STT and TTS are real. With fakes, `pass` says nothing.
@@ -115,6 +170,7 @@ pub struct Targets {
 pub struct Report {
     pub schema_version: u32,
     pub host: Host,
+    pub profile: ProfileInfo,
     pub components: Vec<Component>,
     pub stages: Vec<StageTiming>,
     pub total_ms: f64,
@@ -212,14 +268,6 @@ enum Resolved<T> {
     Fake(String),
 }
 
-#[cfg_attr(
-    not(any(
-        feature = "vad-silero",
-        feature = "stt-whisper",
-        feature = "tts-phonon"
-    )),
-    allow(dead_code)
-)]
 fn load_registry() -> Result<voice::registry::Registry> {
     Ok(voice::registry::Registry::from_json_str(include_str!(
         "../../../models/registry.json"
@@ -261,23 +309,15 @@ fn real_vad(_dir: &Path) -> Result<Resolved<Box<dyn Vad>>> {
 }
 
 #[cfg(feature = "stt-whisper")]
-fn real_stt(dir: &Path, model: Option<&str>) -> Result<Resolved<Box<dyn SttProvider>>> {
+fn real_stt(dir: &Path, id: &str) -> Result<Resolved<Box<dyn SttProvider>>> {
     let reg = load_registry()?;
-    let id = match model {
-        Some(m) => m.to_string(),
-        None => reg
-            .default_for(voice::registry::Task::Stt)
-            .ok_or("no default STT in registry")?
-            .id
-            .clone(),
-    };
-    match voice::stt_whisper::WhisperStt::from_registry(&reg, &id, false, dir) {
+    match voice::stt_whisper::WhisperStt::from_registry(&reg, id, dir) {
         Ok(v) => Ok(Resolved::Real(Box::new(v))),
         Err(e) => missing_or_err(e, "STT"),
     }
 }
 #[cfg(not(feature = "stt-whisper"))]
-fn real_stt(_dir: &Path, _model: Option<&str>) -> Result<Resolved<Box<dyn SttProvider>>> {
+fn real_stt(_dir: &Path, _id: &str) -> Result<Resolved<Box<dyn SttProvider>>> {
     Ok(Resolved::Fake("feature stt-whisper not enabled".into()))
 }
 
@@ -300,7 +340,22 @@ fn resolve_dir<T>(why: &str, r: Option<Result<Resolved<T>>>) -> Result<Resolved<
 
 /// Build the stages and one "using real/fake X" line per stage (plus the LLM line).
 pub fn build_parts(cfg: &Config) -> Result<(Parts, Vec<String>)> {
-    let mut notes = Vec::new();
+    let profile = profile_info(&cfg.profile)?;
+    let stt_id = cfg
+        .stt_model
+        .clone()
+        .unwrap_or_else(|| profile.stt_model.clone());
+    let mut notes = vec![format!(
+        "profile {}: stt {} ({}), tts {} ({}), llm {} ({}), vlm {}",
+        profile.name,
+        profile.stt_model,
+        profile.stt_device,
+        profile.tts_model,
+        profile.tts_device,
+        profile.llm_model,
+        profile.llm_device,
+        profile.vlm_model.as_deref().unwrap_or("disabled")
+    )];
     let mut components = Vec::new();
     let dir = if cfg.force_fake {
         None
@@ -324,10 +379,7 @@ pub fn build_parts(cfg: &Config) -> Result<(Parts, Vec<String>)> {
             Box::new(FakeVad::new()) as Box<dyn Vad>
         }
     };
-    let stt = match resolve_dir(
-        why_no_dir,
-        dir.map(|d| real_stt(d, cfg.stt_model.as_deref())),
-    )? {
+    let stt = match resolve_dir(why_no_dir, dir.map(|d| real_stt(d, &stt_id)))? {
         Resolved::Real(s) => {
             notes.push(format!("using real STT ({})", s.id()));
             components.push(comp("stt", true, s.id()));
@@ -366,6 +418,7 @@ pub fn build_parts(cfg: &Config) -> Result<(Parts, Vec<String>)> {
             stt,
             tts,
             components,
+            profile,
         },
         notes,
     ))
@@ -523,10 +576,13 @@ pub fn run(cfg: &Config, mut parts: Parts) -> Result<Report> {
     };
     let meaningful = real("stt") && real("tts");
     let apple = cfg!(all(target_os = "macos", target_arch = "aarch64"));
-    let target_ms = if apple {
-        TARGET_APPLE_SILICON_MS
+    let rtx = parts.profile.name == RTX2050_PROFILE;
+    let (applies, target_ms) = if rtx {
+        ("rtx2050_4gb", TARGET_RTX2050_4GB_MS)
+    } else if apple {
+        ("apple_silicon", TARGET_APPLE_SILICON_MS)
     } else {
-        TARGET_CPU_LAPTOP_MS
+        ("cpu_laptop", TARGET_CPU_LAPTOP_MS)
     };
     Ok(Report {
         schema_version: 1,
@@ -534,6 +590,7 @@ pub fn run(cfg: &Config, mut parts: Parts) -> Result<Report> {
             os: std::env::consts::OS.into(),
             arch: std::env::consts::ARCH.into(),
         },
+        profile: parts.profile,
         components: parts.components,
         stages,
         total_ms,
@@ -541,8 +598,11 @@ pub fn run(cfg: &Config, mut parts: Parts) -> Result<Report> {
         targets: Targets {
             apple_silicon_ms: TARGET_APPLE_SILICON_MS,
             cpu_laptop_ms: TARGET_CPU_LAPTOP_MS,
-            applies: if apple { "apple_silicon" } else { "cpu_laptop" }.into(),
+            rtx2050_4gb_ms: TARGET_RTX2050_4GB_MS,
+            applies: applies.into(),
             target_ms,
+            provisional: rtx,
+            llm_cold_load_ms: None,
             pass: total_ms < target_ms,
             meaningful,
             note: if meaningful {
@@ -557,6 +617,18 @@ pub fn run(cfg: &Config, mut parts: Parts) -> Result<Report> {
 pub fn render_table(r: &Report) -> String {
     let mut s = String::new();
     s.push_str(&format!("host: {} / {}\n", r.host.os, r.host.arch));
+    let p = &r.profile;
+    s.push_str(&format!(
+        "profile: {} (stt {} {}, tts {} {}, llm {} {}, vlm {})\n",
+        p.name,
+        p.stt_model,
+        p.stt_device,
+        p.tts_model,
+        p.tts_device,
+        p.llm_model,
+        p.llm_device,
+        p.vlm_model.as_deref().unwrap_or("disabled")
+    ));
     s.push_str("stage                                 ms\n");
     s.push_str("------------------------------------------\n");
     for st in &r.stages {
@@ -568,8 +640,13 @@ pub fn render_table(r: &Report) -> String {
     ));
     let t = &r.targets;
     s.push_str(&format!(
-        "target ({}): < {:.0} ms -> {}{}\n",
+        "target ({}{}): < {:.0} ms -> {}{}\n",
         t.applies,
+        if t.provisional {
+            ", provisional: true"
+        } else {
+            ""
+        },
         t.target_ms,
         if t.pass { "PASS" } else { "FAIL" },
         if t.meaningful {
@@ -578,5 +655,8 @@ pub fn render_table(r: &Report) -> String {
             " (not meaningful: STT/TTS are fake)"
         }
     ));
+    s.push_str(
+        "excluded: Ollama model swap / cold load (LLM is a fake; llm_cold_load_ms is null)\n",
+    );
     s
 }

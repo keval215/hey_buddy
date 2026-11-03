@@ -108,7 +108,7 @@ pub trait AudioOutput: Send + Sync {
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum VoiceError { ModelMissing { path: PathBuf }, LicenceNotAccepted { model: String },
+pub enum VoiceError { ModelMissing { path: PathBuf },  // LicenceNotAccepted removed by D-004
     DeviceUnavailable(String), InvalidAudio(String), Backend(String), Cancelled }
 
 // ---- crates/capture ----

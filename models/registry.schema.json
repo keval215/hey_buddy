@@ -3,10 +3,11 @@
   "title": "hey_buddy model registry",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "models"],
+  "required": ["schema_version", "models", "profiles"],
   "properties": {
     "schema_version": {"const": 1},
-    "models": {"type": "array", "items": {"$ref": "#/$defs/model"}}
+    "models": {"type": "array", "items": {"$ref": "#/$defs/model"}, "description": "At most one entry per task may have default true; ids are unique."},
+    "profiles": {"type": "object", "additionalProperties": {"$ref": "#/$defs/profile"}}
   },
   "$defs": {
     "model": {
@@ -15,15 +16,37 @@
       "required": ["id", "task", "size", "licence", "commercial_ok", "bundled", "url", "sha256", "languages", "default"],
       "properties": {
         "id": {"type": "string", "minLength": 1},
-        "task": {"enum": ["stt", "tts", "vad"]},
+        "task": {"enum": ["stt", "tts", "vad", "llm", "vlm"], "description": "llm = text model, vlm = vision-language model (both served by Ollama)."},
         "size": {"type": "string"},
         "licence": {"type": "string", "minLength": 1},
-        "commercial_ok": {"type": "boolean"},
-        "bundled": {"const": false},
+        "commercial_ok": {"type": "boolean", "description": "Information only (D-004). Never gates loading or defaults."},
+        "bundled": {"const": false, "description": "Weights are never committed."},
         "url": {"type": "string", "minLength": 1, "description": "Download URL or the placeholder TODO."},
         "sha256": {"type": "string", "pattern": "^(TODO|[0-9a-f]{64})$"},
         "languages": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-        "default": {"type": "boolean", "description": "Must be false when commercial_ok is false."}
+        "default": {"type": "boolean", "description": "Default model for its task; at most one per task."},
+        "ollama_tag": {"type": "string", "minLength": 1, "description": "Ollama model tag for llm/vlm entries; TODO-verify where unsure."}
+      }
+    },
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "device"],
+      "properties": {
+        "model": {"type": "string", "minLength": 1, "description": "Model id; must exist and match the task."},
+        "device": {"enum": ["cpu", "gpu"], "description": "Device hint. STT must be cpu."}
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["description", "stt", "tts", "llm", "vlm"],
+      "properties": {
+        "description": {"type": "string"},
+        "stt": {"$ref": "#/$defs/assignment"},
+        "tts": {"$ref": "#/$defs/assignment"},
+        "llm": {"$ref": "#/$defs/assignment"},
+        "vlm": {"oneOf": [{"$ref": "#/$defs/assignment"}, {"type": "null"}], "description": "null = vision disabled."}
       }
     }
   }

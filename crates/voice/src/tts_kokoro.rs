@@ -180,7 +180,7 @@ impl KokoroCore {
         registry: &crate::registry::Registry,
         models_dir: &Path,
     ) -> Result<Self, VoiceError> {
-        Self::from_path(&registry.model_path(KOKORO_MODEL_ID, false, models_dir, "onnx")?)
+        Self::from_path(&registry.model_path(KOKORO_MODEL_ID, models_dir, "onnx")?)
     }
 
     /// Plug in a text frontend and a 256-float style vector so `TtsCore` can work.

@@ -3,9 +3,11 @@
 use bench::{build_parts, render_table, run, Config};
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: bench [--out PATH] [--models-dir DIR] [--stt-model ID] [--force-fake]
+const USAGE: &str =
+    "usage: bench [--out PATH] [--models-dir DIR] [--stt-model ID] [--profile NAME] [--force-fake]
              [--stt-delay-ms N] [--llm-first-token-delay-ms N] [--llm-delta-delay-ms N]
              [--tts-delay-ms N]
+--profile reads models/registry.json (default: `default`, the rtx2050-4gb profile).
 Delays apply to fake stages only. HEY_BUDDY_MODELS_DIR is the default for --models-dir.";
 
 fn parse(args: &[String]) -> Result<(Config, PathBuf), String> {
@@ -23,6 +25,7 @@ fn parse(args: &[String]) -> Result<(Config, PathBuf), String> {
             "--out" => out = PathBuf::from(val("--out")?),
             "--models-dir" => cfg.models_dir = Some(PathBuf::from(val("--models-dir")?)),
             "--stt-model" => cfg.stt_model = Some(val("--stt-model")?),
+            "--profile" => cfg.profile = val("--profile")?,
             "--force-fake" => cfg.force_fake = true,
             "--stt-delay-ms" => cfg.stt_delay_ms = num(val(a)?, a)?,
             "--llm-first-token-delay-ms" => cfg.llm_first_token_delay_ms = num(val(a)?, a)?,

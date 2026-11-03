@@ -145,6 +145,6 @@ async fn unavailable_mic_errors() {
 
 #[test]
 fn registry_error_converts() {
-    let e: VoiceError = registry::RegistryError::LicenceNotAccepted("m".into()).into();
-    assert!(matches!(e, VoiceError::LicenceNotAccepted { .. }));
+    let e: VoiceError = registry::RegistryError::NotFound("m".into()).into();
+    assert!(matches!(e, VoiceError::Backend(_)));
 }

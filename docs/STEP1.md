@@ -58,8 +58,8 @@ Decide and record (as `docs/adr/0001-step1-architecture.md`):
   Phonon 31m (Apache-2.0), Kokoro-82M (Apache-2.0). Mark Phonon 40m and Fish S2
   Pro as `commercial_ok: false`, `default: false`.
 - A JSON schema and a Rust loader with tests.
-- Rule enforced in code: a model with `commercial_ok: false` can never be a
-  default and requires an explicit `user_accepted_licence` flag to load.
+- (Superseded by D-004) No licence gate: `commercial_ok` is informational only;
+  `bundled` must be false and weights are never committed.
 
 **Acceptance criteria**
 - [ ] Loader rejects a registry that marks a non-commercial model as default

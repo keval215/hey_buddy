@@ -44,10 +44,9 @@ impl WhisperStt {
     pub fn from_registry(
         registry: &Registry,
         id: &str,
-        user_accepted_licence: bool,
         models_dir: &Path,
     ) -> Result<Self, VoiceError> {
-        let p = registry.model_path(id, user_accepted_licence, models_dir, "bin")?;
+        let p = registry.model_path(id, models_dir, "bin")?;
         Self::from_path(id, &p)
     }
 
@@ -152,7 +151,7 @@ mod tests {
     fn registry_missing_model_is_model_missing() {
         let reg = Registry::from_json_str(include_str!("../../../models/registry.json")).unwrap();
         let dir = Path::new("/nonexistent-models-dir");
-        let e = WhisperStt::from_registry(&reg, "whisper-small", false, dir).err();
+        let e = WhisperStt::from_registry(&reg, "whisper-small", dir).err();
         assert!(matches!(e, Some(VoiceError::ModelMissing { .. })));
     }
 
@@ -210,9 +209,12 @@ mod tests {
         let reg = Registry::from_json_str(include_str!("../../../models/registry.json")).unwrap();
         let stt = match dir
             .as_ref()
-            .map(|d| WhisperStt::from_registry(&reg, &id, false, Path::new(d)))
+            .map(|d| WhisperStt::from_registry(&reg, &id, Path::new(d)))
         {
             Some(Ok(s)) => s,
+            Some(Err(e)) if !matches!(e, VoiceError::ModelMissing { .. }) => {
+                panic!("whisper load failed: {e}")
+            }
             _ => {
                 eprintln!(
                     "SKIP whisper integration test: model {id}.bin not found \

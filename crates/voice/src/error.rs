@@ -6,8 +6,6 @@ use std::path::PathBuf;
 pub enum VoiceError {
     #[error("model file missing: {}", path.display())]
     ModelMissing { path: PathBuf },
-    #[error("licence not accepted for model `{model}`")]
-    LicenceNotAccepted { model: String },
     #[error("audio device unavailable: {0}")]
     DeviceUnavailable(String),
     /// The message must describe the problem only (e.g. lengths, rates), never audio content.
@@ -23,9 +21,6 @@ pub enum VoiceError {
 
 impl From<RegistryError> for VoiceError {
     fn from(e: RegistryError) -> Self {
-        match e {
-            RegistryError::LicenceNotAccepted(model) => VoiceError::LicenceNotAccepted { model },
-            other => VoiceError::Backend(other.to_string()),
-        }
+        VoiceError::Backend(e.to_string())
     }
 }

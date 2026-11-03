@@ -42,10 +42,20 @@ a fake LLM (scripted deltas with artificial delay), sentence chunking, TTS, and 
 fake audio sink. It prints a table and writes `bench-results.json` (git-ignored). The JSON holds
 timings, which stages were real or fake, and host os/arch. It never holds audio or text.
 
-Targets: under 1.0 s on Apple silicon, under 1.5 s on CPU laptops. The pass/fail flag is only
-meaningful (and labelled so) when both STT and TTS are real. The LLM is always a fake, so the
-number excludes real model time. Segmenter hangover time is not counted: the clock starts when
-speech end is detected.
+Hardware profile: `--profile <name>` (default `default`) reads a profile from
+`models/registry.json` and reports it in the table and JSON. The `default` profile is the
+RTX 2050 (4 GB VRAM) dev machine: STT is whisper-small on CPU, TTS is phonon-31m on CPU, and the
+LLM (qwen3-4b-q4) and VLM (qwen3-vl-2b) run on the GPU through Ollama. STT must never use the
+GPU: the registry loader rejects a profile that assigns it there, so the GPU stays free for the
+LLM. `low-memory` uses whisper-base and qwen3-1.7b with vision disabled.
+
+Targets: the `default` profile uses `rtx2050-4gb`, 2.0 s speech end to first audio. This is
+provisional (`provisional: true` in the JSON and the table) until measured on that machine. Other
+profiles use the host target: under 1.0 s on Apple silicon, under 1.5 s on CPU laptops. The
+pass/fail flag is only meaningful (and labelled so) when both STT and TTS are real. The LLM is
+always a fake, so the number excludes real model time. Ollama model swapping and cold load are
+excluded from the steady-state number; the LLM is not run, so `llm_cold_load_ms` is `null`.
+Segmenter hangover time is not counted: the clock starts when speech end is detected.
 
 Without models (fakes only; works anywhere, no cmake or audio device needed):
 
@@ -55,7 +65,7 @@ cargo run --release -p bench -- --out my-results.json --stt-delay-ms 300 --tts-d
 ```
 
 With models on your own Mac or Windows machine. Put the files in a models dir:
-`<dir>/silero-vad-v5.onnx`, `<dir>/whisper-large-v3-turbo.bin` (or another id via `--stt-model`),
+`<dir>/silero-vad-v5.onnx`, `<dir>/whisper-small.bin` (or another id via `--stt-model`),
 and the `<dir>/phonon-31m/` checkpoint directory. Then:
 
 ```

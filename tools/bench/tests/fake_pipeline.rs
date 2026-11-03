@@ -61,6 +61,15 @@ fn fake_pipeline_reports_schema_and_respects_delays() {
     let t = &v["targets"];
     assert_eq!(t["apple_silicon_ms"], 1000.0);
     assert_eq!(t["cpu_laptop_ms"], 1500.0);
+    assert_eq!(t["rtx2050_4gb_ms"], 2000.0);
+    assert_eq!(t["applies"], "rtx2050_4gb");
+    assert_eq!(t["target_ms"], 2000.0);
+    assert_eq!(t["provisional"], true);
+    assert!(t["llm_cold_load_ms"].is_null());
+    assert_eq!(v["profile"]["name"], "default");
+    assert_eq!(v["profile"]["stt_model"], "whisper-small");
+    assert_eq!(v["profile"]["stt_device"], "cpu");
+    assert_eq!(v["profile"]["llm_model"], "qwen3-4b-q4");
     assert_eq!(t["meaningful"], false);
     assert!(t["pass"].is_boolean());
 
@@ -83,7 +92,34 @@ fn fake_pipeline_reports_schema_and_respects_delays() {
     for leak in ["screen", "Sure", "help with that", "samples"] {
         assert!(!json.contains(leak), "JSON leaks `{leak}`");
     }
-    assert!(render_table(&report).contains("not meaningful"));
+    let table = render_table(&report);
+    assert!(table.contains("not meaningful"));
+    assert!(table.contains("provisional: true"));
+    assert!(table.contains("profile: default"));
+}
+
+#[test]
+fn low_memory_profile_uses_host_target() {
+    let cfg = Config {
+        profile: "low-memory".into(),
+        ..fake_cfg()
+    };
+    let (parts, _) = build_parts(&cfg).unwrap();
+    let v = serde_json::to_value(run(&cfg, parts).unwrap()).unwrap();
+    assert_eq!(v["profile"]["name"], "low-memory");
+    assert_eq!(v["profile"]["stt_model"], "whisper-base");
+    assert!(v["profile"]["vlm_model"].is_null());
+    assert_eq!(v["targets"]["provisional"], false);
+    assert_ne!(v["targets"]["applies"], "rtx2050_4gb");
+}
+
+#[test]
+fn unknown_profile_errors() {
+    let cfg = Config {
+        profile: "nope".into(),
+        ..fake_cfg()
+    };
+    assert!(build_parts(&cfg).is_err());
 }
 
 #[test]

@@ -77,7 +77,7 @@ pub fn from_registry(
     registry: &crate::registry::Registry,
     models_dir: &Path,
 ) -> Result<PhononTts, VoiceError> {
-    from_dir(&registry.model_dir(PHONON_MODEL_ID, false, models_dir)?)
+    from_dir(&registry.model_dir(PHONON_MODEL_ID, models_dir)?)
 }
 
 #[cfg(test)]
@@ -102,7 +102,6 @@ mod tests {
                 .unwrap();
         let d = reg.default_for(crate::registry::Task::Tts).unwrap();
         assert_eq!(d.id, PHONON_MODEL_ID);
-        assert!(d.commercial_ok);
     }
 
     /// Runs only if the checkpoint dir exists (`PHONON_MODEL_DIR`, or
