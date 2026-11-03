@@ -39,5 +39,8 @@ Why: Reduce friction; match real hardware.
 ADR: none
 Status: accepted (user)
 
-## D-003 (pending record) T9 decisions from user — 2026-11-03
-User approved ADR 0002 draft (PreparedRequest exact-bytes, CloudOptIn digest-bound, loopback-only Ollama, reqwest+rustls/ring, keyring macOS/Windows only). Answers: Qwen3-VL 2B only receives firewall-passed frames (blocked frames never sent); NO always-allow in Step 1 (every cloud call via preview panel); single-shot turns; banking defaults deferred (T7). New requirement: default request = accessibility-tree text + transcript, no image; same PreparedRequest/preview (previewed bytes = sent bytes); firewall redacts secure-field values from tree text. Full record: ADR 0002 (being written).
+## D-003 T9: LLM provider, exact-bytes preview, text-first screen context — 2026-11-03
+Decision: PreparedRequest (exact body bytes) is the single object for preview/digest/CloudOptIn/transport; cloud calls need a digest-bound one-use CloudOptIn minted only in core/consent.rs from preview Send (no always-allow). Local-only default (Ollama loopback). Single-shot turns. Default screen context = firewall-redacted accessibility-tree text (RedactedScreenText, sealed in firewall; `Firewall::check_text` additive, fail-closed default); VLM only for firewall-Clear frames via pure `core::route`. reqwest+rustls(ring); keyring macOS/Windows only. Amends ADR 0001 (check_text, AppDenyPolicy, LlmRequest/ScreenContext, IPC).
+Why: previewed bytes == sent bytes; redaction in our code before any model; unreadable tree never yields an image.
+ADR: docs/adr/0002-llm-provider-and-preview.md
+Status: core accepted; Addendum A (check_text amendment) awaiting user ack

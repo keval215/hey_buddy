@@ -21,7 +21,8 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 | T6 | Latency bench | DONE | 1 | follow-ups: `targets.pass` as Option<bool> when not meaningful; --wav input; median/p95; README to label real paths untested |
 | T7 | Capture crate and app deny-list | DONE | 2 | banking defaults deferred (user sign-off, users add own); see local-verify list |
 | T8 | Privacy firewall v0 | DONE | 2 | follow-ups: macos is_system_path must also reject `/System/Volumes/`; tune macOS AX error propagation after real-Mac test |
-| T9 | [ARCH] LLM provider and request preview | ARCH-PENDING | 0 | ADR 0002 approved by user; Opus addendum for text-only (AX tree) variant running |
+| T9 | [ARCH] LLM provider and request preview | ARCH-PENDING | 0 | ADR 0002 written; Addendum A (check_text amendment to ADR 0001 + Q1-3 defaults) awaiting user ack; then T9.1 (firewall text API), T9.2 (llm) |
+| T13 | [NEW] macOS AX / Windows UIA ScreenTextSource (foreground window, secure-first) wired into platform_firewall() | TODO | 0 | before T12; added by ADR 0002 |
 | T10 | Desktop shell: tray, hotkey, overlay, pointing | TODO | 0 | |
 | T11 | Preview panel | TODO | 0 | |
 | T12 | End-to-end wiring and exit test | TODO | 0 | |
@@ -29,10 +30,10 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 Statuses: TODO · ARCH-PENDING · IN PROGRESS · IN REVIEW · CHANGES · DONE · BLOCKED · SKIPPED
 
 ## In progress
-T9: ARCH addendum (Opus) then coder
+T9: waiting on user ack of Addendum A
 
 ## Blockers / waiting on user
-none (T9 questions answered)
+- ADR 0002 Addendum A: ack of Firewall::check_text amendment (+ defaults: hide normal text-field values, vision_mode Off|Auto|Always, no window titles)
 
 ## User must verify locally (macOS / Windows)
 - T1: macOS/Windows CI jobs, `tauri build`, icon.ico/icns have never run (check first CI run on GitHub)
