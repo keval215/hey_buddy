@@ -19,6 +19,13 @@ allow = [
   "Apache-2.0 WITH LLVM-exception",
   # (also approved via orch note) Unicode tables in unicode-ident etc.
   "Unicode-3.0",
+  # D-004: other permissive licences are auto-approved (no GPL/AGPL/LGPL/non-commercial).
+  "BSD-1-Clause",
+  "BSL-1.0",
+  "CDLA-Permissive-2.0",
+  "Unicode-DFS-2016",
+  "MIT-0",
+  "Zlib-acknowledgement",
 ]
 
 [bans]

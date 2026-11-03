@@ -120,7 +120,7 @@ REPORT BACK IN THE FORMAT FROM YOUR INSTRUCTIONS.
 
 ## Hard stops (ask the user first)
 
-- A dependency whose licence is not one of MIT, Apache-2.0, BSD, ISC, Zlib, MPL-2.0, Unlicense, CC0-1.0, 0BSD.
-- Bundling any model weights, or any non-commercial model.
+- A code dependency under GPL/AGPL/LGPL or a non-commercial/source-available licence (permissive licences are auto-approved, D-004).
+- Committing/bundling any model weights (models are optional user downloads only).
 - Any change that weakens the privacy firewall or the action-approval rules.
 - Anything needing secrets, API keys, paid services or network calls in tests.

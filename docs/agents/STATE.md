@@ -32,6 +32,8 @@ Statuses: TODO · ARCH-PENDING · IN PROGRESS · IN REVIEW · CHANGES · DONE ·
 T9: ARCHITECTURE MODE (Opus) running
 
 ## Blockers / waiting on user
+- T9 [ARCH] draft awaiting approval + 3 questions (always-allow cropping, single-turn, default Ollama model -> now Qwen3 4B per D-004). Draft vision model Qwen3-VL 2B routing needs clarification: 'only when AX tree unreadable' conflicts with fail-closed (D-001: unreadable tree => frame BLOCKED, nothing sent). Proposal: vision model only sees firewall-Clear frames.
+- Hardware-profile work (registry gate removal, defaults, bench, low-memory profile) in progress (coder).
 - T7 sign-off: defer banking apps in default deny-list (recommended) or add well-known finance apps?
 
 ## User must verify locally (macOS / Windows)

@@ -31,3 +31,10 @@ Decision: Allowed dependency licences are now MIT, Apache-2.0, BSD, ISC, Zlib, M
 Why: whisper-rs is the mature whisper.cpp binding; Unlicense is public-domain-like and Apache-2.0 compatible.
 ADR: none
 Status: accepted
+
+## D-004 Licence policy relaxed + RTX 2050 (4 GB) default hardware profile (note, not ARCH) — 2026-11-03
+Decision: Code deps: any permissive licence auto-approved; only GPL/AGPL/LGPL and non-commercial/source-available code need user approval. Models: no licence restrictions; never committed; optional user download with licence shown in the download UI; `commercial_ok` is informational only (loader gate removed). `cargo deny` stays in CI with the expanded allowlist (supersedes D-002 list). Weights are never committed.
+Target dev machine RTX 2050 / 4 GB VRAM: STT Whisper small on CPU (base fallback; never GPU), TTS Phonon 31m CPU, text LLM Ollama Qwen3 4B Q4 (Qwen3 1.7B low-memory), vision Qwen3-VL 2B via Ollama (see STATE: routing question open — must never receive a frame that did not pass the firewall).
+Why: Reduce friction; match real hardware.
+ADR: none
+Status: accepted (user)
