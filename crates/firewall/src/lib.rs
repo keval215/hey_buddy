@@ -49,9 +49,12 @@
 //! [`ScreenTextSource`] and returns [`TextVerdict`]; the only producer of [`RedactedScreenText`]
 //! is the pure `redact_tree`. It shares the preflight record with `check`: one preflight
 //! authorises exactly one `check` OR one `check_text`. The default `check_text` and
-//! `platform_firewall()` (until the T13 tree readers exist) block with
-//! `Blocked(Unsupported)`, so turns are voice-only. Non-password text-field values and
-//! window/page titles are never emitted.
+//! `platform_firewall()` on Linux block with `Blocked(Unsupported)` (voice-only turns); on macOS
+//! (AX) and Windows (UIA) `platform_firewall()` installs a tree reader (T13, untested on the
+//! Linux build machine) that reads ONLY the focused window of the frontmost app, decides
+//! secure-ness before reading anything, never reads secure values or window titles, and is
+//! bounded (20 000 nodes, depth 64, 1200 ms). Non-password text-field values and window/page
+//! titles are never emitted.
 //!
 //! Errors, `Debug` output and logs contain no pixels, window titles or field values.
 

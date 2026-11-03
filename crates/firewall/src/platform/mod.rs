@@ -7,8 +7,16 @@ use crate::{FirewallError, SecureFieldDetector, SessionProbe, SessionProbeState}
 
 #[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(target_os = "macos")]
+mod macos_text;
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
+mod role_map;
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
+mod walk;
 #[cfg(target_os = "windows")]
 pub mod windows;
+#[cfg(target_os = "windows")]
+mod windows_text;
 
 /// Detector for platforms without an implementation: always errors (=> `Blocked(Unsupported)`).
 #[derive(Debug, Default, Clone, Copy)]
@@ -35,14 +43,16 @@ pub fn platform_firewall() -> Box<dyn crate::Firewall> {
     {
         Box::new(
             crate::PrivacyFirewall::new(macos::MacDetector, macos::MacSessionProbe)
-                .with_detector_timeout(macos::DETECTOR_TIMEOUT),
+                .with_detector_timeout(macos::DETECTOR_TIMEOUT)
+                .with_text_source(macos_text::MacTextSource),
         )
     }
     #[cfg(target_os = "windows")]
     {
         Box::new(
             crate::PrivacyFirewall::new(windows::WinDetector, windows::WinSessionProbe)
-                .with_detector_timeout(windows::DETECTOR_TIMEOUT),
+                .with_detector_timeout(windows::DETECTOR_TIMEOUT)
+                .with_text_source(windows_text::WinTextSource),
         )
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

@@ -939,6 +939,8 @@ fn unsupported_source_blocks_with_real_firewall() {
     );
 }
 
+// Linux keeps `UnsupportedTextSource`; macOS/Windows install the T13 readers (manual tests).
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[test]
 fn platform_firewall_text_is_blocked_everywhere() {
     let f = platform_firewall();

@@ -1,5 +1,7 @@
 //! Windows: UI Automation `IsPassword` detection and lock/secure-desktop probe.
 //! UNTESTED on this machine (compile-checked only, `x86_64-pc-windows-gnu`).
+//! The text source (T13) is in `windows_text.rs` and shares `ensure_per_monitor_dpi`,
+//! `bounding_rect` and `is_password` with this module.
 //! See [`WinDetector`] for coordinate conventions, DPI requirement and known limitations.
 
 use std::time::Duration;
@@ -13,7 +15,8 @@ use windows::Win32::System::StationsAndDesktops::{
 };
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, TreeScope_Descendants, UIA_IsPasswordPropertyId,
+    CUIAutomation, IUIAutomation, IUIAutomationElement, TreeScope_Descendants,
+    UIA_IsPasswordPropertyId,
 };
 use windows::Win32::UI::HiDpi::{
     GetAwarenessFromDpiAwarenessContext, GetThreadDpiAwarenessContext,
@@ -54,6 +57,37 @@ fn to_u32(v: i64) -> Result<u32, FirewallError> {
     u32::try_from(v).map_err(|_| FirewallError::Detection)
 }
 
+/// Fails closed unless the calling thread is per-monitor DPI aware (shared with the T13 text
+/// source so both use the same physical-pixel space).
+pub(super) fn ensure_per_monitor_dpi() -> Result<(), FirewallError> {
+    // SAFETY: plain Win32 getters without pointers.
+    unsafe {
+        let ctx = GetThreadDpiAwarenessContext();
+        if GetAwarenessFromDpiAwarenessContext(ctx) != DPI_AWARENESS_PER_MONITOR_AWARE {
+            return Err(FirewallError::Detection);
+        }
+    }
+    Ok(())
+}
+
+/// Bounding rect of a UIA element exactly as the T8 detector measures it (shared with the T13
+/// text source). Negative width/height => `Err`.
+pub(super) fn bounding_rect(el: &IUIAutomationElement) -> Result<Rect, FirewallError> {
+    // SAFETY: COM call on a valid element; HRESULT mapped to a fixed error.
+    let r = unsafe { el.CurrentBoundingRectangle() }.map_err(|_| FirewallError::Detection)?;
+    let w = to_u32(r.right as i64 - r.left as i64)?;
+    let h = to_u32(r.bottom as i64 - r.top as i64)?;
+    Ok(Rect::new(r.left, r.top, w, h))
+}
+
+/// UIA `IsPassword`: the secure-field classification shared by detector and text source.
+pub(super) fn is_password(el: &IUIAutomationElement) -> Result<bool, FirewallError> {
+    // SAFETY: COM call on a valid element.
+    unsafe { el.CurrentIsPassword() }
+        .map(|b| b.as_bool())
+        .map_err(|_| FirewallError::Detection)
+}
+
 impl SecureFieldDetector for WinDetector {
     /// Returns bounding rects of all password elements under the desktop root (see the type
     /// docs for the coordinate space). Any failure to enumerate or read an element => `Detection`
@@ -62,10 +96,7 @@ impl SecureFieldDetector for WinDetector {
         // SAFETY: plain COM/Win32 calls on a thread-local apartment; every HRESULT is checked
         // and mapped to a fixed-text error (no OS text is forwarded).
         unsafe {
-            let ctx = GetThreadDpiAwarenessContext();
-            if GetAwarenessFromDpiAwarenessContext(ctx) != DPI_AWARENESS_PER_MONITOR_AWARE {
-                return Err(FirewallError::Detection);
-            }
+            ensure_per_monitor_dpi()?;
             // S_FALSE / RPC_E_CHANGED_MODE are fine: COM is already usable on this thread.
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             let auto: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
@@ -83,12 +114,7 @@ impl SecureFieldDetector for WinDetector {
             let mut out = Vec::with_capacity(n.max(0) as usize);
             for i in 0..n {
                 let el = found.GetElement(i).map_err(|_| FirewallError::Detection)?;
-                let r = el
-                    .CurrentBoundingRectangle()
-                    .map_err(|_| FirewallError::Detection)?;
-                let w = to_u32(r.right as i64 - r.left as i64)?;
-                let h = to_u32(r.bottom as i64 - r.top as i64)?;
-                out.push(Rect::new(r.left, r.top, w, h));
+                out.push(bounding_rect(&el)?);
             }
             Ok(out)
         }

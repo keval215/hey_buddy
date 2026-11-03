@@ -13,6 +13,9 @@
 //! true on that app, then polls (50 ms steps, at most ~300 ms in total) for a readable tree;
 //! still unreadable => `IncompleteTree { app }`.
 //!
+//! The text source (T13) lives in `macos_text.rs` and reuses `is_secure`, `frame_of`, `attr` and
+//! `enable_accessibility` from this module, so both classify and measure secure fields alike.
+//!
 //! # Known limitations (all UNVERIFIED on real Macs)
 //! - `AuthPrompt` is never reported by the session probe (only lock screen / login window and
 //!   secure event input).
@@ -37,19 +40,19 @@ use frame::Rect;
 
 use crate::{FirewallError, SecureFieldDetector, SessionProbe, SessionProbeState};
 
-type AXUIElementRef = *const c_void;
-type AXError = i32;
+pub(super) type AXUIElementRef = *const c_void;
+pub(super) type AXError = i32;
 type AXValueRef = *const c_void;
-const AX_OK: AXError = 0;
-const AX_API_DISABLED: AXError = -25211;
+pub(super) const AX_OK: AXError = 0;
+pub(super) const AX_API_DISABLED: AXError = -25211;
 const AX_VALUE_CGPOINT: u32 = 1;
 const AX_VALUE_CGSIZE: u32 = 2;
 const MAX_DEPTH: usize = 64;
 const MAX_NODES: usize = 20_000;
 /// Detector deadline (bounded accessibility wait of ~300 ms per unreadable app plus the walk).
 pub const DETECTOR_TIMEOUT: Duration = Duration::from_millis(2500);
-const AX_WAIT_STEP: Duration = Duration::from_millis(50);
-const AX_WAIT_STEPS: u32 = 6; // 6 * 50 ms = 300 ms
+pub(super) const AX_WAIT_STEP: Duration = Duration::from_millis(50);
+pub(super) const AX_WAIT_STEPS: u32 = 6; // 6 * 50 ms = 300 ms
 
 /// System owners (by `kCGWindowOwnerName`) that cannot host secure text fields and are not
 /// scanned. A name alone is spoofable, so the owner's executable must also live under `/System/`
@@ -98,12 +101,12 @@ extern "C" {
     fn CGSessionCopyCurrentDictionary() -> CFTypeRef;
 }
 extern "C" {
-    fn proc_pidpath(pid: c_int, buffer: *mut c_void, size: u32) -> c_int;
+    pub(super) fn proc_pidpath(pid: c_int, buffer: *mut c_void, size: u32) -> c_int;
     fn CFDictionaryGetValue(d: CFTypeRef, key: CFTypeRef) -> CFTypeRef;
 }
 
 /// Owned CF object, released on drop.
-struct Cf(CFTypeRef);
+pub(super) struct Cf(pub(super) CFTypeRef);
 impl Drop for Cf {
     fn drop(&mut self) {
         if !self.0.is_null() {
@@ -113,7 +116,7 @@ impl Drop for Cf {
     }
 }
 
-fn cfstr(s: &str) -> Option<Cf> {
+pub(super) fn cfstr(s: &str) -> Option<Cf> {
     let c = std::ffi::CString::new(s).ok()?;
     // SAFETY: valid NUL-terminated string; result owned by us.
     let r =
@@ -121,7 +124,7 @@ fn cfstr(s: &str) -> Option<Cf> {
     (!r.is_null()).then(|| Cf(r as CFTypeRef))
 }
 
-fn attr(el: AXUIElementRef, name: &str) -> Result<Option<Cf>, AXError> {
+pub(super) fn attr(el: AXUIElementRef, name: &str) -> Result<Option<Cf>, AXError> {
     let key = cfstr(name).ok_or(-1)?;
     let mut out: CFTypeRef = std::ptr::null();
     // SAFETY: valid element and key; `out` receives an owned object on success.
@@ -135,7 +138,7 @@ fn attr(el: AXUIElementRef, name: &str) -> Result<Option<Cf>, AXError> {
     }
 }
 
-fn string_of(v: &Cf) -> Option<String> {
+pub(super) fn string_of(v: &Cf) -> Option<String> {
     // SAFETY: type checked before the cast; buffer sized and NUL-terminated by CF.
     unsafe {
         if CFGetTypeID(v.0) != CFStringGetTypeID() {
@@ -159,7 +162,7 @@ fn string_of(v: &Cf) -> Option<String> {
     }
 }
 
-fn frame_of(el: AXUIElementRef) -> Result<Option<Rect>, AXError> {
+pub(super) fn frame_of(el: AXUIElementRef) -> Result<Option<Rect>, AXError> {
     let (Some(p), Some(s)) = (attr(el, "AXPosition")?, attr(el, "AXSize")?) else {
         return Ok(None);
     };
@@ -191,7 +194,7 @@ fn frame_of(el: AXUIElementRef) -> Result<Option<Rect>, AXError> {
     Ok(Some(Rect::new(x0 as i32, y0 as i32, w as u32, h as u32)))
 }
 
-fn is_secure(el: AXUIElementRef) -> Result<bool, AXError> {
+pub(super) fn is_secure(el: AXUIElementRef) -> Result<bool, AXError> {
     let role = attr(el, "AXRole")?.and_then(|v| string_of(&v));
     if role.as_deref() == Some("AXSecureTextField") {
         return Ok(true);
@@ -250,7 +253,7 @@ fn scan_app(pid: i32) -> Result<(Vec<Rect>, usize), AXError> {
 }
 
 /// Ask a Chromium/Electron app to build its accessibility tree.
-fn enable_accessibility(pid: i32) {
+pub(super) fn enable_accessibility(pid: i32) {
     // SAFETY: owned app element; attribute names are valid CF strings; kCFBooleanTrue is static.
     unsafe {
         let app = AXUIElementCreateApplication(pid);
