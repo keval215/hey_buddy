@@ -15,8 +15,8 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 | T0 | [ARCH] Step 1 architecture | DONE | 0 | D-001, ADR 0001 |
 | T1 | Repo scaffold and CI | DONE | 2 | crate `core` package is `buddy-core` |
 | T2 | Model registry | DONE | 1 | follow-ups: reject duplicate defaults per task; silero languages TODO; verify phonon-40m/fish licence strings |
-| T3 | Voice traits and fakes | IN PROGRESS | 0 | |
-| T4 | Local STT: whisper.cpp + Silero VAD | TODO | 0 | |
+| T3 | Voice traits and fakes | DONE | 1 | follow-up: doc note on VoiceError string variants (no transcript/audio) |
+| T4 | Local STT: whisper.cpp + Silero VAD | IN PROGRESS | 0 | licence check on whisper-rs needed |
 | T5 | Local TTS: Phonon 31m, Kokoro fallback | TODO | 0 | |
 | T6 | Latency bench | TODO | 0 | |
 | T7 | Capture crate and app deny-list | TODO | 0 | |
@@ -29,7 +29,7 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 Statuses: TODO · ARCH-PENDING · IN PROGRESS · IN REVIEW · CHANGES · DONE · BLOCKED · SKIPPED
 
 ## In progress
-T3: coder
+T4: coder
 
 ## Blockers / waiting on user
 none
@@ -40,4 +40,4 @@ none
 - Follow-ups: real 1024px app icon; tighten CSP `unsafe-inline` later
 
 ## Done
-T0, T1, T2
+T0, T1, T2, T3

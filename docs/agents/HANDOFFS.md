@@ -13,6 +13,12 @@ Key points: <2–4 bullets>
 Next: <what orch does next>
 ```
 
+## H-004 2026-11-03 T3 → coder, reviewer
+Asked: Voice traits, fakes, resampler, e2e test.
+Result: APPROVED round 1.
+Key points: traits per ADR; fakes behind `fakes` (tokio optional, not in desktop tree); Debug impls print lengths only.
+Next: T4 → coder.
+
 ## H-003 2026-11-03 T2 → coder, reviewer
 Asked: Model registry + loader.
 Result: APPROVED round 1.

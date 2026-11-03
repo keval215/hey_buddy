@@ -7,10 +7,16 @@ publish.workspace = true
 description = "hey_buddy voice crate"
 
 [features]
-fakes = []
+fakes = ["dep:tokio"]
 
 [dependencies]
+async-trait = "0.1"
+futures = "0.3"
+tokio = { version = "1", features = ["rt"], optional = true }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "time"] }
