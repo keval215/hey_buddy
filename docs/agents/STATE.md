@@ -21,8 +21,8 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 | T6 | Latency bench | DONE | 1 | follow-ups: `targets.pass` as Option<bool> when not meaningful; --wav input; median/p95; README to label real paths untested |
 | T7 | Capture crate and app deny-list | DONE | 2 | banking defaults deferred (user sign-off, users add own); see local-verify list |
 | T8 | Privacy firewall v0 | DONE | 2 | follow-ups: macos is_system_path must also reject `/System/Volumes/`; tune macOS AX error propagation after real-Mac test |
-| T9 | [ARCH] LLM provider and request preview | IN PROGRESS (T9.1 approved; T9.1-hardening then T9.2 llm) | 1 | ADR 0002 accepted |
-| T13 | [NEW] macOS AX / Windows UIA ScreenTextSource (foreground window, secure-first) wired into platform_firewall() | TODO | 0 | before T12; added by ADR 0002 |
+| T9 | [ARCH] LLM provider and request preview | IN PROGRESS (T9.1 + hardening approved; T9.2 llm crate running) | 1 | ADR 0002 accepted |
+| T13 | [NEW] (notes: labelled form groups around a password field vanish from text by design; platform sources must read only frontmost app's focused window and share is_secure/frame_of helpers; measure cross-check false-block rate) macOS AX / Windows UIA ScreenTextSource (foreground window, secure-first) wired into platform_firewall() | TODO | 0 | before T12; added by ADR 0002 |
 | T10 | Desktop shell: tray, hotkey, overlay, pointing | TODO | 0 | |
 | T11 | Preview panel | TODO | 0 | |
 | T12 | End-to-end wiring and exit test | TODO | 0 | |
@@ -30,7 +30,7 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 Statuses: TODO · ARCH-PENDING · IN PROGRESS · IN REVIEW · CHANGES · DONE · BLOCKED · SKIPPED
 
 ## In progress
-T9.1-hardening: coder
+T9.2: coder
 
 ## Blockers / waiting on user
 none

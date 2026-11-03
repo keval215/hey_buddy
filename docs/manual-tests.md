@@ -12,6 +12,14 @@ turns are voice-only.
 readers (macOS AX / Windows UIA) exist. Until then no screen text and no image-by-text-route
 reaches a model. Remove this section when T13 lands.
 
+## Known limitation: non-secure node that mirrors a password
+
+The text path protects secure nodes by identity and, as defence in depth, by geometry (anything
+emittable overlapping a secure field padded by 4 px is dropped). A NON-secure node elsewhere that
+happens to display the password (a "show password" mirror in another part of the window, a toast,
+a copy in a notes field) cannot be recognised and would be emitted as ordinary text. Check this on
+T13 (macOS AX / Windows UIA) with a "reveal password" toggle and note how each platform reports it.
+
 ## Step 1 manual tests (outline)
 
 Filled in by later tickets (T10 POINT/overlay, T12 turn flow and exit tests).

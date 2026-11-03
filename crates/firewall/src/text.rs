@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use frame::{AppDenyPolicy, Rect};
 
+use crate::blackout::DEFAULT_PADDING_PX;
 use crate::error::{BlockReason, FirewallError, PauseReason};
 use crate::redacted_text::RedactedScreenText;
 
@@ -183,6 +184,13 @@ impl fmt::Debug for RawWindowTree {
 ///
 /// The firewall re-enforces all of this on the returned data, but a source that reads secrets
 /// into memory has already failed the contract.
+///
+/// # Residual risk (known limitation)
+/// Only secure nodes are protected by identity and, as defence in depth, by geometry (anything
+/// emittable overlapping a secure rect padded like the blackout is dropped). A NON-secure node
+/// elsewhere that happens to display the password (a "show password" mirror in another part of
+/// the window, a toast, a different window of the same page) cannot be recognised and would be
+/// emitted as ordinary text.
 pub trait ScreenTextSource: Send + Sync {
     fn foreground_tree(&self) -> Result<RawWindowTree, FirewallError>;
 }
@@ -204,7 +212,8 @@ pub struct TextCoverage {
     /// Nodes of the window (root excluded) that have a rect intersecting the window, secure
     /// nodes included, descendants of secure nodes excluded.
     pub visible_nodes: u32,
-    /// Visible non-secure nodes with a non-empty label (titles do not count) or value.
+    /// Visible non-secure nodes that can yield real text: a non-empty non-title label, or the
+    /// value of a static text / heading. An editable field counts by label only.
     pub meaningful_nodes: u32,
     /// Numbered lines actually in the text.
     pub emitted_nodes: u32,
@@ -228,16 +237,31 @@ pub enum TextVerdict {
     Blocked(BlockReason),
 }
 
+/// Characters that could forge prompt structure or smuggle invisible text. Hand-written ranges
+/// (no unicode tables): controls (Cc), line/paragraph separators, all common format characters
+/// (Cf), Unicode tag characters, variation selectors, invisible fillers/joiners, private-use
+/// areas and noncharacters. Unassigned code points are NOT covered (no table without a new dep).
 fn is_hostile_char(c: char) -> bool {
     c.is_control()
         || matches!(
             c,
-            '\u{2028}' | '\u{2029}'
-            // bidi embeddings / overrides / isolates and marks
-            | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
-            | '\u{200E}' | '\u{200F}' | '\u{061C}'
-            // zero-width and BOM
-            | '\u{200B}'..='\u{200D}' | '\u{2060}' | '\u{FEFF}'
+            '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{06DD}' | '\u{070F}' | '\u{08E2}'
+            | '\u{0600}'..='\u{0605}' | '\u{0890}'..='\u{0891}'
+            | '\u{115F}' | '\u{1160}' | '\u{17B4}' | '\u{17B5}' | '\u{180E}'
+            // zero-width, bidi marks / embeddings / overrides / isolates, invisible operators
+            | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}'
+            | '\u{3164}' | '\u{FFA0}'
+            // variation selectors
+            | '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}'
+            // private use, noncharacters, BOM, interlinear annotation, misc Cf
+            | '\u{E000}'..='\u{F8FF}' | '\u{FDD0}'..='\u{FDEF}' | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}' | '\u{FFFE}' | '\u{FFFF}'
+            | '\u{110BD}' | '\u{110CD}' | '\u{13430}'..='\u{1343F}'
+            | '\u{1BCA0}'..='\u{1BCA3}' | '\u{1D173}'..='\u{1D17A}'
+            // tag characters (instruction smuggling)
+            | '\u{E0000}'..='\u{E007F}'
+            | '\u{F0000}'..='\u{FFFFF}' | '\u{100000}'..='\u{10FFFF}'
         )
 }
 
@@ -270,10 +294,6 @@ fn clean_capped(s: &str, max: usize) -> String {
     cut
 }
 
-fn contains(outer: &Rect, inner: &Rect) -> bool {
-    inner.intersect(outer) == Some(*inner)
-}
-
 fn normalised(mut v: Vec<Rect>) -> Vec<Rect> {
     v.sort_by_key(|r| (r.x, r.y, r.w, r.h));
     v.dedup();
@@ -294,12 +314,17 @@ pub(crate) fn redact_tree(
     } = tree;
 
     // 4. Unknown or denied app: nothing is read further.
-    let app = sanitise(&app_id);
+    let app = clean_capped(&app_id, MAX_LABEL_CHARS);
     if app_id.trim().is_empty() || app.is_empty() || deny.is_denied(&app_id) {
         return TextVerdict::Withheld(WithheldReason::DeniedApp);
     }
     if window.is_empty() {
         return TextVerdict::Blocked(BlockReason::detection("window has no usable area"));
+    }
+
+    // Exactly one root: a second `depth 0` node (another window) is never trusted.
+    if nodes.iter().filter(|n| n.depth == 0).count() > 1 {
+        return TextVerdict::Blocked(BlockReason::detection("multiple roots"));
     }
 
     // 5. Empty tree: zero visible nodes besides the root.
@@ -312,7 +337,7 @@ pub(crate) fn redact_tree(
         .skip(skip)
         .any(|n| n.rect.is_some_and(|r| r.intersects(&window)));
     if !visible_besides_root {
-        return TextVerdict::Blocked(BlockReason::IncompleteTree { app: app_id });
+        return TextVerdict::Blocked(BlockReason::IncompleteTree { app });
     }
 
     // 6. Secure cross-check against the preflight record (both directions).
@@ -328,12 +353,16 @@ pub(crate) fn redact_tree(
         }
     }
     let secure_hidden = tree_secure.len() as u32;
+    let secure_zones: Vec<Rect> = tree_secure
+        .iter()
+        .map(|r| r.padded(DEFAULT_PADDING_PX as i32))
+        .collect();
     let tree_secure = normalised(tree_secure);
     let expected = normalised(
         record_rects
             .iter()
             .copied()
-            .filter(|r| contains(&window, r))
+            .filter(|r| r.intersects(&window))
             .collect(),
     );
     if tree_secure != expected {
@@ -363,6 +392,16 @@ pub(crate) fn redact_tree(
         let Some(clipped) = n.rect.and_then(|r| r.intersect(&window)) else {
             continue;
         };
+        // Defence in depth: nothing that could be emitted may sit on a (padded) secure rect.
+        // Catches overlays / "show password" labels and sources that flatten the children of a
+        // secure node. Containers with nothing to emit are kept (coverage facts only).
+        if !n.secure
+            && node_body(n).is_some()
+            && n.rect
+                .is_some_and(|r| secure_zones.iter().any(|z| z.intersects(&r)))
+        {
+            continue;
+        }
         kept.push(Kept { idx, clipped });
     }
 
@@ -375,10 +414,7 @@ pub(crate) fn redact_tree(
         if n.secure {
             continue;
         }
-        let label_ok =
-            !n.role.label_is_title() && n.label.as_deref().is_some_and(|l| !l.trim().is_empty());
-        let value_ok = n.value.as_deref().is_some_and(|v| !v.trim().is_empty());
-        if label_ok || value_ok {
+        if is_meaningful(n) {
             meaningful += 1;
         }
         let is_leaf = nodes
@@ -434,6 +470,20 @@ pub(crate) fn redact_tree(
         coverage,
         secure_hidden,
     ))
+}
+
+/// Counts only what an emitted line can actually carry: a non-title label, or the value of a
+/// static text / heading. An editable field counts through its label only (its value is never
+/// emitted).
+fn is_meaningful(n: &RawTextNode) -> bool {
+    let label_ok =
+        !n.role.label_is_title() && n.label.as_deref().is_some_and(|l| !sanitise(l).is_empty());
+    if n.editable || n.role == NodeRole::TextField {
+        return label_ok;
+    }
+    let value_ok = matches!(n.role, NodeRole::StaticText | NodeRole::Heading)
+        && n.value.as_deref().is_some_and(|v| !sanitise(v).is_empty());
+    label_ok || value_ok
 }
 
 /// The line body (after `#id `) for one node, or `None` if the node is skipped.
