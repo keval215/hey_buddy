@@ -126,6 +126,23 @@ impl Registry {
         }
     }
 
+    /// Like [`Self::model_path`] for models shipped as a directory (e.g. Phonon checkpoints):
+    /// `<models_dir>/<id>/`. Same licence gate; `ModelMissing` if it is not a directory.
+    pub fn model_dir(
+        &self,
+        id: &str,
+        user_accepted_licence: bool,
+        models_dir: &Path,
+    ) -> Result<std::path::PathBuf, crate::VoiceError> {
+        let m = self.get(id, user_accepted_licence)?;
+        let path = models_dir.join(&m.id);
+        if path.is_dir() {
+            Ok(path)
+        } else {
+            Err(crate::VoiceError::ModelMissing { path })
+        }
+    }
+
     /// The default model for a task (always commercial-ok by validation).
     pub fn default_for(&self, task: Task) -> Option<&ModelEntry> {
         self.models.iter().find(|m| m.task == task && m.default)
@@ -198,6 +215,20 @@ mod tests {
             r.model_path("nope", false, &dir, "bin"),
             Err(crate::VoiceError::Backend(_))
         ));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn model_dir_missing_and_present() {
+        let r = Registry::from_json_str(&entry("{}")).unwrap();
+        let dir = std::env::temp_dir().join(format!("hb-regd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let e = r.model_dir("m", false, &dir).unwrap_err();
+        assert!(
+            matches!(e, crate::VoiceError::ModelMissing { ref path } if path == &dir.join("m"))
+        );
+        std::fs::create_dir_all(dir.join("m")).unwrap();
+        assert_eq!(r.model_dir("m", false, &dir).unwrap(), dir.join("m"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

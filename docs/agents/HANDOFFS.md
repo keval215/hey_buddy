@@ -13,6 +13,12 @@ Key points: <2–4 bullets>
 Next: <what orch does next>
 ```
 
+## H-006 2026-11-03 T5 → coder, reviewer
+Asked: Phonon TTS (ptts), Kokoro fallback, cpal streaming playback.
+Result: APPROVED round 1 (Kokoro partial, accepted as honest stub).
+Key points: ptts 0.6 from crates.io, default-features off (no network); StreamingTts core; Registry::model_dir; workspace MSRV -> 1.85.
+Next: T6 → coder.
+
 ## H-005 2026-11-03 T4 → coder (x3 runs), reviewer
 Asked: Whisper STT, Silero VAD, cpal mic, behind features.
 Result: APPROVED round 1 (after licence hard stop resolved by user: D-002 Unlicense).
