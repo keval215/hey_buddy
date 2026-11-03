@@ -35,3 +35,6 @@ apps/desktop/src-tauri/gen/
 .idea/
 .vscode/
 .env
+
+# Bench output
+bench-results.json

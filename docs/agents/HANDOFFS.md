@@ -13,6 +13,12 @@ Key points: <2–4 bullets>
 Next: <what orch does next>
 ```
 
+## H-007 2026-11-03 T6 → coder, reviewer
+Asked: Latency bench with fakes + optional real stages.
+Result: APPROVED round 1.
+Key points: tools/bench lib+CLI; stages real only with features + models dir; JSON has no content; `meaningful` flag gates pass/fail.
+Next: T7 → coder.
+
 ## H-006 2026-11-03 T5 → coder, reviewer
 Asked: Phonon TTS (ptts), Kokoro fallback, cpal streaming playback.
 Result: APPROVED round 1 (Kokoro partial, accepted as honest stub).
