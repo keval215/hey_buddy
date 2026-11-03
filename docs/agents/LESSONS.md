@@ -15,3 +15,4 @@ Format: `- L-000 <area>: <lesson> (from T<n>)`
 - L-008 deps: check each crate's licence on crates.io (whisper-rs is Unlicense). stt-whisper needs cmake + C++ + libclang; mic-cpal needs libasound2-dev on Linux. (T4)
 - L-009 deps: pin `default-features=false` when defaults pull in networking; check dep edition/MSRV vs workspace rust-version; `cargo deny --all-features` needed to cover optional deps. (T5)
 - L-010 config: test fallback paths for user-config lists (empty result, corrupt, unreadable, re-added default); never forward OS text/window titles into errors; unresolvable window identity fails the whole capture. (T7)
+- L-011 tests: compile_fail doctests must pin an error code (`compile_fail,E0xxx`) with todo!() placeholders. Cross-check apple targets with `--lib` (Swift build scripts in dev-deps fail on Linux). OS accessibility values NaN/inf/zero are errors, not empty rects. (T8)

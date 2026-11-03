@@ -137,7 +137,7 @@ pub enum BlockReason { Unsupported, PermissionDenied, DetectionError(String),
     DetectionTimeout, UnstableLayout, IncompleteTree { app: String } }
 
 pub trait SecureFieldDetector: Send + Sync {
-    fn secure_fields(&self, display: &DisplayInfo) -> Result<Vec<Rect>, FirewallError>; // global points
+    fn secure_fields(&self) -> Result<Vec<Rect>, FirewallError>; // all visible windows, capture-space coords; display-independent (amended in T8)
 }
 pub trait SessionProbe: Send + Sync { fn state(&self) -> Result<SessionProbeState, FirewallError>; }
 pub struct PrivacyFirewall<D: SecureFieldDetector, S: SessionProbe> { /* padding, timeout */ }

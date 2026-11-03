@@ -4,10 +4,31 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "hey_buddy firewall crate"
+description = "hey_buddy privacy firewall: secure-field detection, blackout, session probe, RedactedFrame"
 
 [features]
 fakes = []
 
 [dependencies]
 frame = { path = "../frame" }
+thiserror = "1"
+
+# Platform deps are target-gated so Linux builds never see them (L-009).
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation-sys = "0.8"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_System_Ole",
+  "Win32_System_StationsAndDesktops",
+  "Win32_System_Variant",
+  "Win32_UI_Accessibility",
+  "Win32_UI_HiDpi",
+] }
+
+[dev-dependencies]
+# ADR: firewall -> frame only. capture is used ONLY by tests, for its synthetic login frame.
+capture = { path = "../capture", features = ["fakes"] }
+futures = "0.3"

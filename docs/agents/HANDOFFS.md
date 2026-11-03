@@ -13,6 +13,12 @@ Key points: <2–4 bullets>
 Next: <what orch does next>
 ```
 
+## H-009 2026-11-03 T8 → coder (x2), reviewer (x2)
+Asked: Firewall v0 (sealed RedactedFrame, blackout, fail-closed PrivacyFirewall, mac/Win detectors, fakes).
+Result: APPROVED round 2.
+Key points: round 1 found 4 MAJOR (compile_fail wrong reason, Windows DPI/display hint, limitations undocumented, NaN size skipped); fixed. SecureFieldDetector::secure_fields(&self) now display-independent (ADR line amended). Windows uses physical px matching capture; needs PerMonitorV2 manifest.
+Next: T9 [ARCH] → reviewer Opus.
+
 ## H-008 2026-11-03 T7 → coder (x2), reviewer (x2)
 Asked: frame + capture crates, deny-list, mac/Win impls, fake.
 Result: code APPROVED round 2; ticket awaits user sign-off on banking defaults.
