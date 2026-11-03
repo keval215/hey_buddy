@@ -25,3 +25,9 @@ Why: Real compile-time privacy guarantee; swappable, testable-on-Linux parts.
 ADR: docs/adr/0001-step1-architecture.md
 Status: accepted (user approved)
 Note: crate `core` has package name `buddy-core` (T1, name clash with Rust `core`).
+
+## D-002 Licence allowlist extended (note, not ARCH) — 2026-11-03
+Decision: Allowed dependency licences are now MIT, Apache-2.0, BSD, ISC, Zlib, MPL-2.0, Unlicense, CC0-1.0, 0BSD. Unlicense exception approved by user for whisper-rs / whisper-rs-sys (T4). `Apache-2.0 WITH LLVM-exception` and `Unicode-3.0` remain allowed in deny.toml (T1 note).
+Why: whisper-rs is the mature whisper.cpp binding; Unlicense is public-domain-like and Apache-2.0 compatible.
+ADR: none
+Status: accepted

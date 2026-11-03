@@ -11,6 +11,10 @@ allow = [
   "ISC",
   "Zlib",
   "MPL-2.0",
+  # Approved by user (D-002): whisper-rs / whisper-rs-sys are Unlicense.
+  "Unlicense",
+  "CC0-1.0",
+  "0BSD",
   # Permissive additions beyond the CLAUDE.md list, approved via orch note:
   "Apache-2.0 WITH LLVM-exception",
   # (also approved via orch note) Unicode tables in unicode-ident etc.

@@ -30,8 +30,8 @@ Model policy: Sonnet 5.5 for everything; Opus 5.5 only for architecture decision
    opt-in per request.
 4. **Swappable parts.** STT, TTS, LLM, capture, agent engine and desktop driver
    each sit behind a small trait/interface.
-5. **Clean licensing.** Project licence Apache-2.0. Dependencies: MIT, Apache-2.0,
-   BSD, ISC, Zlib, MPL-2.0 only. Non-commercial models are never bundled; they
+5. **Clean licensing.** Project licence Apache-2.0. Dependencies: MIT, Apache-2.0, BSD, ISC, Zlib, MPL-2.0, Unlicense, CC0-1.0, 0BSD
+   only (Unlicense approved for whisper-rs, see D-002). Non-commercial models are never bundled; they
    may only be optional user downloads behind an explicit licence prompt.
 
 ## Stack

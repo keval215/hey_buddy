@@ -32,7 +32,7 @@ packet, `CLAUDE.md` and the repo are your only context.
   - no secrets, keys or tokens in code, tests or fixtures
   - no network calls in tests
   - no non-commercial model weights in the repo
-  - new dependencies only with MIT, Apache-2.0, BSD, ISC, Zlib or MPL-2.0
+  - new dependencies only with one of MIT, Apache-2.0, BSD, ISC, Zlib, MPL-2.0, Unlicense, CC0-1.0, 0BSD
     licences; anything else, stop and report
   - privacy firewall code must fail closed (on error, block capture)
 - Do not commit, push, or change branches. orch handles git.
