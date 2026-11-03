@@ -51,11 +51,12 @@ Model policy: Sonnet 5.5 for everything; Opus 5.5 only for architecture decision
 
 ```
 apps/desktop/          Tauri app: tray, hotkey, overlay, preview panel
+crates/frame/          Frame, Rect, DisplayInfo, WindowInfo (pure data, no platform deps)
 crates/voice/          VAD, SttProvider, TtsProvider + adapters
 crates/capture/        CaptureSource trait, platform impls, app deny-list
 crates/firewall/       secure-field detection, blackout, lock-screen pause
 crates/llm/            LlmProvider trait, ollama + anthropic adapters
-crates/core/           wiring: hotkey → capture → firewall → STT → LLM → TTS
+crates/core/           (package buddy-core) wiring: hotkey → capture → firewall → STT → LLM → TTS
 models/registry.json   model catalog with licence flags
 tools/bench/           latency benchmark
 docs/                  STEP1.md, adr/, agents/ (team memory)

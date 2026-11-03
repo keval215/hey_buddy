@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Minimal capability: no fs, shell or http plugins (ADR 0001).",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

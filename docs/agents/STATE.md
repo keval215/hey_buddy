@@ -13,7 +13,7 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 | Ticket | Title | Status | Rounds | Notes |
 |---|---|---|---|---|
 | T0 | [ARCH] Step 1 architecture | DONE | 0 | D-001, ADR 0001 |
-| T1 | Repo scaffold and CI | IN PROGRESS | 0 | |
+| T1 | Repo scaffold and CI | DONE | 2 | crate `core` package is `buddy-core` |
 | T2 | Model registry | TODO | 0 | |
 | T3 | Voice traits and fakes | TODO | 0 | |
 | T4 | Local STT: whisper.cpp + Silero VAD | TODO | 0 | |
@@ -29,13 +29,14 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 Statuses: TODO · ARCH-PENDING · IN PROGRESS · IN REVIEW · CHANGES · DONE · BLOCKED · SKIPPED
 
 ## In progress
-T1: coder
+none (next: T2)
 
 ## Blockers / waiting on user
 none
 
 ## User must verify locally (macOS / Windows)
-none yet
+- T1: macOS/Windows CI jobs, `tauri build`, icon.ico/icns have never run (check first CI run on GitHub)
+- Follow-ups: real 1024px app icon; tighten CSP `unsafe-inline` later
 
 ## Done
-T0
+T0, T1

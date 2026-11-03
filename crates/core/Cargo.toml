@@ -1,0 +1,17 @@
+[package]
+name = "buddy-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "hey_buddy core crate (package buddy-core: `core` would shadow Rust built-in)"
+
+[features]
+fakes = []
+
+[dependencies]
+voice = { path = "../voice" }
+capture = { path = "../capture" }
+firewall = { path = "../firewall" }
+llm = { path = "../llm" }
+frame = { path = "../frame" }

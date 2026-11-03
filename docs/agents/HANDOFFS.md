@@ -13,6 +13,12 @@ Key points: <2–4 bullets>
 Next: <what orch does next>
 ```
 
+## H-002 2026-11-03 T1 → coder, reviewer (2 rounds)
+Asked: Repo scaffold and CI.
+Result: APPROVED after round 2.
+Key points: crate `core` renamed package `buddy-core` (name clash with Rust core); round 1 found CI missing frontend build + Windows icon.ico; deny.toml adds Apache-2.0 WITH LLVM-exception and Unicode-3.0 (permissive, noted).
+Next: T2 → coder.
+
 ## H-001 2026-11-03 T0 → reviewer-ARCH
 Asked: Propose Step 1 architecture ADR.
 Result: decision proposed; user approved with amendments (AX enable-first + spoken block notice; Windows foreground-window fallback; add `frame`; local-only default LLM).

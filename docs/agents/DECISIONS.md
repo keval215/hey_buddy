@@ -24,3 +24,4 @@ Decision: Seven crates incl. new pure-data `frame`; `RedactedFrame` sealed in `f
 Why: Real compile-time privacy guarantee; swappable, testable-on-Linux parts.
 ADR: docs/adr/0001-step1-architecture.md
 Status: accepted (user approved)
+Note: crate `core` has package name `buddy-core` (T1, name clash with Rust `core`).
