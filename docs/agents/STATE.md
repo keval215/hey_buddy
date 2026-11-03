@@ -16,7 +16,7 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 | T1 | Repo scaffold and CI | DONE | 2 | crate `core` package is `buddy-core` |
 | T2 | Model registry | DONE | 1 | follow-ups: reject duplicate defaults per task; silero languages TODO; verify phonon-40m/fish licence strings |
 | T3 | Voice traits and fakes | DONE | 1 | follow-up: doc note on VoiceError string variants (no transcript/audio) |
-| T4 | Local STT: whisper.cpp + Silero VAD | IN PROGRESS | 0 | licence check on whisper-rs needed |
+| T4 | Local STT: whisper.cpp + Silero VAD | BLOCKED | 0 | whisper-rs/-sys are Unlicense (hard stop). vad-silero + mic-cpal done in working tree (uncommitted), stt-whisper pending user decision |
 | T5 | Local TTS: Phonon 31m, Kokoro fallback | TODO | 0 | |
 | T6 | Latency bench | TODO | 0 | |
 | T7 | Capture crate and app deny-list | TODO | 0 | |
@@ -29,10 +29,10 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 Statuses: TODO · ARCH-PENDING · IN PROGRESS · IN REVIEW · CHANGES · DONE · BLOCKED · SKIPPED
 
 ## In progress
-T4: coder
+T4: paused for user licence decision
 
 ## Blockers / waiting on user
-none
+- T4 licence: whisper-rs 0.16 / whisper-rs-sys 0.15 are Unlicense. Options: (1) allow Unlicense exception, (2) vet `whisper-cpp-plus` (MIT) / `whisper-cpp-sys` (MIT OR Apache-2.0), (3) own thin FFI over MIT whisper.cpp.
 
 ## User must verify locally (macOS / Windows)
 - T1: macOS/Windows CI jobs, `tauri build`, icon.ico/icns have never run (check first CI run on GitHub)
