@@ -13,6 +13,12 @@ Key points: <2–4 bullets>
 Next: <what orch does next>
 ```
 
+## H-003 2026-11-03 T2 → coder, reviewer
+Asked: Model registry + loader.
+Result: APPROVED round 1.
+Key points: loader in `voice::registry`; rejects non-commercial defaults, bundled=true, bad sha256; all URLs/sha TODO; minor follow-ups in STATE.
+Next: T3 → coder.
+
 ## H-002 2026-11-03 T1 → coder, reviewer (2 rounds)
 Asked: Repo scaffold and CI.
 Result: APPROVED after round 2.

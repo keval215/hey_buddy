@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "hey_buddy model registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "models"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "models": {"type": "array", "items": {"$ref": "#/$defs/model"}}
+  },
+  "$defs": {
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "task", "size", "licence", "commercial_ok", "bundled", "url", "sha256", "languages", "default"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "task": {"enum": ["stt", "tts", "vad"]},
+        "size": {"type": "string"},
+        "licence": {"type": "string", "minLength": 1},
+        "commercial_ok": {"type": "boolean"},
+        "bundled": {"const": false},
+        "url": {"type": "string", "minLength": 1, "description": "Download URL or the placeholder TODO."},
+        "sha256": {"type": "string", "pattern": "^(TODO|[0-9a-f]{64})$"},
+        "languages": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "default": {"type": "boolean", "description": "Must be false when commercial_ok is false."}
+      }
+    }
+  }
+}

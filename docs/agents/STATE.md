@@ -14,8 +14,8 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 |---|---|---|---|---|
 | T0 | [ARCH] Step 1 architecture | DONE | 0 | D-001, ADR 0001 |
 | T1 | Repo scaffold and CI | DONE | 2 | crate `core` package is `buddy-core` |
-| T2 | Model registry | TODO | 0 | |
-| T3 | Voice traits and fakes | TODO | 0 | |
+| T2 | Model registry | DONE | 1 | follow-ups: reject duplicate defaults per task; silero languages TODO; verify phonon-40m/fish licence strings |
+| T3 | Voice traits and fakes | IN PROGRESS | 0 | |
 | T4 | Local STT: whisper.cpp + Silero VAD | TODO | 0 | |
 | T5 | Local TTS: Phonon 31m, Kokoro fallback | TODO | 0 | |
 | T6 | Latency bench | TODO | 0 | |
@@ -29,14 +29,15 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 Statuses: TODO · ARCH-PENDING · IN PROGRESS · IN REVIEW · CHANGES · DONE · BLOCKED · SKIPPED
 
 ## In progress
-none (next: T2)
+T3: coder
 
 ## Blockers / waiting on user
 none
 
 ## User must verify locally (macOS / Windows)
 - T1: macOS/Windows CI jobs, `tauri build`, icon.ico/icns have never run (check first CI run on GitHub)
+- T2: fill registry URLs/sha256/licences (all TODO); `get()` caller must source user_accepted_licence from a real prompt (T11/T12)
 - Follow-ups: real 1024px app icon; tighten CSP `unsafe-inline` later
 
 ## Done
-T0, T1
+T0, T1, T2

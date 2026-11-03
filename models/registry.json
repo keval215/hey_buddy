@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "models": [
+    {"id": "whisper-large-v3-turbo", "task": "stt", "size": "809M params", "licence": "MIT", "commercial_ok": true, "bundled": false, "url": "TODO", "sha256": "TODO", "languages": ["multilingual"], "default": true},
+    {"id": "whisper-small", "task": "stt", "size": "244M params", "licence": "MIT", "commercial_ok": true, "bundled": false, "url": "TODO", "sha256": "TODO", "languages": ["multilingual"], "default": false},
+    {"id": "silero-vad", "task": "vad", "size": "TODO", "licence": "MIT", "commercial_ok": true, "bundled": false, "url": "TODO", "sha256": "TODO", "languages": ["multilingual"], "default": true},
+    {"id": "phonon-31m", "task": "tts", "size": "31M params", "licence": "Apache-2.0", "commercial_ok": true, "bundled": false, "url": "TODO", "sha256": "TODO", "languages": ["TODO"], "default": true},
+    {"id": "kokoro-82m", "task": "tts", "size": "82M params", "licence": "Apache-2.0", "commercial_ok": true, "bundled": false, "url": "TODO", "sha256": "TODO", "languages": ["TODO"], "default": false},
+    {"id": "phonon-40m", "task": "tts", "size": "40M params", "licence": "TODO-verify-non-commercial", "commercial_ok": false, "bundled": false, "url": "TODO", "sha256": "TODO", "languages": ["TODO"], "default": false},
+    {"id": "fish-s2-pro", "task": "tts", "size": "TODO", "licence": "TODO-verify-non-commercial", "commercial_ok": false, "bundled": false, "url": "TODO", "sha256": "TODO", "languages": ["TODO"], "default": false}
+  ]
+}
