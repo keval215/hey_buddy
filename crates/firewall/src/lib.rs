@@ -95,9 +95,9 @@ pub use target::{
     UnsupportedTargetResolver, VisibleApp, WindowFacts,
 };
 pub use text::{
-    NodeRole, RawTextNode, RawWindowTree, ScreenTextSource, TextCoverage, TextVerdict,
-    UnsupportedTextSource, WithheldReason, MAX_EMITTED_NODES, MAX_LABEL_CHARS, MAX_TEXT_CHARS,
-    MAX_VALUE_CHARS, TRUNCATED_MARKER,
+    is_hostile_char, NodeRole, RawTextNode, RawWindowTree, ScreenTextSource, TextCoverage,
+    TextVerdict, UnsupportedTextSource, WithheldReason, MAX_EMITTED_NODES, MAX_LABEL_CHARS,
+    MAX_TEXT_CHARS, MAX_VALUE_CHARS, TRUNCATED_MARKER,
 };
 
 #[cfg(test)]

@@ -56,6 +56,11 @@ jobs:
           if cargo tree -p firewall -e normal | grep -E '(^|[^a-z_-])(driver|llm|capture|voice) v'; then
             echo "firewall depends on driver, llm, capture or voice"; exit 1
           fi
+      - name: ADR 0004 - action must stay pure (no platform, llm, capture, voice, tokio, reqwest)
+        run: |
+          if cargo tree -p action -e normal | grep -E '(^|[^a-z_-])(windows|objc2|core-foundation|llm|capture|voice|tokio|reqwest) '; then
+            echo "action crate has a forbidden dependency"; exit 1
+          fi
       - name: ADR 0002 - CloudOptIn::for_request only in core/src/consent.rs and crates/llm
         run: |
           # Tripwire (real control is review): match the bare identifier, and ban aliasing CloudOptIn.

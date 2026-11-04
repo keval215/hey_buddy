@@ -90,6 +90,9 @@ Branches: step2a/hardening -> step2b/agent-harness -> step3/packaging -> step4/f
 ## 2B ticket log (branch step2b/agent-harness)
 - S2-14a DONE (round 1): firewall observe/revalidate, sealed Observation/LiveTarget, ScriptedDesktop, 165 firewall tests. Follow-ups -> S2-14d/S4-8: strip Cf chars (not space) before lexicon match + add pwd/ccv/secret/passwort; focus-descendant sensitive check (driver must not use Window/ScrollRoot/KeyCombo to deliver text); label_sha256 never logged/exposed to engine or webview; AppId may contain spaces (tighten visible-app ids); re-read foreground after resolve; ADR text: Focus/Window on payment page refused (stricter).
 
+- S2-14b DONE (round 1): `action` crate (Action/TypedText/KeyCombo/LaunchId, canonical bytes, action_digest; golden vectors independently re-verified). Follow-ups: reject LaunchId `.`/`..`/leading-dot/non-alnum ends (fold into S2-11a); is_hostile_char misses U+2800/U+FFFC/unassigned (firewall hardening later, S4-8); descriptor.element == action.target() check belongs in policy.
+- S2-11 split: S2-11a plan model/validation/classify (pure) then S2-11b gate/approvals/ApprovedAction/KillSwitch/observe mode.
+
 ## 2B execution order (dependency-driven, branch step2b/agent-harness)
 S2-14b action crate -> S2-14a firewall observe/revalidate -> S2-11 policy gate -> S2-12 audit -> S2-13 kill switch -> S2-14c driver+fake -> S2-14d WinActuator (cfg) -> S2-10 protocol/sandbox -> S2-15 engine adapter -> S2-16 approval UI -> S2-17 plan/injection -> S2-18 -> S2-19 -> S2-20 -> S2-21 -> S2-22 red-team -> S2-23 e2e wiring. Gate G1 items are satisfied provisionally by D-006/D-007/D-008 (user absent).
 
@@ -103,7 +106,7 @@ S2-1 Windows findings; S2-6 bench JSON; registry urls/sha256/files (S3-5); Windo
 1. Step 1 exit test (`docs/manual-tests.md` Exit test) 2. 2A: engine swap, Kokoro samples, model download (needs real registry values), title/URL leak checks 3. 2B: observe mode, approvals, kill switch, red-team 4. Step 3: install, wizard, update check (fake) 5. Step 4: OCR/PII image checks, lock/auth signals. Then read provisional ADRs 0003-0006, open the draft PRs.
 
 ## In progress
-S2-14b action crate (branch step2b/agent-harness); ADR 0003 + 0004 drafted, waiting on user
+S2-11a policy plan+classify (branch step2b/agent-harness); ADR 0003 + 0004 drafted, waiting on user
 
 ## Blockers / waiting on user
 - ADR 0003 (S2-8) + ADR 0004 (S2-9): read, answer their open questions (5 each), approve; plus tier table sign-off (ADR 0003 §5) = Gate G1 items

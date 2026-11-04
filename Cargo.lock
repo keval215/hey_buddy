@@ -3,6 +3,16 @@
 version = 4
 
 [[package]]
+name = "action"
+version = "0.1.0"
+dependencies = [
+ "firewall",
+ "frame",
+ "sha2",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

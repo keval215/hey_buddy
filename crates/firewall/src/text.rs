@@ -252,7 +252,7 @@ pub enum TextVerdict {
 /// (no unicode tables): controls (Cc), line/paragraph separators, all common format characters
 /// (Cf), Unicode tag characters, variation selectors, invisible fillers/joiners, private-use
 /// areas and noncharacters. Unassigned code points are NOT covered (no table without a new dep).
-pub(crate) fn is_hostile_char(c: char) -> bool {
+pub fn is_hostile_char(c: char) -> bool {
     c.is_control()
         || matches!(
             c,
