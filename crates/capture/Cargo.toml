@@ -18,7 +18,7 @@ serde_json = "1"
 
 # Platform deps are target-gated so Linux builds never see them (L-009).
 [target.'cfg(target_os = "macos")'.dependencies]
-screencapturekit = { version = "11", default-features = false }
+screencapturekit = { version = "11", default-features = false, features = ["macos_14_0"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62", features = [

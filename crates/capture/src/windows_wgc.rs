@@ -320,6 +320,8 @@ fn read_texture(g: &Gpu, tex: &ID3D11Texture2D) -> Result<(Vec<u8>, u32, u32), C
                 (m.pData as *const u8).add(y * m.RowPitch as usize),
                 (w * 4) as usize,
             );
+            #[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
+            // as_chunks needs Rust 1.88 (MSRV 1.85)
             for px in row.chunks_exact(4) {
                 out.extend_from_slice(&[px[2], px[1], px[0], 255]); // BGRA -> RGBA
             }

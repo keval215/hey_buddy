@@ -60,6 +60,8 @@ pub(crate) fn blackout(frame: &mut Frame, rects: &[Rect], padding_px: u32) -> Op
         for y in p.y as usize..(p.y as usize + p.h as usize) {
             let start = y * stride + p.x as usize * 4;
             let end = start + p.w as usize * 4;
+            // `as_chunks_mut` needs Rust 1.88; our MSRV is 1.85, so keep `chunks_exact_mut`.
+            #[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
             for c in px.get_mut(start..end)?.chunks_exact_mut(4) {
                 c.copy_from_slice(&[0, 0, 0, 255]);
             }
