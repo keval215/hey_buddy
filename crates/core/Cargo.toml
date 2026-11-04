@@ -20,6 +20,7 @@ real-voice = [
 ]
 
 [dependencies]
+audit = { path = "../audit" }
 voice = { path = "../voice" }
 capture = { path = "../capture" }
 firewall = { path = "../firewall" }
@@ -45,6 +46,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 libc = "0.2"
 
 [dev-dependencies]
+policy = { path = "../policy" }
 capture = { path = "../capture", features = ["fakes"] }
 firewall = { path = "../firewall", features = ["fakes"] }
 tempfile = "3"

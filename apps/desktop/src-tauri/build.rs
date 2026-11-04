@@ -22,6 +22,9 @@ const COMMANDS: &[&str] = &[
     "add_deny_entry",
     "remove_deny_entry",
     "reset_deny_list_to_defaults",
+    "get_audit_entries",
+    "export_audit_log",
+    "clear_audit_log",
 ];
 
 fn main() {

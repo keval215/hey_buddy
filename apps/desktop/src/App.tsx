@@ -7,6 +7,7 @@ import type { SettingsIssue } from "./ipc/SettingsIssue";
 import type { SettingsPatch } from "./ipc/SettingsPatch";
 import { ModelsPanel } from "./models/ModelsPanel";
 import { RequestFields } from "./request/RequestView";
+import { AuditLogPanel } from "./settings/AuditLogPanel";
 import { DenyListPanel } from "./settings/DenyListPanel";
 import type { Status } from "./ipc/Status";
 import {
@@ -281,6 +282,8 @@ export default function App() {
       />
 
       <DenyListPanel />
+
+      <AuditLogPanel ready={status?.audit_ready ?? false} />
 
       <section className="border-t pt-3 text-neutral-700">
         <div>Status: {phaseText(phase)}</div>

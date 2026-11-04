@@ -411,6 +411,34 @@ Deny-list editor ("Apps the buddy never looks at"):
 - [ ] `deny_list.json` in the config folder is `{"add": [...], "remove": [...]}`; corrupt it by hand and restart: built-in list in use and a red line says so; the first edit rewrites it.
 - [ ] The preview and overlay windows cannot call the deny-list commands (devtools: `invoke("get_deny_list")` from the preview window is refused).
 
+## Audit log (S2-12) - UNTESTED on this machine (Windows, real app)
+
+The file sink, rotation, clear, export and the reader are tested on Linux with temp dirs; the
+Windows ACL behaviour and the real window are not.
+
+- [ ] Start the app. Settings shows "Agent activity log" with "Nothing has been logged yet." and no
+  red notice. `%APPDATA%\<app id>\audit\audit-000001.jsonl` exists (created on startup).
+- [ ] Make the data folder unwritable (deny your user write on `...\audit`), restart: Settings shows
+  "The activity log is not working, so the agent stays off ...", Export and Clear are disabled.
+  Restore the permission, restart: the notice is gone.
+- [ ] Replace the `audit` folder by a junction / symlink to another folder, restart: the log stays off
+  (same notice) and nothing is written into the target folder.
+- [ ] (When the agent can run, S2-15+) run a plan that types into a field. The table shows
+  intent/result lines with the control's name and "(N characters)", never the typed text. Search the
+  `audit` folder for the typed text: no hit.
+- [ ] Hand-edit a line in the newest file (break the JSON) and press Refresh: the table still loads
+  and shows "1 line in the log could not be read and is not shown."
+- [ ] Export: type `C:\Users\<you>\Documents\buddy-log.jsonl`, click "Export a copy": a new file
+  appears with the same lines. Click again: "A file with that name already exists", file unchanged.
+  Try `C:\Windows\x.jsonl`, `\\server\share\x.jsonl` and `..\x.jsonl`: all refused.
+- [ ] Clear: the first click only asks; "Keep it" cancels. "Yes, clear it" leaves one new file whose
+  only line is `"event":"cleared"` with `segments_removed`.
+- [ ] While the file is open in an editor/viewer, new lines still append (the sink does not lock out
+  readers) and Clear does not crash (it may report "That did not work" if the old file is locked;
+  the `cleared` line is already written).
+- [ ] Other users of the PC: check `...\audit` inherits the app data folder's ACL (Windows does not use
+  the unix 0600 mode).
+
 ## Step 2 packaging note
 
 - [ ] macOS bundled builds (not `tauri dev`) need an `Info.plist` with

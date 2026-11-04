@@ -1,6 +1,7 @@
 //! hey_buddy `core` crate (package `buddy-core`): wiring and app-level logic.
 
 pub mod api;
+pub mod audit_log;
 pub mod buddy;
 pub mod consent;
 pub mod deny_edit;

@@ -15,6 +15,9 @@ import type { SwapTarget } from "../ipc/SwapTarget";
 import type { DisplayDto } from "../ipc/DisplayDto";
 import type { FirewallStatus } from "../ipc/FirewallStatus";
 import type { PointEvent } from "../ipc/PointEvent";
+import type { AuditClearDto } from "../ipc/AuditClearDto";
+import type { AuditExportDto } from "../ipc/AuditExportDto";
+import type { AuditPageDto } from "../ipc/AuditPageDto";
 import type { DenyListDto } from "../ipc/DenyListDto";
 import type { Settings } from "../ipc/Settings";
 import type { SettingsResult } from "../ipc/SettingsResult";
@@ -84,6 +87,13 @@ export const api = {
     invoke<DenyListDto>("remove_deny_entry", { id, confirmRemoveDefault }),
   resetDenyListToDefaults: (confirm: boolean) =>
     invoke<DenyListDto>("reset_deny_list_to_defaults", { confirm }),
+  /** Settings window only. The agent activity log, newest first; content-free. */
+  getAuditEntries: (cursor: number, limit: number) =>
+    invoke<AuditPageDto>("get_audit_entries", { cursor, limit }),
+  /** Explicit click: copy the log to a NEW file at `destPath` (never overwrites). */
+  exportAuditLog: (destPath: string) => invoke<AuditExportDto>("export_audit_log", { destPath }),
+  /** Explicit click after a second confirm; the core refuses without `confirm: true`. */
+  clearAuditLog: (confirm: boolean) => invoke<AuditClearDto>("clear_audit_log", { confirm }),
   /** Settings window only. Loads the current profile's voice engines in the background; progress arrives as engine_swap_* events. */
   requestEngineSwap: (slot: SwapTarget = "all") => invoke<void>("request_engine_swap", { slot }),
   /** Settings window only. The models table; reads the local filesystem, never the network. */

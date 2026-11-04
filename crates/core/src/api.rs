@@ -450,6 +450,8 @@ pub struct Status {
     /// expected path), deny-list problems, apps removed from the default deny list. Never
     /// transcripts, replies or screen text.
     pub notices: Vec<String>,
+    /// The agent activity log is set up and writable. `false` keeps the agent off (fail closed).
+    pub audit_ready: bool,
 }
 
 /// Local state of one registry model, from the filesystem only (never from the network).
@@ -560,4 +562,66 @@ mod tests {
             assert_eq!(VisionMode::from(crate::route::VisionMode::from(m)), m);
         }
     }
+}
+
+/// One line of the agent activity log (S2-12). Content-free: ids, digests, fixed tokens and the
+/// sanitised target label (at most 60 characters, `[redacted]` for anything sensitive). Never
+/// typed text, transcripts, plan JSON, prompts, screen text, clipboard or screenshots.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AuditEntryDto {
+    #[ts(type = "number")]
+    pub ts_ms: u64,
+    pub session_id: String,
+    #[ts(type = "number | null")]
+    pub task: Option<u64>,
+    #[ts(type = "number")]
+    pub seq: u64,
+    pub event: String,
+    pub plan_digest8: Option<String>,
+    pub action_digest8: Option<String>,
+    pub step: Option<u16>,
+    pub op: Option<String>,
+    pub target_role: Option<String>,
+    pub target_label: Option<String>,
+    pub app_id: Option<String>,
+    pub tier: Option<String>,
+    pub decision: Option<String>,
+    pub result_code: Option<String>,
+    /// Length of typed text in characters (never the text).
+    pub text_len: Option<u32>,
+    /// Only on `cleared` lines.
+    pub segments_removed: Option<u32>,
+}
+
+/// Result of `get_audit_entries`: newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AuditPageDto {
+    pub entries: Vec<AuditEntryDto>,
+    /// Lines that could not be read in the files that were looked at.
+    pub corrupt_lines: u32,
+    /// Pass back as `cursor` for older entries; `null` at the end.
+    pub next_cursor: Option<u32>,
+    /// Number of log files on disk.
+    pub segments: u32,
+    /// More files than the soft limit: the user is asked to export and clear.
+    pub over_limit: bool,
+    pub ready: bool,
+}
+
+/// Result of `export_audit_log`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AuditExportDto {
+    /// How many log files were written into the export.
+    pub segments: u32,
+}
+
+/// Result of `clear_audit_log`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AuditClearDto {
+    /// How many log files were removed.
+    pub removed: u32,
 }

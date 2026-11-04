@@ -97,6 +97,8 @@ Branches: step2a/hardening -> step2b/agent-harness -> step3/packaging -> step4/f
 
 - S2-11b DONE (round 2): PolicyGate/ApprovedAction/grants/approvals/KillSwitch/observe mode; adversarial review round 1 MAJOR = Phase-C task-identity race (fixed: Reserving carries full identity; end_task keeps busy token). Reviewer ran 38 own mutations (26 killed). TODO folded into S2-13: bump `void` in `end_task` for every reason except Completed/ExecFailed so a superseded/denied/expired task's live ApprovedAction dies at once (currently <=2 s window); add reviewer's two tests (task ended by non-void path during Phase B; PlanGrant from another gate used with authorize); record_result ownership by proposal id not TaskId; audit record for unmatched late result; Reserving age cap.
 
+- S2-12 DONE (round 1): `audit` crate (append-only FileAuditSink, write-ahead durable intents, rotation never deletes, confirmed clear, export, tolerant reader), viewer in Settings, `Status.audit_ready`. Follow-ups: core-side guard on `clear_audit_log` while a task is active/intent outstanding (fold into S2-13); source-scan test is a tripwire (widen patterns); seq not advanced after append-ok/sync-fail; digest filter 0..=8 hex vs 'exactly 8'; document accepted TOCTOU (check-then-open) and compromised-webview clear in docs/audit.md; Buddy does not own a PolicyGate yet: whoever builds it must pass `buddy.audit_sink()` and refuse to start the agent when `audit_ready` is false.
+
 ## 2B execution order (dependency-driven, branch step2b/agent-harness)
 S2-14b action crate -> S2-14a firewall observe/revalidate -> S2-11 policy gate -> S2-12 audit -> S2-13 kill switch -> S2-14c driver+fake -> S2-14d WinActuator (cfg) -> S2-10 protocol/sandbox -> S2-15 engine adapter -> S2-16 approval UI -> S2-17 plan/injection -> S2-18 -> S2-19 -> S2-20 -> S2-21 -> S2-22 red-team -> S2-23 e2e wiring. Gate G1 items are satisfied provisionally by D-006/D-007/D-008 (user absent).
 
@@ -110,7 +112,7 @@ S2-1 Windows findings; S2-6 bench JSON; registry urls/sha256/files (S3-5); Windo
 1. Step 1 exit test (`docs/manual-tests.md` Exit test) 2. 2A: engine swap, Kokoro samples, model download (needs real registry values), title/URL leak checks 3. 2B: observe mode, approvals, kill switch, red-team 4. Step 3: install, wizard, update check (fake) 5. Step 4: OCR/PII image checks, lock/auth signals. Then read provisional ADRs 0003-0006, open the draft PRs.
 
 ## In progress
-S2-12 audit log (branch step2b/agent-harness); ADR 0003 + 0004 drafted, waiting on user
+S2-13 kill switch + gate tightenings (branch step2b/agent-harness); ADR 0003 + 0004 drafted, waiting on user
 
 ## Blockers / waiting on user
 - ADR 0003 (S2-8) + ADR 0004 (S2-9): read, answer their open questions (5 each), approve; plus tier table sign-off (ADR 0003 §5) = Gate G1 items

@@ -24,3 +24,7 @@ policy = { path = ".", features = ["test-support"] }
 # Real Observations for binding/gate tests come from the firewall fakes (test-only; never in the normal tree).
 firewall = { path = "../firewall", features = ["fakes"] }
 frame = { path = "../frame" }
+# The real file sink is exercised against a real gate in tests/audit_file.rs (integration test only:
+# it links the same `policy` as `audit`; never in the normal tree).
+audit = { path = "../audit" }
+tempfile = "3"

@@ -35,6 +35,8 @@ fn main() {
             // Enables the models screen. Creates nothing and downloads nothing by itself.
             if let Ok(data) = app.path().app_data_dir() {
                 buddy.set_models_dir(buddy_core::download::models_dir(&data));
+                // The activity log (<data>/audit). If it cannot be written the agent stays off.
+                buddy.set_data_dir(data);
             }
             shell::setup(app.handle(), &buddy)?;
             engine::start(app.handle(), &buddy, &dir);
@@ -62,6 +64,9 @@ fn main() {
         commands::add_deny_entry,
         commands::remove_deny_entry,
         commands::reset_deny_list_to_defaults,
+        commands::get_audit_entries,
+        commands::export_audit_log,
+        commands::clear_audit_log,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -83,6 +88,9 @@ fn main() {
         commands::add_deny_entry,
         commands::remove_deny_entry,
         commands::reset_deny_list_to_defaults,
+        commands::get_audit_entries,
+        commands::export_audit_log,
+        commands::clear_audit_log,
     ]);
 
     builder

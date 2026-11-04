@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use capture::CaptureSource;
@@ -22,10 +22,12 @@ use voice::registry::{Device, Registry, Task};
 use voice::{SttProvider, TtsProvider};
 
 use crate::api::{
-    Decision, DenyListDto, DisplayDto, DownloadDone, DownloadFailed, DownloadProgress,
-    EngineSlotName, EngineSwapEvent, FirewallStatus, LastRequestDto, ModelRow, Phase, PointEvent,
-    Settings, SettingsPatch, SettingsResult, Status, SwapTarget, TurnState,
+    AuditClearDto, AuditExportDto, AuditPageDto, Decision, DenyListDto, DisplayDto, DownloadDone,
+    DownloadFailed, DownloadProgress, EngineSlotName, EngineSwapEvent, FirewallStatus,
+    LastRequestDto, ModelRow, Phase, PointEvent, Settings, SettingsPatch, SettingsResult, Status,
+    SwapTarget, TurnState,
 };
+use crate::audit_log::{page_dto, validate_export_path, AuditCmdError, DEFAULT_PAGE};
 use crate::consent::{
     last_request_dto, provider_allowed, ConsentError, ConsentGate, PreviewSink, PreviewStore,
     LAST_KEY,
@@ -110,6 +112,10 @@ fn failure_notice(slot: EngineSlotName, id: &str, f: &SwapFailure) -> String {
     }
 }
 
+/// Shown when the activity log could not be set up or written.
+const AUDIT_NOTICE: &str =
+    "The activity log is not working, so the agent stays off until it can be written.";
+
 /// Longest accepted API key (bytes).
 const MAX_KEY_LEN: usize = 512;
 
@@ -146,6 +152,10 @@ pub struct Buddy {
     notices: Mutex<Vec<String>>,
     /// Why there is no engine (reported on a hotkey press): `(code, message)`.
     engine_unavailable: Mutex<Option<(String, String)>>,
+    /// The append-only agent activity log (S2-12). The future gate is built with this sink; until
+    /// `set_data_dir` succeeds every `intent` fails (fail closed: no audit, no agent).
+    audit: Arc<audit::FileAuditSink>,
+    audit_attempted: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -225,6 +235,8 @@ impl Buddy {
             current: Mutex::new(None),
             notices: Mutex::new(Vec::new()),
             engine_unavailable: Mutex::new(None),
+            audit: Arc::new(audit::FileAuditSink::unattached()),
+            audit_attempted: AtomicBool::new(false),
         }
     }
 
@@ -554,6 +566,50 @@ impl Buddy {
         self.edit_deny(|e| e.reset_to_defaults(confirm))
     }
 
+    // ------------------------------------------------------------ agent activity log (S2-12)
+
+    /// Tell the core the app data directory; the log lives in `<dir>/audit`. If it cannot be
+    /// created or written (or is a symlink) the log stays unavailable: `Status.audit_ready` is
+    /// `false` and the sink fails every `intent`, so the agent cannot act (fail closed).
+    pub fn set_data_dir(&self, dir: PathBuf) {
+        self.audit_attempted.store(true, Ordering::SeqCst);
+        let _ = self.audit.attach(&dir);
+    }
+
+    /// The sink the policy gate must be built with (the same file for the whole run).
+    pub fn audit_sink(&self) -> Arc<audit::FileAuditSink> {
+        self.audit.clone()
+    }
+
+    /// `get_audit_entries` command: newest first, `limit` defaults to 50 (1..=500).
+    pub fn get_audit_entries(
+        &self,
+        cursor: Option<u32>,
+        limit: Option<u32>,
+    ) -> Result<AuditPageDto, AuditCmdError> {
+        let cursor = cursor.unwrap_or(0);
+        let page = self
+            .audit
+            .read_page(u64::from(cursor), limit.unwrap_or(DEFAULT_PAGE) as usize)?;
+        let st = self.audit.stats();
+        Ok(page_dto(page, st.over_limit, st.ready))
+    }
+
+    /// `export_audit_log` command (explicit user action): copy the log into a NEW file at
+    /// `dest_path`. Never overwrites; nothing leaves the device.
+    pub fn export_audit_log(&self, dest_path: &str) -> Result<AuditExportDto, AuditCmdError> {
+        let dest = validate_export_path(dest_path)?;
+        let segments = self.audit.export_to(&dest)?;
+        Ok(AuditExportDto { segments })
+    }
+
+    /// `clear_audit_log` command (explicit user action, `confirm` must be `true`): starts a new
+    /// log file whose first line records the clear, then removes the old files. Cancels nothing.
+    pub fn clear_audit_log(&self, confirm: bool) -> Result<AuditClearDto, AuditCmdError> {
+        let removed = self.audit.clear(confirm)?;
+        Ok(AuditClearDto { removed })
+    }
+
     // ------------------------------------------------------------ consent / preview
 
     /// Where the panel is shown (the glue installs this; the default cannot show anything and
@@ -653,8 +709,12 @@ impl Buddy {
             hotkey_registered: i.hotkey_registered,
             settings_error,
             settings_issues,
+            audit_ready: self.audit.ready(),
             notices: {
                 let mut n = lock(&self.notices).clone();
+                if self.audit_attempted.load(Ordering::SeqCst) && !self.audit.ready() {
+                    n.push(AUDIT_NOTICE.to_string());
+                }
                 n.extend(deny_notices);
                 n.extend(lock(&self.swap_failures).values().cloned());
                 n
@@ -1186,5 +1246,104 @@ mod tests {
         assert!(notices.iter().any(|n| n == BANKING_NOTICE));
         b.reset_deny_list_to_defaults(true).unwrap();
         assert!(!b.get_status().notices.iter().any(|n| n.contains("cmd.exe")));
+    }
+
+    #[test]
+    fn audit_log_is_not_ready_until_the_data_dir_works_and_commands_are_content_free() {
+        use policy::AuditSink;
+        let (d, b) = buddy();
+        assert!(!b.get_status().audit_ready);
+        assert!(!b.get_status().notices.iter().any(|n| n == AUDIT_NOTICE));
+        assert_eq!(
+            b.get_audit_entries(None, None).unwrap_err(),
+            AuditCmdError::Unavailable
+        );
+        assert_eq!(
+            b.clear_audit_log(true).unwrap_err(),
+            AuditCmdError::Unavailable
+        );
+        assert!(b.audit_sink().intent(&audit_rec("intent")).is_err());
+
+        // A data dir below a regular file: not ready, the user is told, still fail closed.
+        let f = d.path().join("file");
+        std::fs::write(&f, b"x").unwrap();
+        b.set_data_dir(f.join("data"));
+        assert!(!b.get_status().audit_ready);
+        assert!(b.get_status().notices.iter().any(|n| n == AUDIT_NOTICE));
+        assert!(b.audit_sink().intent(&audit_rec("intent")).is_err());
+
+        b.set_data_dir(d.path().join("data"));
+        assert!(b.get_status().audit_ready);
+        assert!(!b.get_status().notices.iter().any(|n| n == AUDIT_NOTICE));
+        b.audit_sink().intent(&audit_rec("intent")).unwrap();
+        b.audit_sink().record(&audit_rec("result"));
+        let page = b.get_audit_entries(None, Some(1)).unwrap();
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(page.entries[0].event, "result");
+        assert_eq!(page.next_cursor, Some(1));
+        assert!(page.ready && !page.over_limit && page.corrupt_lines == 0);
+        let older = b.get_audit_entries(page.next_cursor, Some(1)).unwrap();
+        assert_eq!(older.entries[0].event, "intent");
+        assert_eq!(older.next_cursor, None);
+
+        // Export: validated path, new file only.
+        let dest = d.path().join("out.jsonl");
+        let dest_s = dest.to_string_lossy().into_owned();
+        assert_eq!(b.export_audit_log(&dest_s).unwrap().segments, 1);
+        assert_eq!(std::fs::read_to_string(&dest).unwrap().lines().count(), 2);
+        assert_eq!(
+            b.export_audit_log(&dest_s).unwrap_err(),
+            AuditCmdError::Exists
+        );
+        assert_eq!(
+            b.export_audit_log("../x.jsonl").unwrap_err(),
+            AuditCmdError::InvalidPath
+        );
+
+        // Clear needs the explicit confirm.
+        assert_eq!(
+            b.clear_audit_log(false).unwrap_err(),
+            AuditCmdError::NeedsConfirm
+        );
+        assert_eq!(b.get_audit_entries(None, None).unwrap().entries.len(), 2);
+        assert_eq!(b.clear_audit_log(true).unwrap().removed, 1);
+        let after = b.get_audit_entries(None, None).unwrap();
+        assert_eq!(after.entries.len(), 1);
+        assert_eq!(after.entries[0].event, "cleared");
+        assert_eq!(after.entries[0].segments_removed, Some(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_audit_dir_keeps_the_log_off() {
+        let (d, b) = buddy();
+        let real = d.path().join("elsewhere");
+        std::fs::create_dir(&real).unwrap();
+        let data = d.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        std::os::unix::fs::symlink(&real, data.join("audit")).unwrap();
+        b.set_data_dir(data);
+        assert!(!b.get_status().audit_ready);
+        assert!(std::fs::read_dir(&real).unwrap().next().is_none());
+    }
+
+    fn audit_rec(event: &'static str) -> policy::AuditRecord {
+        policy::AuditRecord {
+            ts_ms: 1,
+            task: Some(1),
+            seq: 1,
+            event,
+            plan_digest8: None,
+            action_digest8: None,
+            step: Some(0),
+            op: Some("click"),
+            target_role: None,
+            target_label: Some("Save".into()),
+            app_id: None,
+            tier: Some("reversible"),
+            decision: None,
+            result_code: None,
+            text_len: None,
+        }
     }
 }

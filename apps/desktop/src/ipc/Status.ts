@@ -20,4 +20,8 @@ settings_issues: Array<SettingsIssue>,
  * expected path), deny-list problems, apps removed from the default deny list. Never
  * transcripts, replies or screen text.
  */
-notices: Array<string>, };
+notices: Array<string>, 
+/**
+ * The agent activity log is set up and writable. `false` keeps the agent off (fail closed).
+ */
+audit_ready: boolean, };

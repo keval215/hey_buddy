@@ -72,6 +72,11 @@ jobs:
           fi
           # TODO(S2-15): once the agent crate exists, add the mirror rule from ADR 0003 section 11:
           #   cargo tree -p agent -e normal must not list policy, driver, capture, firewall or llm.
+      - name: ADR 0003 section 13 - audit log stays std-only (no async runtime, network, llm, capture, voice, driver, platform crates)
+        run: |
+          if cargo tree -p audit -e normal | grep -E '(^|[^a-z_-])(tokio|reqwest|llm|capture|voice|driver|windows) '; then
+            echo "audit crate has a forbidden dependency"; exit 1
+          fi
       - name: ADR 0003 - ApprovedAction is minted only in crates/policy/src/gate.rs
         run: |
           # Tripwire (the real control is review): the sealed type, its constructor and every

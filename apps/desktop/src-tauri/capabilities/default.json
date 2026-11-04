@@ -22,6 +22,9 @@
     "allow-get-deny-list",
     "allow-add-deny-entry",
     "allow-remove-deny-entry",
-    "allow-reset-deny-list-to-defaults"
+    "allow-reset-deny-list-to-defaults",
+    "allow-get-audit-entries",
+    "allow-export-audit-log",
+    "allow-clear-audit-log"
   ]
 }

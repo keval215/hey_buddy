@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use buddy_core::api::{
-    Decision, DenyListDto, DisplayDto, IssueCode, LastRequestDto, ModelRow, PreviewDto, Settings,
-    SettingsField, SettingsIssue, SettingsPatch, SettingsResult, Status, SwapTarget,
+    AuditClearDto, AuditExportDto, AuditPageDto, Decision, DenyListDto, DisplayDto, IssueCode,
+    LastRequestDto, ModelRow, PreviewDto, Settings, SettingsField, SettingsIssue, SettingsPatch,
+    SettingsResult, Status, SwapTarget,
 };
 use buddy_core::Buddy;
 use tauri::{AppHandle, State};
@@ -163,6 +164,33 @@ pub fn reset_deny_list_to_defaults(b: B, confirm: Option<bool>) -> Result<DenyLi
         .map_err(|e| e.to_string())
 }
 
+/// Settings window only: a page of the agent activity log, newest first (`cursor` = how many
+/// entries to skip, `limit` default 50). Content-free. Errors are fixed tokens (`unavailable`).
+#[tauri::command]
+pub fn get_audit_entries(
+    b: B,
+    cursor: Option<u32>,
+    limit: Option<u32>,
+) -> Result<AuditPageDto, String> {
+    b.get_audit_entries(cursor, limit)
+        .map_err(|e| e.to_string())
+}
+
+/// Settings window only, explicit click: copy the activity log into a NEW file at `dest_path`
+/// (absolute, no overwrite). Errors: `invalid_path`, `exists`, `unavailable`, `io_error`.
+#[tauri::command]
+pub fn export_audit_log(b: B, dest_path: String) -> Result<AuditExportDto, String> {
+    b.export_audit_log(&dest_path).map_err(|e| e.to_string())
+}
+
+/// Settings window only, explicit click, needs `confirm: true` (`needs_confirm` otherwise):
+/// start a new log whose first line records the clear, then remove the old files.
+#[tauri::command]
+pub fn clear_audit_log(b: B, confirm: Option<bool>) -> Result<AuditClearDto, String> {
+    b.clear_audit_log(confirm.unwrap_or(false))
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn list_displays(b: B) -> Vec<DisplayDto> {
     b.list_displays()
@@ -194,6 +222,9 @@ mod tests {
         "add_deny_entry",
         "remove_deny_entry",
         "reset_deny_list_to_defaults",
+        "get_audit_entries",
+        "export_audit_log",
+        "clear_audit_log",
     ];
 
     /// The quoted strings of the `"permissions": [...]` array (capability files hold no
@@ -215,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn deny_list_commands_are_only_in_the_settings_window_capability() {
+    fn settings_only_commands_are_only_in_the_settings_window_capability() {
         let default = permissions(include_str!("../capabilities/default.json"));
         let overlay = permissions(include_str!("../capabilities/overlay.json"));
         let preview = permissions(include_str!("../capabilities/preview.json"));
