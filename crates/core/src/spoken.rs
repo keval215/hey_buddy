@@ -45,6 +45,8 @@ pub enum Notice {
     LlmFailed,
     /// Speech recognition failed.
     SttFailed,
+    /// The kill switch fired (S2-13).
+    Stopped,
 }
 
 fn pause_token(r: PauseReason) -> &'static str {
@@ -159,6 +161,7 @@ pub fn notice(n: Notice, l: Locale) -> &'static str {
         }
         Notice::LlmFailed => "Sorry, I could not get an answer from the language model.",
         Notice::SttFailed => "Sorry, I could not understand the audio.",
+        Notice::Stopped => "Stopped.",
     }
 }
 
@@ -225,5 +228,6 @@ mod tests {
         ] {
             assert!(notice(n, Locale::En).len() > 10);
         }
+        assert_eq!(notice(Notice::Stopped, Locale::En), "Stopped.");
     }
 }

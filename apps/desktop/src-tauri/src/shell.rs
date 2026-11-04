@@ -11,12 +11,13 @@ use buddy_core::api::{
     EVT_ENGINE_SWAP_REQUESTED, EVT_FIREWALL_STATUS, EVT_TURN_ERROR, EVT_TURN_POINT,
     EVT_TURN_REPLY_DELTA, EVT_TURN_STATE, EVT_TURN_TRANSCRIPT,
 };
+use buddy_core::kill::{KillController, KillReason};
 use buddy_core::{Buddy, EventSink};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
-use crate::{hotkey, overlay, preview};
+use crate::{hotkey, kill, overlay, preview};
 
 const MAIN: &str = "main";
 const DISPLAY_POLL: Duration = Duration::from_secs(3);
@@ -114,12 +115,15 @@ pub fn setup(app: &AppHandle, buddy: &Arc<Buddy>) -> tauri::Result<()> {
 
     let status = MenuItem::with_id(app, "status", phase_text(Phase::Idle), false, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
+    // Always enabled: the user can stop the agent at any time (S2-13).
+    let stop = MenuItem::with_id(app, "stop_agent", "Stop agent", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
             &status,
             &PredefinedMenuItem::separator(app)?,
+            &stop,
             &settings,
             &quit,
         ],
@@ -130,6 +134,11 @@ pub fn setup(app: &AppHandle, buddy: &Arc<Buddy>) -> tauri::Result<()> {
         .menu(&menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "settings" => show_settings(app),
+            "stop_agent" => {
+                if let Some(ctl) = app.try_state::<Arc<KillController>>() {
+                    ctl.trip(KillReason::Tray);
+                }
+            }
             "quit" => app.exit(0),
             _ => {}
         });
@@ -143,6 +152,9 @@ pub fn setup(app: &AppHandle, buddy: &Arc<Buddy>) -> tauri::Result<()> {
     preview::create(app, buddy)?;
 
     hotkey::register_initial(app, buddy);
+    if let Some(ctl) = app.try_state::<Arc<KillController>>() {
+        kill::register_initial(app, buddy, &ctl);
+    }
     start_display_watcher(app, buddy);
     Ok(())
 }

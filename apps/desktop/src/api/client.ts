@@ -107,6 +107,8 @@ export const api = {
   cancelDownload: (id: string) => invoke<void>("cancel_download", { id }),
   listDisplays: () => invoke<DisplayDto[]>("list_displays"),
   cancelTurn: () => invoke<void>("cancel_turn"),
+  /** STOP everything (S2-13). Safe from any window; never blocks. */
+  killAgent: () => invoke<void>("kill_agent"),
   /** Preview window only. */
   previewDecision: (requestId: number, decision: Decision) =>
     invoke<void>("preview_decision", { requestId, decision }),

@@ -8,6 +8,15 @@ import type { SettingsIssue } from "./SettingsIssue";
  */
 export type Status = { phase: Phase, firewall: FirewallStatus, hotkey_registered: boolean, 
 /**
+ * The kill-switch shortcut is registered with the OS (S2-13). `false` keeps the agent off:
+ * no way to stop it means no agent (fail closed).
+ */
+kill_hotkey_registered: boolean, 
+/**
+ * The agent may run: activity log writable AND a kill trigger registered.
+ */
+agent_enabled: boolean, 
+/**
  * Fixed token when the settings file was unreadable and defaults are in use.
  */
 settings_error: string | null, 

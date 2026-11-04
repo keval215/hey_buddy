@@ -15,6 +15,11 @@ provider: ProviderChoice,
  */
 hotkey: string, 
 /**
+ * Kill-switch shortcut (S2-13), default `Ctrl+Alt+Shift+K`: at least two modifiers, one of
+ * them Ctrl/Alt/Super, and never the push-to-talk chord.
+ */
+kill_hotkey: string, 
+/**
  * Whether an API key is stored in the OS keychain (best effort); never persisted here and
  * the key itself is never returned.
  */

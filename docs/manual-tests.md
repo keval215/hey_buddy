@@ -439,6 +439,37 @@ Windows ACL behaviour and the real window are not.
 - [ ] Other users of the PC: check `...\audit` inherits the app data folder's ACL (Windows does not use
   the unix 0600 mode).
 
+## Kill switch (S2-13) - UNTESTED on this machine (Windows, real app)
+Build: `pnpm --filter desktop tauri dev` (debug build: has the fake-task harness). Settings window
+-> "Stop-everything hotkey" shows `Ctrl+Alt+Shift+K`; the status line says "Stop hotkey: registered".
+1. Hotkey stops a running task. In the webview devtools console run
+   `__TAURI_INTERNALS__.invoke("debug_fake_task")` (starts a 60 s fake task; stderr: "fake task
+   started"). Press `Ctrl+Alt+Shift+K`: stderr says "fake task stopped by the kill switch" within a
+   moment and you hear "Stopped." (needs `--features real-voice` for speech).
+2. Tray item: start the fake task again; tray menu -> "Stop agent" (always enabled): same result.
+3. Settings "Stop agent" button, and `invoke("kill_agent")` from the overlay/preview devtools if you
+   open them: same result.
+4. Audit: Settings -> Activity log shows a `killed` entry (reason hotkey / tray / stop_button) for
+   each stop, with no content.
+5. No resume: after a stop nothing starts again by itself; the status line stays at idle.
+6. Held keys: with a real driver (S2-14c/d) hold an action mid-type and stop: no key or mouse
+   button stays down. (Fake driver only until then: nothing to check.)
+7. Hung engine simulation: no real engine yet (S2-10). The unit test
+   `a_hung_engine_killer_does_not_stop_the_other_steps` covers it; re-check by hand once the engine
+   exists by suspending it (Process Explorer -> Suspend) and stopping: the rest still completes in
+   about 3 s.
+8. Hotkey while the app is busy: start a model download or an engine swap, then press the kill
+   hotkey: it must still fire (its own OS thread, not the webview or the Tauri loop).
+9. Setting: change the stop hotkey to `Alt+Shift+F9`, Save: the new chord works, the old one does
+   not. Try `Ctrl+K` (one modifier), the push-to-talk chord and an empty value: each is refused
+   with a message and the default stays. Occupy a chord with another app, then try to use it:
+   "another app is already using that shortcut", the old chord stays.
+10. Fail closed: with the chord taken by another app BEFORE start, the status line says "Stop
+    hotkey: not registered (the agent is off ...)" and a notice appears; the agent must not start.
+11. While a task is running (fake task + a real gate task later) "Clear log" and deny-list removals
+    answer "The agent is working. Stop it first".
+Not covered by hardware here: the Windows message-loop thread itself (compile-checked only).
+
 ## Step 2 packaging note
 
 - [ ] macOS bundled builds (not `tauri dev`) need an `Info.plist` with

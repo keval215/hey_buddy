@@ -3,4 +3,4 @@
 /**
  * Which setting an issue is about (`File` = the settings file itself).
  */
-export type SettingsField = "file" | "profile" | "hotkey" | "anthropic_model" | "models_dir";
+export type SettingsField = "file" | "profile" | "hotkey" | "kill_hotkey" | "anthropic_model" | "models_dir";

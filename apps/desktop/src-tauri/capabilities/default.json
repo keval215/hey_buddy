@@ -25,6 +25,8 @@
     "allow-reset-deny-list-to-defaults",
     "allow-get-audit-entries",
     "allow-export-audit-log",
-    "allow-clear-audit-log"
+    "allow-clear-audit-log",
+    "allow-kill-agent",
+    "allow-debug-fake-task"
   ]
 }

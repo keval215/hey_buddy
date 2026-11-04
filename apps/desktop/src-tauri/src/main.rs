@@ -11,6 +11,7 @@
 mod commands;
 mod engine;
 mod hotkey;
+mod kill;
 mod overlay;
 mod preview;
 mod shell;
@@ -32,6 +33,9 @@ fn main() {
             ));
             buddy.set_event_sink(Arc::new(shell::TauriEvents(app.handle().clone())));
             app.manage(buddy.clone());
+            // The kill switch exists before anything else can start (S2-13).
+            app.manage(kill::KillHotkey::new());
+            app.manage(buddy_core::kill::KillController::for_buddy(&buddy));
             // Enables the models screen. Creates nothing and downloads nothing by itself.
             if let Ok(data) = app.path().app_data_dir() {
                 buddy.set_models_dir(buddy_core::download::models_dir(&data));
@@ -52,6 +56,7 @@ fn main() {
         commands::list_displays,
         commands::cancel_turn,
         commands::debug_point,
+        commands::debug_fake_task,
         commands::preview_decision,
         commands::get_last_request,
         commands::get_pending_preview,
@@ -67,6 +72,7 @@ fn main() {
         commands::get_audit_entries,
         commands::export_audit_log,
         commands::clear_audit_log,
+        commands::kill_agent,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -91,6 +97,7 @@ fn main() {
         commands::get_audit_entries,
         commands::export_audit_log,
         commands::clear_audit_log,
+        commands::kill_agent,
     ]);
 
     builder

@@ -1,5 +1,6 @@
 //! hey_buddy `core` crate (package `buddy-core`): wiring and app-level logic.
 
+pub mod activity;
 pub mod api;
 pub mod audit_log;
 pub mod buddy;
@@ -9,6 +10,8 @@ pub mod download;
 pub mod engine_slot;
 pub mod error;
 pub mod events;
+pub mod kill;
+pub mod kill_hotkey;
 pub mod leakguard;
 pub mod models_path;
 pub mod point;

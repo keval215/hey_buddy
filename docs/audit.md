@@ -80,3 +80,20 @@ stripped of control / bidi characters. Raw files are plain text: `jq . audit-000
 ## Commands (settings window only; not overlay or preview)
 `get_audit_entries`, `export_audit_log`, `clear_audit_log`, in `capabilities/default.json`,
 `build.rs` and both handler lists (a test checks all four places).
+
+## Guard while the agent works (S2-13)
+`clear_audit_log` (and the loosening deny-list edits: removing an entry, resetting to defaults) are
+refused with the code `busy` while a task is active or an intent / action is outstanding
+(`PolicyGate::activity()` through the `ActivityProbe` installed with `Buddy::set_activity_probe`;
+no probe = no agent = idle). Stop the agent first (kill switch), then clear.
+
+## Accepted residual risks
+- A compromised settings webview can still call `clear_audit_log` with `confirm: true` while the
+  agent is idle. The two-click UI and the `confirm` flag stop accidents, not a hostile page; the
+  clear itself is recorded as the first line of the new log (`cleared`, `segments_removed`).
+- Check-then-open TOCTOU: the symlink / directory checks happen before the files are opened, so a
+  local attacker who can swap the audit directory between the check and the open is not stopped.
+  Anyone with that much access to the user's profile can edit the log anyway.
+- Windows ACLs: the audit folder inherits the ACL of the app data folder (the user and
+  administrators); it is not tightened further. The log is tamper-evident only against accidents,
+  not against the user's own account.

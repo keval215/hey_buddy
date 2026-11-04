@@ -10,7 +10,16 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 pub fn plugin() -> TauriPlugin<Wry> {
     tauri_plugin_global_shortcut::Builder::new()
-        .with_handler(|app, _shortcut, event| {
+        .with_handler(|app, shortcut, event| {
+            // Non-Windows fallback for the kill chord (Windows uses its own thread, see kill.rs).
+            if crate::kill::is_kill_shortcut(app, shortcut) {
+                if event.state() == ShortcutState::Pressed {
+                    if let Some(ctl) = app.try_state::<Arc<buddy_core::kill::KillController>>() {
+                        ctl.trip(buddy_core::kill::KillReason::Hotkey);
+                    }
+                }
+                return;
+            }
             let Some(buddy) = app.try_state::<Arc<Buddy>>() else {
                 return;
             };

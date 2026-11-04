@@ -123,7 +123,8 @@ use crate::bind::{bind_step, BindContext, BoundStep};
 use crate::clock::Clock;
 use crate::config::{
     Mode, PolicyConfig, TaskOrigin, ACTION_TTL, INPUT_GUARD, MAX_MINTS_PER_MINUTE, MIN_MINT_GAP,
-    OBSERVATION_MAX_AGE, PLAN_APPROVAL_TIMEOUT, PLAN_GRANT_TTL, STALL_TTL, STEP_APPROVAL_TIMEOUT,
+    OBSERVATION_MAX_AGE, PLAN_APPROVAL_TIMEOUT, PLAN_GRANT_TTL, RESERVE_MAX_AGE, STALL_TTL,
+    STEP_APPROVAL_TIMEOUT,
 };
 use crate::drift::{drift, Drift, Shown};
 use crate::error::PlanError;
@@ -195,6 +196,33 @@ impl EndReason {
             EndReason::ExecFailed => "exec_failed",
             EndReason::Superseded => "superseded",
         }
+    }
+}
+
+/// The busy token as seen from outside (S2-13 `activity`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BusyState {
+    Idle,
+    /// An approval is waiting for the user.
+    Pending,
+    /// `authorize` is writing its write-ahead intent.
+    Reserving,
+    /// A minted action the driver has not reported on.
+    Outstanding,
+}
+
+/// What the gate is doing right now (read-only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Activity {
+    /// A task exists that has not ended.
+    pub task_live: bool,
+    pub busy_state: BusyState,
+}
+
+impl Activity {
+    /// True when nothing is running and nothing is outstanding.
+    pub fn is_idle(&self) -> bool {
+        !self.task_live && self.busy_state == BusyState::Idle
     }
 }
 
@@ -603,6 +631,9 @@ enum Busy {
         digest: ActionDigest,
         step: u16,
         task: TaskId,
+        /// The proposal that minted it: ownership is by proposal id, never by `TaskId` (a
+        /// re-proposal may reuse the same `TaskId`).
+        proposal: u64,
         at: Duration,
     },
 }
@@ -619,6 +650,8 @@ struct Resv {
     void_gen: u64,
     /// Kill epoch of the TASK as validated (task epoch == grant epoch == switch epoch).
     epoch: u64,
+    /// When the reservation was taken (gate clock): see [`RESERVE_MAX_AGE`].
+    at: Duration,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -890,6 +923,34 @@ impl PolicyGate {
         g.mode()
     }
 
+    /// Read-only view of what is running (the audit-log guard of S2-13): a live task, and the
+    /// busy token. A poisoned gate reports the most busy state (fail closed). Never changes state.
+    pub fn activity(&self) -> Activity {
+        let now = self.clock.now();
+        let g = self.lock();
+        if self.dead() {
+            return Activity {
+                task_live: true,
+                busy_state: BusyState::Reserving,
+            };
+        }
+        let live = g.task.as_ref().is_some_and(|t| t.ended.is_none());
+        let busy_state = if Self::idle(&g, now) {
+            BusyState::Idle
+        } else {
+            match g.busy {
+                Busy::Idle => BusyState::Idle,
+                Busy::Pending(_) => BusyState::Pending,
+                Busy::Reserving(_) => BusyState::Reserving,
+                Busy::Outstanding { .. } => BusyState::Outstanding,
+            }
+        };
+        Activity {
+            task_live: live,
+            busy_state,
+        }
+    }
+
     pub fn current_task(&self) -> Option<TaskId> {
         let g = self.lock();
         if self.dead() {
@@ -933,7 +994,9 @@ impl PolicyGate {
         match g.busy {
             Busy::Idle => true,
             Busy::Outstanding { at, .. } => now.saturating_sub(at) > ACTION_TTL,
-            _ => false,
+            // A reservation whose audit append hung past the cap is dead (see `sweep`).
+            Busy::Reserving(r) => now.saturating_sub(r.at) > RESERVE_MAX_AGE,
+            Busy::Pending(_) => false,
         }
     }
 
@@ -1490,6 +1553,20 @@ impl PolicyGate {
 
     /// Expires waiting approvals past their deadline (timeout is Deny and ends the task).
     fn sweep(&self, g: &mut Inner, now: Duration, out: &mut Out) {
+        // A reservation older than the cap (a hung audit sink) is poisoned: the void generation
+        // moves, so its late phase C is refused, and the gate returns to Idle.
+        if let Busy::Reserving(r) = g.busy {
+            if now.saturating_sub(r.at) > RESERVE_MAX_AGE {
+                self.void.fetch_add(1, Ordering::SeqCst);
+                g.busy = Busy::Idle;
+                let mut rec = blank("reservation_expired");
+                rec.plan_digest8 = Some(r.plan.short());
+                rec.step = Some(r.step);
+                rec.decision = Some("deny");
+                rec.result_code = Some("reserve_timeout");
+                g.aud(out, now, Some(r.task), rec);
+            }
+        }
         let due: Vec<ApprovalId> = g
             .approvals
             .iter()
@@ -1516,6 +1593,13 @@ impl PolicyGate {
         t.ended = Some(why);
         t.mode = Mode::Observe;
         let task = t.task;
+        // Every end except a normal finish or an execution failure kills what the task has live
+        // (a superseded, denied, expired, refused or timed-out task's `ApprovedAction` dies at
+        // once instead of lingering up to `ACTION_TTL`). Completed / ExecFailed are reported by
+        // the driver after it is done with its action.
+        if !matches!(why, EndReason::Completed | EndReason::ExecFailed) {
+            self.void.fetch_add(1, Ordering::SeqCst);
+        }
         if let Some(f) = &t.frozen {
             g.retired.insert(*f.digest.as_bytes());
         }
@@ -1947,6 +2031,7 @@ impl PolicyGate {
                                 step: step.index(),
                                 void_gen: self.void.load(Ordering::SeqCst),
                                 epoch,
+                                at: now,
                             };
                             g.busy = Busy::Reserving(resv);
                             let rec = self.intent_record(&mut g, &step, d, &pre, task, now);
@@ -2014,7 +2099,9 @@ impl PolicyGate {
                 refuse(&mut g, &mut out, Refusal::AuditFailed, false)
             } else {
                 let kill_epoch = self.kill.epoch();
-                let same = g.busy == Busy::Reserving(resv)
+                let too_old = self.clock.now().saturating_sub(resv.at) > RESERVE_MAX_AGE;
+                let same = !too_old
+                    && g.busy == Busy::Reserving(resv)
                     && g.task.as_ref().is_some_and(|t| {
                         t.ended.is_none()
                             && t.mode == Mode::Live
@@ -2050,6 +2137,7 @@ impl PolicyGate {
                         digest,
                         step: resv.step,
                         task: resv.task,
+                        proposal: resv.proposal,
                         at: now,
                     };
                     Ok(ApprovedAction::mint(
@@ -2131,27 +2219,35 @@ impl PolicyGate {
         {
             let mut g = self.lock();
             self.sweep(&mut g, now, &mut out);
-            let Busy::Outstanding {
-                digest: d,
-                step,
-                task: owner,
-                ..
-            } = g.busy
-            else {
+            let matched = match g.busy {
+                Busy::Outstanding {
+                    digest: d,
+                    step,
+                    task,
+                    proposal,
+                    ..
+                } if d == digest => Some((d, step, task, proposal)),
+                _ => None,
+            };
+            let Some((d, step, owner, owner_proposal)) = matched else {
+                // Unmatched or late (after a kill, a TTL release or a different action): nothing
+                // changes, but the report is recorded, content-free.
+                let mut rec = blank("late_result");
+                rec.action_digest8 = Some(digest.short());
+                rec.result_code = Some(r.code);
+                g.aud(&mut out, now, None, rec);
                 drop(g);
                 self.flush(out);
                 return;
             };
-            if d != digest {
-                drop(g);
-                self.flush(out);
-                return;
-            }
             g.busy = Busy::Idle;
             // The result belongs to the task that minted the action, which may have been
             // superseded since: it never touches (or ends) another task.
             let task = Some(owner);
-            let current = g.task.as_ref().is_some_and(|t| t.task == owner);
+            let current = g
+                .task
+                .as_ref()
+                .is_some_and(|t| t.proposal == owner_proposal);
             let mut rec = blank("result");
             rec.action_digest8 = Some(d.short());
             rec.step = Some(step);
@@ -2169,7 +2265,7 @@ impl PolicyGate {
                         },
                     );
                     let mut done = false;
-                    if let Some(t) = g.task.as_mut().filter(|t| t.task == owner) {
+                    if let Some(t) = g.task.as_mut().filter(|t| t.proposal == owner_proposal) {
                         if let Some(f) = t.frozen.as_mut() {
                             f.last_progress = now;
                             done = usize::from(f.next_step) >= t.steps.len();

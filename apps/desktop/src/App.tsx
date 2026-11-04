@@ -20,6 +20,7 @@ import {
   errorText,
   hotkeyHint,
   hotkeyProblem,
+  killHotkeyProblem,
   isEmptyPatch,
   issueText,
   keyErrorText,
@@ -113,6 +114,10 @@ export default function App() {
   if (!draft || !current) return <main className="p-4">Loading…</main>;
   const dirty = !isEmptyPatch(buildPatch(current, draft));
   const hkProblem = draft.hotkey.trim() === current.hotkey ? null : hotkeyProblem(draft.hotkey);
+  const killProblem =
+    draft.kill_hotkey.trim() === current.kill_hotkey
+      ? null
+      : killHotkeyProblem(draft.kill_hotkey, draft.hotkey);
   const note = visionNote(draft.profile);
   const missing = cloudMissing(draft);
 
@@ -194,6 +199,32 @@ export default function App() {
           Must include Ctrl, Alt or Super, for example Ctrl+Alt+Space. The microphone is only
           open while you hold it.
         </div>
+
+        <label className="block">
+          Stop-everything hotkey
+          <input
+            className="ml-2 w-48 rounded border px-1"
+            value={draft.kill_hotkey}
+            aria-invalid={killProblem !== null}
+            onChange={(e) => setDraft({ ...draft, kill_hotkey: e.target.value })}
+          />
+          {killProblem && (
+            <span role="status" className="ml-2 text-amber-700">
+              {hotkeyHint(killProblem)}
+            </span>
+          )}
+        </label>
+        <div className="text-neutral-500">
+          Needs at least two modifiers (for example Ctrl+Alt+Shift+K) and must differ from
+          push-to-talk. It stops the agent at once, whatever it is doing.
+        </div>
+        <button
+          type="button"
+          className="rounded border border-red-600 px-3 py-1 text-red-700"
+          onClick={() => void api.killAgent()}
+        >
+          Stop agent
+        </button>
       </Section>
 
       <Section title="Models folder">
@@ -289,6 +320,10 @@ export default function App() {
         <div>Status: {phaseText(phase)}</div>
         <div>
           Hotkey: {status?.hotkey_registered ? "registered" : "not registered"}
+        </div>
+        <div>
+          Stop hotkey: {status?.kill_hotkey_registered ? "registered" : "not registered"}
+          {status && !status.agent_enabled ? " (the agent is off until it can be stopped and logged)" : ""}
         </div>
         {(status?.notices ?? []).map((n) => (
           <div key={n} role="status" className="text-amber-700">

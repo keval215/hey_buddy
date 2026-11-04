@@ -135,6 +135,8 @@ export function auditErrorText(e: unknown): string {
       return "The activity log is not available.";
     case "needs_confirm":
       return "Please confirm first.";
+    case "busy":
+      return "The agent is working. Stop it first, then try again.";
     case "invalid_path":
       return "That location is not allowed. Pick an existing folder such as Documents.";
     case "exists":

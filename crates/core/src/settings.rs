@@ -12,7 +12,7 @@ use voice::registry::Registry;
 
 use crate::api::{
     IssueCode, ProviderChoice, Settings, SettingsField, SettingsIssue, SettingsPatch, VisionMode,
-    DEFAULT_HOTKEY, DEFAULT_PROFILE,
+    DEFAULT_HOTKEY, DEFAULT_KILL_HOTKEY, DEFAULT_PROFILE,
 };
 use crate::models_path::validate_models_dir;
 use crate::route::effective_vision_mode;
@@ -181,6 +181,7 @@ struct Stored {
     profile: String,
     provider: ProviderChoice,
     hotkey: String,
+    kill_hotkey: String,
     anthropic_model: String,
     models_dir: String,
 }
@@ -194,6 +195,7 @@ impl Default for Stored {
             profile: DEFAULT_PROFILE.into(),
             provider: ProviderChoice::Ollama,
             hotkey: DEFAULT_HOTKEY.into(),
+            kill_hotkey: DEFAULT_KILL_HOTKEY.into(),
             anthropic_model: String::new(),
             models_dir: String::new(),
         }
@@ -226,6 +228,21 @@ impl Stored {
                     issues.push(issue(SettingsField::Hotkey, code));
                 }
             }
+        }
+        if wants(|p| p.kill_hotkey.is_some()) {
+            match crate::kill_hotkey::kill_hotkey_issue(&self.kill_hotkey, &out.hotkey) {
+                Ok(h) => out.kill_hotkey = h,
+                Err(code) => {
+                    out.kill_hotkey = DEFAULT_KILL_HOTKEY.into();
+                    issues.push(issue(SettingsField::KillHotkey, code));
+                }
+            }
+        }
+        // A push-to-talk change that lands on the kill chord is the one rejected (a kill chord
+        // equal to the push-to-talk chord was already rejected above).
+        if out.hotkey == out.kill_hotkey {
+            out.hotkey = DEFAULT_HOTKEY.into();
+            issues.push(issue(SettingsField::Hotkey, IssueCode::Duplicate));
         }
         if wants(|p| p.anthropic_model.is_some()) {
             match model_id_issue(&self.anthropic_model) {
@@ -311,6 +328,7 @@ impl SettingsStore {
             profile: self.stored.profile.clone(),
             provider: self.stored.provider,
             hotkey: self.stored.hotkey.clone(),
+            kill_hotkey: self.stored.kill_hotkey.clone(),
             has_api_key: false,
             anthropic_model: self.stored.anthropic_model.clone(),
             models_dir: self.stored.models_dir.clone(),
@@ -340,6 +358,9 @@ impl SettingsStore {
         }
         if let Some(v) = &patch.hotkey {
             next.hotkey = v.clone();
+        }
+        if let Some(v) = &patch.kill_hotkey {
+            next.kill_hotkey = v.clone();
         }
         if let Some(v) = &patch.anthropic_model {
             next.anthropic_model = v.clone();
@@ -651,6 +672,66 @@ mod tests {
                 }]
             );
         }
+    }
+
+    #[test]
+    fn kill_hotkey_setting_validation_and_conflicts() {
+        let (d, mut s) = store();
+        let path = d.path().join("cfg").join("settings.json");
+        assert_eq!(s.settings().kill_hotkey, DEFAULT_KILL_HOTKEY);
+        // Valid.
+        let (out, issues) = s
+            .apply_with_issues(&patch_of(|p| p.kill_hotkey = Some("alt+shift+f9".into())))
+            .unwrap();
+        assert_eq!(
+            (out.kill_hotkey.as_str(), issues.len()),
+            ("Alt+Shift+F9", 0)
+        );
+        assert_eq!(
+            SettingsStore::load(&path).settings().kill_hotkey,
+            "Alt+Shift+F9"
+        );
+        // One modifier, no modifier, the push-to-talk chord, hostile text: default + typed issue.
+        for (bad, code) in [
+            ("Ctrl+K", IssueCode::NeedsTwoModifiers),
+            ("Shift+K", IssueCode::NeedsModifier),
+            ("K", IssueCode::NeedsModifier),
+            ("Ctrl+Alt+Space", IssueCode::Duplicate),
+            ("ctrl+ALT+space", IssueCode::Duplicate),
+            ("Ctrl+Alt+\u{202e}K", IssueCode::ControlChars),
+            ("", IssueCode::InvalidFormat),
+        ] {
+            let (out, issues) = s
+                .apply_with_issues(&patch_of(|p| p.kill_hotkey = Some(bad.into())))
+                .unwrap();
+            assert_eq!(out.kill_hotkey, DEFAULT_KILL_HOTKEY, "{bad:?}");
+            assert_eq!(
+                issue_codes(&issues, SettingsField::KillHotkey),
+                vec![code],
+                "{bad:?}"
+            );
+            let on_disk = std::fs::read_to_string(&path).unwrap();
+            assert!(!on_disk.contains("202e") && !on_disk.contains("Ctrl+K"));
+        }
+        // Moving push-to-talk onto the kill chord is the rejected change.
+        let (out, issues) = s
+            .apply_with_issues(&patch_of(|p| p.hotkey = Some("ctrl+alt+shift+k".into())))
+            .unwrap();
+        assert_eq!(out.hotkey, DEFAULT_HOTKEY);
+        assert_eq!(out.kill_hotkey, DEFAULT_KILL_HOTKEY);
+        assert_eq!(
+            issue_codes(&issues, SettingsField::Hotkey),
+            vec![IssueCode::Duplicate]
+        );
+        // A stored file with both equal is not trusted.
+        std::fs::write(
+            &path,
+            r#"{"hotkey":"Ctrl+Alt+K","kill_hotkey":"Ctrl+Alt+K"}"#,
+        )
+        .unwrap();
+        let bad = SettingsStore::load(&path);
+        assert_eq!(bad.load_error(), Some(ERR_SETTINGS_CORRUPT));
+        assert_eq!(bad.settings().kill_hotkey, DEFAULT_KILL_HOTKEY);
     }
 
     #[test]
@@ -970,6 +1051,7 @@ mod tests {
         "profile",     // which models load
         "provider",    // ollama or anthropic
         "hotkey",      // the push-to-talk chord (must include Ctrl/Alt/Super)
+        "kill_hotkey", // the kill-switch chord (can only STOP things; two modifiers, never the PTT chord)
         "has_api_key", // read-only display flag, never the key
         "anthropic_model", // cloud model id
         "models_dir",  // where model files live
@@ -1027,6 +1109,7 @@ mod tests {
                 profile: Some(String::new()),
                 provider: Some(ProviderChoice::Ollama),
                 hotkey: Some(String::new()),
+                kill_hotkey: Some(String::new()),
                 anthropic_model: Some(String::new()),
                 models_dir: Some(String::new()),
             })

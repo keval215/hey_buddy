@@ -73,7 +73,8 @@ pub use classify::classify;
 pub use clock::{Clock, ManualClock, SystemClock};
 pub use config::{
     Mode, PolicyConfig, TaskOrigin, ACTION_TTL, INPUT_GUARD, MAX_MINTS_PER_MINUTE, MIN_MINT_GAP,
-    OBSERVATION_MAX_AGE, PLAN_APPROVAL_TIMEOUT, PLAN_GRANT_TTL, STALL_TTL, STEP_APPROVAL_TIMEOUT,
+    OBSERVATION_MAX_AGE, PLAN_APPROVAL_TIMEOUT, PLAN_GRANT_TTL, RESERVE_MAX_AGE, STALL_TTL,
+    STEP_APPROVAL_TIMEOUT,
 };
 pub use error::PlanError;
 pub use events::{
@@ -81,9 +82,9 @@ pub use events::{
 };
 pub use facts::{BoundStepFacts, FactOp, PolicyContext};
 pub use gate::{
-    ApprovedAction, Decision, DenyReason, EndReason, Evaluation, ExecKind, ExecResult, GateError,
-    PendingPlanApproval, PendingStepApproval, PlanGrant, PolicyGate, Refusal, Revoked, StepGrant,
-    VoidReason,
+    Activity, ApprovedAction, BusyState, Decision, DenyReason, EndReason, Evaluation, ExecKind,
+    ExecResult, GateError, PendingPlanApproval, PendingStepApproval, PlanGrant, PolicyGate,
+    Refusal, Revoked, StepGrant, VoidReason,
 };
 pub use ids::{ActionDigest, ApprovalId, TaskId};
 pub use kill::{KillReason, KillSwitch};

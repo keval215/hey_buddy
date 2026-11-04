@@ -223,6 +223,9 @@ pub struct Settings {
     pub provider: ProviderChoice,
     /// Push-to-talk shortcut, e.g. `Ctrl+Alt+Space`.
     pub hotkey: String,
+    /// Kill-switch shortcut (S2-13), default `Ctrl+Alt+Shift+K`: at least two modifiers, one of
+    /// them Ctrl/Alt/Super, and never the push-to-talk chord.
+    pub kill_hotkey: String,
     /// Whether an API key is stored in the OS keychain (best effort); never persisted here and
     /// the key itself is never returned.
     pub has_api_key: bool,
@@ -236,6 +239,7 @@ pub struct Settings {
 }
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+Space";
+pub const DEFAULT_KILL_HOTKEY: &str = "Ctrl+Alt+Shift+K";
 pub const DEFAULT_PROFILE: &str = "default";
 
 impl Default for Settings {
@@ -246,6 +250,7 @@ impl Default for Settings {
             profile: DEFAULT_PROFILE.into(),
             provider: ProviderChoice::Ollama,
             hotkey: DEFAULT_HOTKEY.into(),
+            kill_hotkey: DEFAULT_KILL_HOTKEY.into(),
             has_api_key: false,
             anthropic_model: String::new(),
             models_dir: String::new(),
@@ -277,6 +282,8 @@ pub struct SettingsPatch {
     #[ts(optional)]
     pub hotkey: Option<String>,
     #[ts(optional)]
+    pub kill_hotkey: Option<String>,
+    #[ts(optional)]
     pub anthropic_model: Option<String>,
     /// Custom models directory; an empty string goes back to the default.
     #[ts(optional)]
@@ -291,6 +298,7 @@ pub enum SettingsField {
     File,
     Profile,
     Hotkey,
+    KillHotkey,
     AnthropicModel,
     ModelsDir,
 }
@@ -304,6 +312,10 @@ pub enum IssueCode {
     Unknown,
     /// Hotkey without Ctrl, Alt or Super.
     NeedsModifier,
+    /// Kill hotkey with fewer than two modifiers.
+    NeedsTwoModifiers,
+    /// Kill hotkey equal to the push-to-talk hotkey (or the other way round).
+    Duplicate,
     /// Wrong shape (hotkey grammar, model id characters, forbidden path characters).
     InvalidFormat,
     TooLong,
@@ -442,6 +454,11 @@ pub struct Status {
     pub phase: Phase,
     pub firewall: FirewallStatus,
     pub hotkey_registered: bool,
+    /// The kill-switch shortcut is registered with the OS (S2-13). `false` keeps the agent off:
+    /// no way to stop it means no agent (fail closed).
+    pub kill_hotkey_registered: bool,
+    /// The agent may run: activity log writable AND a kill trigger registered.
+    pub agent_enabled: bool,
     /// Fixed token when the settings file was unreadable and defaults are in use.
     pub settings_error: Option<String>,
     /// Stored values replaced at startup (e.g. a models folder that is gone).

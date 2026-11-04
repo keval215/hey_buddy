@@ -16,6 +16,8 @@ pub enum KillReason {
     /// The runaway/limit detector.
     Limit,
     Shutdown,
+    /// An internal fault (a panic in the agent path) tripped it.
+    Panic,
 }
 
 impl KillReason {
@@ -26,6 +28,7 @@ impl KillReason {
             KillReason::StopButton => "stop_button",
             KillReason::Limit => "limit",
             KillReason::Shutdown => "shutdown",
+            KillReason::Panic => "panic",
         }
     }
 }
@@ -60,12 +63,25 @@ impl KillSwitch {
     /// Trips the switch: the epoch moves first (lock-free), then the callbacks run. Returns the
     /// new epoch. Never blocks on the gate.
     pub fn trip(&self, reason: KillReason) -> u64 {
-        let new = self.epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        let new = self.bump();
+        self.run_hooks(reason);
+        new
+    }
+
+    /// Moves the epoch only (lock-free, never blocks, runs no callback): every
+    /// `ApprovedAction::check_live` fails from this instant. The kill controller (S2-13) calls
+    /// this on the triggering thread and runs [`run_hooks`](Self::run_hooks) on its worker.
+    pub fn bump(&self) -> u64 {
+        self.epoch.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// Runs the registered callbacks (the gate's `void_all`, ...). A panicking callback does not
+    /// stop the others.
+    pub fn run_hooks(&self, reason: KillReason) {
         let hooks: Vec<Hook> = self.hooks.lock().unwrap_or_else(|e| e.into_inner()).clone();
         for h in hooks {
-            h(reason);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h(reason)));
         }
-        new
     }
 
     /// Registers a callback run (on the tripping thread) after every trip.

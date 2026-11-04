@@ -39,6 +39,7 @@ describe("texts", () => {
   it("maps the core tokens", () => {
     expect(denyErrorText("would_be_empty")).toMatch(/never be empty/);
     expect(denyErrorText("needs_confirm")).toMatch(/confirm/);
+    expect(denyErrorText("busy")).toMatch(/Stop it first/);
     expect(denyErrorText("zzz")).toBe("zzz");
     expect(denyErrorText(1)).toBe("Something went wrong");
   });

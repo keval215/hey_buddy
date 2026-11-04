@@ -36,6 +36,8 @@ export function buildPatch(current: Settings, draft: Settings): SettingsPatch {
   if (model !== current.anthropic_model) patch.anthropic_model = model;
   const hk = draft.hotkey.trim();
   if (hk !== current.hotkey) patch.hotkey = hk;
+  const kk = draft.kill_hotkey.trim();
+  if (kk !== current.kill_hotkey) patch.kill_hotkey = kk;
   const dir = draft.models_dir.trim();
   if (dir !== current.models_dir) patch.models_dir = dir;
   return patch;
@@ -139,6 +141,7 @@ export function swapErrorText(e: unknown): string {
 // the core's typed issues into plain sentences.
 
 export const DEFAULT_HOTKEY = "Ctrl+Alt+Space";
+export const DEFAULT_KILL_HOTKEY = "Ctrl+Alt+Shift+K";
 
 /** Explanation shown when `local_only` is switched off. */
 export const LOCAL_ONLY_OFF_NOTE =
@@ -190,6 +193,29 @@ export function hotkeyProblem(text: string): IssueCode | null {
   return null;
 }
 
+/**
+ * Quick check of the kill-switch hotkey as typed: the push-to-talk rules plus at least two
+ * modifiers and not the push-to-talk chord. The core decides; this only gives early feedback.
+ */
+export function killHotkeyProblem(text: string, ptt: string): IssueCode | null {
+  const base = hotkeyProblem(text);
+  if (base) return base;
+  const parts = text.split("+").map((p) => p.trim().toLowerCase());
+  const mods = new Set(
+    parts
+      .map((p) => ({ control: "ctrl", option: "alt", cmd: "super", command: "super", meta: "super", win: "super" })[p as never] ?? p)
+      .filter((p) => ["ctrl", "alt", "shift", "super"].includes(p)),
+  );
+  if (mods.size < 2) return "needs_two_modifiers";
+  const canon = (t: string) =>
+    t
+      .split("+")
+      .map((p) => p.trim().toLowerCase())
+      .sort()
+      .join("+");
+  return canon(text) === canon(ptt) ? "duplicate" : null;
+}
+
 /** Text for the user's own input in a message: no control or direction-changing characters. */
 export function shownValue(s: string, max = 40): string {
   const clean = s.replace(
@@ -203,6 +229,8 @@ export function shownValue(s: string, max = 40): string {
 const REASONS: Record<IssueCode, string> = {
   unknown: "that is not one of the choices",
   needs_modifier: "needs Ctrl/Alt/Super",
+  needs_two_modifiers: "the stop shortcut needs at least two modifiers (for example Ctrl+Alt+Shift)",
+  duplicate: "it is the same as the other shortcut",
   invalid_format: "that is not in a form that is accepted",
   too_long: "it is too long",
   control_chars: "it contains hidden or control characters",
@@ -240,6 +268,14 @@ export function issueText(issue: SettingsIssue, attempted?: SettingsPatch): stri
       const x = attempted?.hotkey;
       const head = x !== undefined ? `Your hotkey '${shownValue(x)}'` : "The saved hotkey";
       return `${head} was not saved: ${why}. Using the default (${DEFAULT_HOTKEY}).`;
+    }
+    case "kill_hotkey": {
+      const x = attempted?.kill_hotkey;
+      const head = x !== undefined ? `Your stop shortcut '${shownValue(x)}'` : "The saved stop shortcut";
+      if (issue.code === "unavailable") {
+        return `${head} was not saved: the chord could not be registered; the previous one is still active.`;
+      }
+      return `${head} was not saved: ${why}. Using the default (${DEFAULT_KILL_HOTKEY}).`;
     }
     case "models_dir": {
       const x = attempted?.models_dir;

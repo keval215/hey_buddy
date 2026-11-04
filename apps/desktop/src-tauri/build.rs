@@ -25,6 +25,8 @@ const COMMANDS: &[&str] = &[
     "get_audit_entries",
     "export_audit_log",
     "clear_audit_log",
+    "kill_agent",
+    "debug_fake_task",
 ];
 
 fn main() {

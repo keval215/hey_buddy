@@ -68,6 +68,14 @@ fn cond_grant_digest_must_be_the_frozen_plan() {
     // Plan B becomes the live task; plan A's grant cannot run it.
     let (_plan_b, _grant_b) = rig.go_live(&plan5());
     let s = fresh_bind(&rig, &plan_a, 1);
+    // Superseding bumped the void generation, so the old grant is dead on that count first.
+    assert_eq!(
+        rig.gate.authorize(s, &mut grant_a, None).err(),
+        Some(Refusal::Voided)
+    );
+    // With the generation resynced by hand the digest check refuses on its own.
+    grant_a.void_gen = rig.gate.void.load(Ordering::SeqCst);
+    let s = fresh_bind(&rig, &plan_a, 1);
     assert_eq!(
         rig.gate.authorize(s, &mut grant_a, None).err(),
         Some(Refusal::WrongPlan)
@@ -1443,6 +1451,9 @@ fn an_old_grant_for_a_re_proposed_task_id_is_refused_by_the_plan_digest() {
     assert_ne!(grant_a.plan_digest(), _grant_b.plan_digest());
     assert_eq!(grant_a.next_step(), _grant_b.next_step());
     rig.advance(300);
+    // The re-proposal superseded the first (void generation bumped); resync it by hand so the
+    // plan-digest check is the one under test.
+    grant_a.void_gen = rig.gate.void.load(Ordering::SeqCst);
     let s = rig.bind(&b, 0);
     assert_eq!(
         rig.gate.authorize(s, &mut grant_a, None).err(),
@@ -1489,4 +1500,182 @@ fn precheck_task_epoch_and_grant_epoch_each_refuse_on_their_own() {
         rig.gate.authorize(s, &mut grant, None).err(),
         Some(Refusal::TaskEnded)
     );
+}
+
+// ---- S2-13: queued tightenings ---------------------------------------------------------------
+
+#[test]
+fn a_superseded_tasks_live_action_dies_at_once() {
+    let (rig, plan, mut grant) = live5();
+    rig.run_step(&plan, &mut grant, 0);
+    let s = fresh_bind(&rig, &plan, 1);
+    let a = rig.gate.authorize(s, &mut grant, None).unwrap();
+    assert!(a.check_live().is_ok());
+    let _plan2 = rig.propose(&plan5());
+    assert!(a.check_live().is_err(), "supersede must revoke the action");
+}
+
+#[test]
+fn every_end_but_completed_and_exec_failed_bumps_the_void_generation() {
+    for (why, bumps) in [
+        (EndReason::Completed, false),
+        (EndReason::ExecFailed, false),
+        (EndReason::Denied, true),
+        (EndReason::Timeout, true),
+        (EndReason::Expired, true),
+        (EndReason::Refused, true),
+        (EndReason::Killed, true),
+        (EndReason::Voided, true),
+        (EndReason::Superseded, true),
+    ] {
+        let (rig, _plan, _grant) = live5();
+        let before = rig.gate.void.load(Ordering::SeqCst);
+        let mut out = Out::default();
+        {
+            let mut g = rig.gate.lock();
+            rig.gate.end_task(&mut g, why, Duration::ZERO, &mut out);
+        }
+        let after = rig.gate.void.load(Ordering::SeqCst);
+        assert_eq!(after != before, bumps, "{why:?}");
+    }
+}
+
+#[test]
+fn a_task_ended_by_a_non_void_path_during_phase_b_is_voided_and_does_not_advance() {
+    let (rig, ctl, _plan, h) = stalled_reservation();
+    // The task expires (a non-void end) while the audit append is stalled.
+    {
+        let mut out = Out::default();
+        let mut g = rig.gate.lock();
+        rig.gate
+            .end_task(&mut g, EndReason::Expired, Duration::ZERO, &mut out);
+    }
+    ctl.release[0].send(()).unwrap();
+    let (r, grant) = h.join().unwrap();
+    assert_eq!(r.err(), Some(Refusal::Voided));
+    assert_eq!(grant.next_step(), 1, "no advance");
+    assert_eq!(busy_of(&rig), Busy::Idle);
+    assert_eq!(rig.audit.intents().len(), 1, "the intent was written ahead");
+    assert!(rig
+        .audit
+        .records()
+        .iter()
+        .any(|r| r.event == "refused_after_intent"));
+}
+
+#[test]
+fn a_plan_grant_from_another_gate_is_refused_by_the_gate_check() {
+    let (rig, plan, grant) = live5();
+    let (other, _oplan, mut ograft) = live5();
+    let _ = grant;
+    // Same step, same task ids: only the PlanGrant.gate differs.
+    let s = fresh_bind(&rig, &plan, 0);
+    assert_eq!(
+        rig.gate.authorize(s, &mut ograft, None).err(),
+        Some(Refusal::WrongPlan)
+    );
+    assert!(rig.audit.intents().is_empty());
+    drop(other);
+}
+
+#[test]
+fn a_late_result_cannot_end_a_re_proposal_that_reuses_the_task_id() {
+    let rig = Rig::new();
+    let cat = crate::world::catalogue();
+    let pctx = PlanContext::new(crate::world::TRANSCRIPT, &cat);
+    let same = TaskId(7);
+    let draft = steps_json(&[&click("Notes"), &click("Refresh")]);
+    let a = rig.gate.propose(same, &draft, &pctx).unwrap();
+    let mut grant_a = rig.approve(&a);
+    rig.advance(300);
+    let act = rig
+        .gate
+        .authorize(rig.bind(&a, 0), &mut grant_a, None)
+        .unwrap();
+    // Re-proposal with the SAME task id supersedes it.
+    let b = rig.gate.propose(same, &draft, &pctx).unwrap();
+    assert_eq!(rig.gate.current_task(), Some(same));
+    rig.gate
+        .record_result(act.digest(), &ExecResult::failed("driver_error"));
+    assert_eq!(
+        rig.gate.current_task(),
+        Some(same),
+        "the late result of the old proposal must not end the new one"
+    );
+    drop(b);
+}
+
+#[test]
+fn an_unmatched_result_leaves_a_content_free_late_result_record() {
+    let (rig, plan, mut grant) = live5();
+    rig.run_step(&plan, &mut grant, 0);
+    let s = fresh_bind(&rig, &plan, 1);
+    let a = rig.gate.authorize(s, &mut grant, None).unwrap();
+    let d = a.digest();
+    rig.gate.record_result(d, &ExecResult::executed());
+    // The same digest again, and a result with nothing outstanding.
+    rig.gate.record_result(d, &ExecResult::executed());
+    let late: Vec<_> = rig
+        .audit
+        .records()
+        .into_iter()
+        .filter(|r| r.event == "late_result")
+        .collect();
+    assert_eq!(late.len(), 1);
+    assert_eq!(late[0].action_digest8.as_deref(), Some(d.short().as_str()));
+    assert!(late[0].target_label.is_none() && late[0].app_id.is_none());
+    assert_eq!(late[0].result_code, Some("ok"));
+}
+
+#[test]
+fn a_hung_audit_sink_beyond_the_reserve_cap_poisons_the_reservation() {
+    let (rig, ctl, plan, h) = stalled_reservation();
+    rig.advance(10_001);
+    // Any entry point sweeps: the stale reservation is dropped and the gate is Idle again.
+    assert_eq!(rig.gate.activity().busy_state, BusyState::Idle);
+    let s = rig.bind(&plan, 1);
+    let _ = rig.gate.evaluate(&s, None);
+    {
+        let mut out = Out::default();
+        let mut g = rig.gate.lock();
+        rig.gate.sweep(&mut g, rig.gate.clock.now(), &mut out);
+        assert_eq!(g.busy, Busy::Idle);
+    }
+    ctl.release[0].send(()).unwrap();
+    let (r, grant) = h.join().unwrap();
+    assert_eq!(r.err(), Some(Refusal::Voided), "the late mint is refused");
+    assert_eq!(grant.next_step(), 1);
+    assert_eq!(busy_of(&rig), Busy::Idle);
+    assert!(rig
+        .audit
+        .records()
+        .iter()
+        .any(|r| r.event == "reservation_expired"));
+}
+
+#[test]
+fn a_late_phase_c_past_the_cap_is_refused_even_if_nobody_swept() {
+    let (rig, ctl, _plan, h) = stalled_reservation();
+    rig.advance(10_001);
+    ctl.release[0].send(()).unwrap();
+    let (r, grant) = h.join().unwrap();
+    assert_eq!(r.err(), Some(Refusal::Voided));
+    assert_eq!(grant.next_step(), 1);
+    assert_eq!(busy_of(&rig), Busy::Idle);
+}
+
+#[test]
+fn activity_reports_task_and_busy_state() {
+    let rig = Rig::new();
+    assert!(rig.gate.activity().is_idle());
+    let (plan, mut grant) = rig.go_live(&plan5());
+    assert!(rig.gate.activity().task_live);
+    rig.run_step(&plan, &mut grant, 0);
+    let s = fresh_bind(&rig, &plan, 1);
+    let a = rig.gate.authorize(s, &mut grant, None).unwrap();
+    assert_eq!(rig.gate.activity().busy_state, BusyState::Outstanding);
+    rig.gate.record_result(a.digest(), &ExecResult::executed());
+    assert_eq!(rig.gate.activity().busy_state, BusyState::Idle);
+    rig.gate.void_all(VoidReason::Quit);
+    assert!(rig.gate.activity().is_idle());
 }

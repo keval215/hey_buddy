@@ -19,6 +19,9 @@ pub const STALL_TTL: Duration = Duration::from_secs(30);
 pub const OBSERVATION_MAX_AGE: Duration = Duration::from_secs(60);
 /// `ApprovedAction::check_live` fails after this long.
 pub const ACTION_TTL: Duration = Duration::from_secs(2);
+/// A reservation (the window in which `authorize` waits for the write-ahead audit append) older
+/// than this is poisoned: the gate returns to Idle and the late mint is refused (S2-13).
+pub const RESERVE_MAX_AGE: Duration = Duration::from_secs(10);
 /// Minimum time between two mints.
 pub const MIN_MINT_GAP: Duration = Duration::from_millis(250);
 /// Maximum mints in any rolling minute.

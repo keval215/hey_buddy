@@ -5,7 +5,7 @@ import type { VisionMode } from "./VisionMode";
 /**
  * Partial update for `update_settings`. Absent fields stay as they are.
  */
-export type SettingsPatch = { local_only?: boolean, vision_mode?: VisionMode, profile?: string, provider?: ProviderChoice, hotkey?: string, anthropic_model?: string, 
+export type SettingsPatch = { local_only?: boolean, vision_mode?: VisionMode, profile?: string, provider?: ProviderChoice, hotkey?: string, kill_hotkey?: string, anthropic_model?: string, 
 /**
  * Custom models directory; an empty string goes back to the default.
  */

@@ -28,6 +28,9 @@ pub enum AuditCmdError {
     Exists,
     #[error("io_error")]
     Io,
+    /// An agent task is active or an intent / action is outstanding (S2-13).
+    #[error("busy")]
+    Busy,
 }
 
 impl From<LogError> for AuditCmdError {

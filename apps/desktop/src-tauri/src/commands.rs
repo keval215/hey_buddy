@@ -7,10 +7,11 @@ use buddy_core::api::{
     LastRequestDto, ModelRow, PreviewDto, Settings, SettingsField, SettingsIssue, SettingsPatch,
     SettingsResult, Status, SwapTarget,
 };
+use buddy_core::kill::{KillController, KillReason};
 use buddy_core::Buddy;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
-use crate::hotkey;
+use crate::{hotkey, kill};
 
 type B<'a> = State<'a, Arc<Buddy>>;
 
@@ -52,6 +53,29 @@ pub fn update_settings(
         }
         // The new shortcut is live (also heals a failed registration at startup).
         b.set_hotkey_registered(true);
+    }
+    if let Some((old, new)) = update.kill_hotkey_changed {
+        let ctl = app
+            .try_state::<Arc<KillController>>()
+            .map(|c| Arc::clone(&c));
+        let ok = ctl
+            .as_ref()
+            .is_some_and(|c| kill::rebind(&app, c, Some(&old), &new).is_ok());
+        if ok {
+            b.set_kill_hotkey_registered(true);
+        } else {
+            // The old chord stays registered; put it back in the settings file too.
+            if let Ok(back) = b.update_settings(&SettingsPatch {
+                kill_hotkey: Some(old),
+                ..Default::default()
+            }) {
+                result.settings = back.settings;
+            }
+            result.issues.push(SettingsIssue {
+                field: SettingsField::KillHotkey,
+                code: IssueCode::Unavailable,
+            });
+        }
     }
     Ok(result)
 }
@@ -191,6 +215,21 @@ pub fn clear_audit_log(b: B, confirm: Option<bool>) -> Result<AuditClearDto, Str
         .map_err(|e| e.to_string())
 }
 
+/// ANY app window (settings, overlay, preview, approval): STOP everything. It can only stop
+/// things, so it is safe to expose everywhere. Never blocks: the epoch moves at once and the
+/// kill worker does the rest. Returns nothing (no state leaks to a compromised page).
+#[tauri::command]
+pub fn kill_agent(ctl: State<Arc<KillController>>) {
+    ctl.trip(KillReason::StopButton);
+}
+
+/// Dev builds only: start a fake long task (waits for the kill switch) for manual tests.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub fn debug_fake_task(ctl: State<Arc<KillController>>) {
+    kill::debug_task::start(&ctl);
+}
+
 #[tauri::command]
 pub fn list_displays(b: B) -> Vec<DisplayDto> {
     b.list_displays()
@@ -227,6 +266,9 @@ mod tests {
         "clear_audit_log",
     ];
 
+    /// Commands every window may call (they can only stop things).
+    const EVERYWHERE: &[&str] = &["kill_agent"];
+
     /// The quoted strings of the `"permissions": [...]` array (capability files hold no
     /// escapes there; keeps this test free of a JSON dependency).
     fn permissions(json: &str) -> BTreeSet<String> {
@@ -256,10 +298,22 @@ mod tests {
             assert!(!overlay.contains(&p), "overlay.json must not allow {p}");
             assert!(!preview.contains(&p), "preview.json must not allow {p}");
         }
-        // The overlay can call nothing; the preview panel only its two commands.
-        assert!(overlay.iter().all(|p| p.starts_with("core:event:")));
-        let preview_cmds: BTreeSet<_> =
-            preview.iter().filter(|p| p.starts_with("allow-")).collect();
+        // `kill_agent` (stop only) is callable from every window.
+        for cmd in EVERYWHERE {
+            let p = allow(cmd);
+            assert!(default.contains(&p), "default.json must allow {p}");
+            assert!(overlay.contains(&p), "overlay.json must allow {p}");
+            assert!(preview.contains(&p), "preview.json must allow {p}");
+        }
+        // The overlay can call nothing but the stop command; the preview panel only its two
+        // commands and the stop command.
+        assert!(overlay
+            .iter()
+            .all(|p| p.starts_with("core:event:") || p == "allow-kill-agent"));
+        let preview_cmds: BTreeSet<_> = preview
+            .iter()
+            .filter(|p| p.starts_with("allow-") && *p != "allow-kill-agent")
+            .collect();
         assert_eq!(
             preview_cmds,
             ["allow-preview-decision", "allow-get-pending-preview"]
@@ -276,6 +330,17 @@ mod tests {
         let build = include_str!("../build.rs");
         let main = include_str!("main.rs");
         for cmd in NEW_COMMANDS {
+            assert!(
+                build.contains(&format!("\"{cmd}\"")),
+                "build.rs lacks {cmd}"
+            );
+            assert_eq!(
+                main.matches(&format!("commands::{cmd},")).count(),
+                2,
+                "main.rs must register {cmd} in both handler lists"
+            );
+        }
+        for cmd in EVERYWHERE {
             assert!(
                 build.contains(&format!("\"{cmd}\"")),
                 "build.rs lacks {cmd}"

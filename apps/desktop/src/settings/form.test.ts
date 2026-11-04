@@ -9,6 +9,8 @@ import {
   cloudMissing,
   hotkeyHint,
   hotkeyProblem,
+  killHotkeyProblem,
+  DEFAULT_KILL_HOTKEY,
   issueText,
   shownValue,
   visionNote,
@@ -28,6 +30,7 @@ const base: Settings = {
   vision_mode: "Auto",
   profile: "default",
   hotkey: "Ctrl+Alt+Space",
+  kill_hotkey: "Ctrl+Alt+Shift+K",
   has_api_key: false,
   provider: "Ollama",
   anthropic_model: "",
@@ -221,5 +224,39 @@ describe("explanations", () => {
         has_api_key: true,
       }),
     ).toEqual([]);
+  });
+});
+
+describe("killHotkeyProblem", () => {
+  const ptt = "Ctrl+Alt+Space";
+  it("accepts chords with two modifiers that differ from push-to-talk", () => {
+    for (const ok of ["Ctrl+Alt+Shift+K", "alt+shift+f9", "Ctrl+Alt+K", "cmd+shift+x"]) {
+      expect(killHotkeyProblem(ok, ptt), ok).toBeNull();
+    }
+  });
+  it("rejects what the core rejects", () => {
+    expect(killHotkeyProblem("Ctrl+K", ptt)).toBe("needs_two_modifiers");
+    expect(killHotkeyProblem("Shift+K", ptt)).toBe("needs_modifier");
+    expect(killHotkeyProblem("space+alt+ctrl", ptt)).toBe("duplicate");
+    expect(killHotkeyProblem("Ctrl+Alt+\u202eK", ptt)).toBe("control_chars");
+    expect(killHotkeyProblem("", ptt)).toBe("invalid_format");
+  });
+  it("patches and explains", () => {
+    expect(buildPatch(base, { ...base, kill_hotkey: " Alt+Shift+F9 " })).toEqual({
+      kill_hotkey: "Alt+Shift+F9",
+    });
+    expect(
+      issueText({ field: "kill_hotkey", code: "duplicate" }, { kill_hotkey: "Ctrl+Alt+Space" }),
+    ).toBe(
+      `Your stop shortcut 'Ctrl+Alt+Space' was not saved: it is the same as the other shortcut. Using the default (${DEFAULT_KILL_HOTKEY}).`,
+    );
+    const unavailable = issueText(
+      { field: "kill_hotkey", code: "unavailable" },
+      { kill_hotkey: "Ctrl+Alt+Shift+J" },
+    );
+    expect(unavailable).toBe(
+      "Your stop shortcut 'Ctrl+Alt+Shift+J' was not saved: the chord could not be registered; the previous one is still active.",
+    );
+    expect(unavailable).not.toContain("Using the default");
   });
 });

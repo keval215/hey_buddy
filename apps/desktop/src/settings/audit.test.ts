@@ -170,6 +170,7 @@ describe("error text", () => {
   it("maps tokens and never echoes unknown input", () => {
     expect(auditErrorText("exists")).toContain("already exists");
     expect(auditErrorText("needs_confirm")).toBe("Please confirm first.");
+    expect(auditErrorText("busy")).toMatch(/Stop it first/);
     expect(auditErrorText("PRIVATE_MARKER")).toBe("Something went wrong");
     expect(auditErrorText(undefined)).toBe("Something went wrong");
   });
