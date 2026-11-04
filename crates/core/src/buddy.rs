@@ -466,6 +466,10 @@ impl Buddy {
         let settings = lock(&self.settings).settings();
         provider_allowed(&settings, provider.locality())?;
         let prepared = provider.prepare(request)?;
+        // Debug tripwire (S2-5): panics if a registered title/URL marker is in the built
+        // request. Empty in release builds; fed only by tests and fakes.
+        #[cfg(any(debug_assertions, test))]
+        crate::leakguard::assert_no_known_titles(&prepared);
         // The prepared request, not the provider's claim, decides: either side saying Cloud
         // means cloud.
         let locality =

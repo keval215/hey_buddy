@@ -55,7 +55,7 @@ Known limitations of the T13 readers:
 - Deeper labelled Groups ARE emitted (e.g. `group "Settings"`), unless they intersect a padded
   secure rect (geometric drop).
 - StaticText/Heading values are emitted at any depth: a page title shown as visible heading text is treated as page content, not as a window title (the D-003 title boundary is by role, not by content).
-- Tab labels are dropped (they are other pages' titles); a tab may show as an unlabeled `tab`.
+- Tabs are dropped with their whole subtree (S2-5; their labels are other pages' titles), so no `tab` line is emitted any more. See "Title and URL leak checks (S2-5)".
 - Labels longer than ~4 KB are dropped.
 - Windows: if a field has no ValuePattern or `CurrentValue` fails, its state is unknown and is
   reported as `[empty]` (privacy-safe, but may be wrong).
@@ -345,6 +345,42 @@ one small entry in `models/registry.json` (e.g. `silero-vad-v5` or `whisper-base
       and loads it without restarting. A failed engine load shows "Retry load" under Status.
 - [ ] A redirect or URL that is not https must be refused (edit the registry `url` to `http://...`:
       the row stays downloadable only if the app rejects it with "HTTPS only").
+
+## Title and URL leak checks (S2-5) - UNTESTED on this machine (Windows browsers / Electron)
+
+Automated Linux tests cover the redactor, the walker and the request path with hostile fixtures;
+the real UIA trees of the browsers below are not checkable here. Contract: only the app id says
+"where you are"; titles, tab names and URLs never reach the request. Repeat on Chrome, Edge,
+Firefox and one Electron app (VS Code, Slack or Discord). Use a throwaway page you control, e.g. a
+local HTML file served at `http://localhost:8000/` with
+`<title>MARKER_TITLE_7731 reset your password</title>` and a link
+`?token=MARKER_RESET_TOKEN_0123456789abcdef` in the URL (add a second tab with another unique
+title, a bookmark named `MARKER_BOOKMARK_55`, and download a file named `MARKER_DOWNLOAD_55.txt`).
+
+- [ ] Hold the hotkey on that page and ask "where am I?"; open Settings -> Last request.
+- [ ] The screen text starts with `app: chrome.exe` / `msedge.exe` / `firefox.exe` / the Electron
+      exe and nothing else about the location: no title, no path, no URL.
+- [ ] `MARKER_TITLE_7731`, `MARKER_RESET_TOKEN_0123456789abcdef`, `localhost:8000`, the second tab's
+      title, `MARKER_BOOKMARK_55` and `MARKER_DOWNLOAD_55` appear nowhere in the screen text, the
+      transcript, the request body (open `preview://last/body`), the console or the log.
+- [ ] There is no `tab` line, no `text field "Address and search bar"` (or similar address / search
+      bar line) and nothing from the bookmarks bar or the downloads shelf / bubble.
+- [ ] Page links whose visible text is a URL show as `link "[link]"`; a long token on the page
+      shows as `[token]`; an e-mail address on the page shows as `[email]`.
+- [ ] Numbering still works: ask "where is the Sign in button?" on a login page and the pointer
+      lands on it (ids are dense, chrome nodes take no number).
+- [ ] Note any browser where the chrome still shows (record the role and name that leaked so the
+      lexicon in `crates/firewall/src/scrub.rs` can be extended) and any ordinary page text wrongly
+      replaced (false positives are listed in `docs/title-url-audit.md`).
+- [ ] Non-English UI: repeat in Chrome / Edge with a non-English browser language. The localised
+      bookmarks bar and downloads shelf may not match the English lexicon and could leak child
+      link names or file names (address bar and tabs are dropped by role and stay safe). Record
+      the role and name of anything that leaks.
+- [ ] Known limitations (`docs/title-url-audit.md`): all-uppercase licence keys, tokens under 24
+      characters, `reset?token=abc`, percent-encoded URLs (path stays), `evil\u{3002}example`,
+      `evil[.]example` and `evil dot example` are not scrubbed; do not file them as new bugs.
+- [ ] Screenshots (VisionMode Auto / Always): the title bar, tabs and address bar are visible in the
+      image until S4-4; check that cloud requests show the image in the preview panel first.
 
 ## Step 2 packaging note
 

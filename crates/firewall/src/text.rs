@@ -13,6 +13,10 @@
 //! #3 button "Sign in"
 //! ```
 //! DFS order, fixed English role names, app id included, window/page titles never.
+//! Screen-text v1.1 (S2-5): URLs, long opaque tokens and e-mail addresses inside emitted labels
+//! and values become `[link]` / `[token]` / `[email]`; address bars, tab strips, bookmark bars,
+//! download shelves and nested window/title-bar subtrees are dropped. See
+//! `docs/title-url-audit.md`.
 
 use std::fmt;
 use std::sync::Arc;
@@ -22,6 +26,10 @@ use frame::{AppDenyPolicy, Rect};
 use crate::blackout::DEFAULT_PADDING_PX;
 use crate::error::{BlockReason, FirewallError, PauseReason};
 use crate::redacted_text::RedactedScreenText;
+use crate::scrub::{
+    is_address_bar_label, is_browser_chrome_label, is_tab_strip_label, mark_count, scrub_links,
+    toolbar_starts_with_tab,
+};
 
 /// Maximum emitted (numbered) nodes.
 pub const MAX_EMITTED_NODES: usize = 400;
@@ -34,6 +42,8 @@ pub const MAX_VALUE_CHARS: usize = 400;
 /// A leaf opaque node counts towards `opaque_area_permille` only when it covers at least this
 /// percentage of the window area.
 pub const OPAQUE_MIN_PERCENT: u64 = 1;
+/// Labels / values longer than this are cut BEFORE scrubbing (bounds the scrubber's work).
+const MAX_SCRUB_INPUT_CHARS: usize = 2_048;
 /// Marker line appended when a cap was hit.
 pub const TRUNCATED_MARKER: &str = "[truncated]";
 
@@ -282,9 +292,48 @@ pub(crate) fn sanitise(s: &str) -> String {
     mapped.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Sanitise, then cut to `max` chars (ending with `…` when cut).
+/// Sanitise, scrub links / tokens / e-mails (S2-5), then cut to `max` chars (ending with `…`
+/// when cut). Scrubbing happens BEFORE the cut so a half-cut URL can never survive.
+///
+/// Invisible format characters are replaced by spaces by [`sanitise`] (which would split
+/// `evil\u{200B}.example` in two); when the text has any and a second view with them removed
+/// contains a link, that more-redacted view is used.
+fn clean_scrubbed(s: &str, max: usize) -> String {
+    // Bound the work (the scrubber is quadratic in the worst case) and the cost of hostile
+    // megabyte-long names; everything past this point would be cut by `cap` anyway.
+    let bounded: String = s.chars().take(MAX_SCRUB_INPUT_CHARS).collect();
+    let was_cut = bounded.len() < s.len();
+    let s = bounded.as_str();
+    let spaced = scrub_links(&sanitise(s));
+    let t = if s.chars().any(|c| !c.is_whitespace() && is_hostile_char(c)) {
+        let joined_src: String = s
+            .chars()
+            .filter(|&c| c.is_whitespace() || !is_hostile_char(c))
+            .collect();
+        let joined = scrub_links(&sanitise(&joined_src));
+        let jm = mark_count(&joined);
+        if jm > 0 && jm >= mark_count(&spaced) {
+            joined
+        } else {
+            spaced
+        }
+    } else {
+        spaced
+    };
+    let mut t = cap(t, max);
+    if was_cut && !t.ends_with('…') {
+        t.push('…');
+    }
+    t
+}
+
+/// Sanitise, then cut to `max` chars (ending with `…` when cut). App id only (no scrubbing: a
+/// bundle id such as `com.example.app` looks like a domain).
 fn clean_capped(s: &str, max: usize) -> String {
-    let t = sanitise(s);
+    cap(sanitise(s), max)
+}
+
+fn cap(t: String, max: usize) -> String {
     if t.chars().count() <= max {
         return t;
     }
@@ -315,7 +364,11 @@ pub(crate) fn redact_tree(
 
     // 4. Unknown or denied app: nothing is read further.
     let app = clean_capped(&app_id, MAX_LABEL_CHARS);
-    if app_id.trim().is_empty() || app.is_empty() || deny.is_denied(&app_id) {
+    if app_id.trim().is_empty()
+        || app.is_empty()
+        || deny.is_denied(&app_id)
+        || !app_id_is_plain(&app)
+    {
         return TextVerdict::Withheld(WithheldReason::DeniedApp);
     }
     if window.is_empty() {
@@ -376,6 +429,10 @@ pub(crate) fn redact_tree(
     }
     let mut kept: Vec<Kept> = Vec::new();
     let mut secure_depth: Option<u16> = None;
+    // Subtree of a dropped browser-chrome node (S2-5): everything below it is skipped, except
+    // secure nodes, which stay (they are only ever "password field [hidden]" and keep the
+    // cross-check above and the secure count consistent).
+    let mut drop_depth: Option<u16> = None;
     for (idx, n) in nodes.iter().enumerate() {
         if let Some(d) = secure_depth {
             if n.depth > d {
@@ -383,8 +440,20 @@ pub(crate) fn redact_tree(
             }
             secure_depth = None;
         }
+        if let Some(d) = drop_depth {
+            if n.depth > d {
+                if !n.secure {
+                    continue;
+                }
+            } else {
+                drop_depth = None;
+            }
+        }
         if n.secure {
             secure_depth = Some(n.depth);
+        } else if drop_depth.is_none() && drops_subtree(n) {
+            drop_depth = Some(n.depth);
+            continue;
         }
         if has_root && idx == 0 {
             continue;
@@ -472,6 +541,45 @@ pub(crate) fn redact_tree(
     ))
 }
 
+/// App ids are bundle ids / executable names, resolved by the platform source (basename of the
+/// process image, bundle identifier). A URL in the `app:` header means a broken source: withhold.
+fn app_id_is_plain(app: &str) -> bool {
+    !app.contains("://")
+}
+
+/// Browser chrome that is dropped together with all its descendants (S2-5, D-003): tab strips
+/// and tabs, address / search bars, bookmark bars, download shelves and nested windows / title
+/// bars (whose children carry the window title). Decided from role and label only; the label is
+/// never emitted.
+pub(crate) fn drops_subtree(n: &RawTextNode) -> bool {
+    match n.role {
+        NodeRole::Tab => return true,
+        NodeRole::Window => return n.depth > 0,
+        _ => {}
+    }
+    let Some(label) = n.label.as_deref() else {
+        return false;
+    };
+    if n.editable || matches!(n.role, NodeRole::TextField | NodeRole::ComboBox) {
+        return is_address_bar_label(label);
+    }
+    if matches!(n.role, NodeRole::StaticText | NodeRole::Heading) {
+        return false;
+    }
+    if n.role == NodeRole::Toolbar && toolbar_starts_with_tab(label) {
+        return true;
+    }
+    is_tab_strip_label(label)
+        || (matches!(
+            n.role,
+            NodeRole::Toolbar
+                | NodeRole::Group
+                | NodeRole::List
+                | NodeRole::Other
+                | NodeRole::Table
+        ) && is_browser_chrome_label(label))
+}
+
 /// Counts only what an emitted line can actually carry: a non-title label, or the value of a
 /// static text / heading. An editable field counts through its label only (its value is never
 /// emitted).
@@ -498,7 +606,7 @@ fn node_body(n: &RawTextNode) -> Option<String> {
     } else {
         n.label
             .as_deref()
-            .map(|l| clean_capped(l, MAX_LABEL_CHARS))
+            .map(|l| clean_scrubbed(l, MAX_LABEL_CHARS))
             .unwrap_or_default()
     };
     let quoted = |l: &str| format!("\"{l}\"");
@@ -516,7 +624,7 @@ fn node_body(n: &RawTextNode) -> Option<String> {
         let t = n
             .value
             .as_deref()
-            .map(|v| clean_capped(v, MAX_VALUE_CHARS))
+            .map(|v| clean_scrubbed(v, MAX_VALUE_CHARS))
             .filter(|v| !v.is_empty())
             .unwrap_or(label);
         return (!t.is_empty()).then(|| format!("{name} {}", quoted(&t)));

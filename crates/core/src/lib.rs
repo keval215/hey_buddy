@@ -7,6 +7,7 @@ pub mod download;
 pub mod engine_slot;
 pub mod error;
 pub mod events;
+pub mod leakguard;
 pub mod point;
 pub mod prompt;
 pub mod providers;

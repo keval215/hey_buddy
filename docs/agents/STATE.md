@@ -42,9 +42,9 @@ Gate G1 before any 2B coding: [ ] Step 1 PR CI green (Linux+Windows; macOS defer
 | S2-2 | Reload voice engines without restart (EngineSlot) | TODO | 0 |  |
 | S2-3 | Kokoro text frontend | DONE | 2 | round 1 BLOCKER: Unicode case-fold panic (İ) fixed; follow-ups: max-length split in tts_stream for unpunctuated long sentences (affects Kokoro 510-token cap); espeak-ng runtime option = user decision, not built; ascii_base lacks ß/æ/œ |
 | S2-4 | Model download screen | DONE | 2 | round 1 MAJOR: unverified marker written after rename (fail-open) fixed; follow-ups: registry has NO real urls/sha256/size_bytes/files lists yet (user to supply verified values; phonon-31m + kokoro need `files` lists); real_voice notice could point to Models table |
-| S2-5 | Title and URL leak hardening | IN PROGRESS | 0 |  |
+| S2-5 | Title and URL leak hardening | DONE | 2 | code approved round 1; round 2 doc/test-only fixes accepted by orch (coder ran e2e x5); follow-up: S4-4 blacks out chrome + caption band in images; English-only lexicons documented |
 | S2-6 | Real hardware bench and CI | BLOCKED | 0 | needs user's bench JSON; CI = Linux+Windows (D-005) |
-| S2-7 | Settings polish | TODO | 0 |  |
+| S2-7 | Settings polish | IN PROGRESS | 0 |  |
 | S2-8 | [ARCH] Agent engine and approval model -> ADR 0003 | ARCH-PENDING | 0 | ADR 0003 DRAFT written (PROPOSED, docs/adr/0003-agent-engine-and-approvals.md); waiting on user approval + 5 open questions; tier table needs separate sign-off |
 | S2-9 | [ARCH] Desktop driver and observation -> ADR 0004 | ARCH-PENDING | 0 | ADR 0004 DRAFT written (PROPOSED, docs/adr/0004-desktop-driver.md); waiting on user approval + 5 open questions (§18) |
 | S2-10 | Harness server crate | TODO | 0 | after G1 |
@@ -97,7 +97,7 @@ S2-1 Windows findings; S2-6 bench JSON; registry urls/sha256/files (S3-5); Windo
 1. Step 1 exit test (`docs/manual-tests.md` Exit test) 2. 2A: engine swap, Kokoro samples, model download (needs real registry values), title/URL leak checks 3. 2B: observe mode, approvals, kill switch, red-team 4. Step 3: install, wizard, update check (fake) 5. Step 4: OCR/PII image checks, lock/auth signals. Then read provisional ADRs 0003-0006, open the draft PRs.
 
 ## In progress
-S2-5 (coder, branch step2a/hardening); ADR 0003 + 0004 drafted, waiting on user
+S2-7 (coder, branch step2a/hardening); ADR 0003 + 0004 drafted, waiting on user
 
 ## Blockers / waiting on user
 - ADR 0003 (S2-8) + ADR 0004 (S2-9): read, answer their open questions (5 each), approve; plus tier table sign-off (ADR 0003 §5) = Gate G1 items
