@@ -783,6 +783,22 @@ A kill adds `killed` and `sup_task_end` (decision `killed`, result `run` / `plan
 - The spoken phrases and read answers through the real Phonon/Kokoro TTS: "Done.", "Stopped.", "I couldn't do that.",
   "Okay, I won't.", "I need you to take a look.", and for a `find_text` task "I found one match. The first is a button: Save."
 
+## Installer (S3-1) - UNTESTED on this machine (Windows only; built in CI, artifact `hey_buddy-installer`)
+
+The NSIS build cannot run on Linux. Download the artifact, check `SHA256SUMS`, then (details in `docs/installer.md`):
+
+- [ ] Install as a normal (non-admin) user: NO UAC prompt appears; installed under `%LOCALAPPDATA%\Programs\hey_buddy`.
+- [ ] SmartScreen shows the unsigned warning ("Windows protected your PC"); More info, Run anyway works. Record the
+      exact text.
+- [ ] WebView2: on a machine without the runtime the installer downloads it and says so; with it present nothing is
+      downloaded.
+- [ ] hey_buddy starts after install (tray icon, hotkey), icon looks right in Start menu, tray and installer.
+- [ ] `buddy-agent.exe` sits next to `hey_buddy.exe`; `icacls "<install dir>"` lists `ALL APPLICATION PACKAGES:(OI)(CI)(RX)`
+      and NO write grant. A plan task spawns the sandboxed agent (see "Agent engine sandbox").
+- [ ] Run the installer a second time (upgrade path, as the updater will): no arguments, no prompt for admin.
+- [ ] Uninstall: install dir is gone; settings, models and audit log in AppData are still there by default; the
+      "delete application data" checkbox is OFF by default.
+
 ## Step 2 packaging note
 
 - [ ] macOS bundled builds (not `tauri dev`) need an `Info.plist` with

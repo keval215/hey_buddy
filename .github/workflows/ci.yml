@@ -242,6 +242,11 @@ jobs:
           if cargo tree -p desktop -e features | grep -E 'feature "fakes"'; then
             echo "fakes feature enabled in desktop tree"; exit 1
           fi
+      - name: Installer config and manifest assertions (S3-1, static, offline)
+        run: |
+          out=$(cargo run -q -p installer-check)
+          echo "$out"
+          echo "$out" | grep -q 'installer-check: OK' # not vacuous
       - name: Licence check
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
@@ -269,3 +274,14 @@ jobs:
       - run: cargo check --workspace
       - name: Tauri build
         run: pnpm --filter desktop tauri build --no-bundle
+      - name: Build unsigned NSIS installer + SHA256SUMS + assertions (S3-1; no signing, no secrets)
+        shell: pwsh
+        run: ./tools/build-installer.ps1
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hey_buddy-installer
+          path: |
+            dist/installer/*-setup.exe
+            dist/installer/SHA256SUMS
+          if-no-files-found: error

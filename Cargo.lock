@@ -2178,6 +2178,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "installer-check"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
