@@ -45,8 +45,8 @@ Gate G1 before any 2B coding: [ ] Step 1 PR CI green (Linux+Windows; macOS defer
 | S2-5 | Title and URL leak hardening | TODO | 0 |  |
 | S2-6 | Real hardware bench and CI | BLOCKED | 0 | needs user's bench JSON; CI = Linux+Windows (D-005) |
 | S2-7 | Settings polish | TODO | 0 |  |
-| S2-8 | [ARCH] Agent engine and approval model -> ADR 0003 | ARCH-PENDING | 0 | draft only (docs); user approval = hard stop |
-| S2-9 | [ARCH] Desktop driver and observation -> ADR 0004 | ARCH-PENDING | 0 | draft only (docs) |
+| S2-8 | [ARCH] Agent engine and approval model -> ADR 0003 | ARCH-PENDING | 0 | Opus drafting ADR 0003 (docs only); user approval = hard stop |
+| S2-9 | [ARCH] Desktop driver and observation -> ADR 0004 | ARCH-PENDING | 0 | Opus drafting ADR 0004 (docs only) |
 | S2-10 | Harness server crate | TODO | 0 | after G1 |
 | S2-11 | Policy gate and permission broker | TODO | 0 | HARD STOP: user signs off tier table first; after G1 |
 | S2-12 | Audit log | TODO | 0 | after G1 |
@@ -63,7 +63,7 @@ Gate G1 before any 2B coding: [ ] Step 1 PR CI green (Linux+Windows; macOS defer
 | S2-23 | End-to-end wiring and Step 2 exit test | TODO | 0 | after G1 |
 
 ## In progress
-none - Step 1 complete; waiting for user go-ahead to open PR to `main`
+S2-2 (coder, branch step2a/hardening); S2-8/S2-9 ADR drafts (Opus, docs only, parallel)
 
 ## Blockers / waiting on user
 - User go-ahead to open/merge the PR to `main` (branch is already pushed; check first CI run on Linux + Windows)
