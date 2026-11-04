@@ -44,3 +44,9 @@ Decision: PreparedRequest (exact body bytes) is the single object for preview/di
 Why: previewed bytes == sent bytes; redaction in our code before any model; unreadable tree never yields an image.
 ADR: docs/adr/0002-llm-provider-and-preview.md
 Status: accepted (user ack of Addendum A + defaults 2026-11-03)
+
+## D-005 Windows-only for now (note, not ARCH) — 2026-11-04
+Decision: Windows is the only supported/CI-gated desktop target. The macOS CI job is removed. Existing macOS code (capture/macos.rs, firewall/platform/macos*.rs, desktop glue) stays in the tree behind cfg(target_os = "macos"), is not CI-gated, not supported, and not to be extended until macOS returns. Linux CI remains for fmt/clippy/tests (fakes) only.
+Why: user's dev machine is Windows; macOS code could not be compiled/verified here and failed first CI.
+ADR: none
+Status: accepted (user)

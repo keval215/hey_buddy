@@ -2,6 +2,9 @@
 
 _Owner: orch. Keep under 150 lines._
 
+## Scope note (D-005)
+Windows only for now; macOS CI removed, macOS code frozen (kept behind cfg, unsupported).
+
 ## Current step
 Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 
@@ -33,7 +36,7 @@ Statuses: TODO · ARCH-PENDING · IN PROGRESS · IN REVIEW · CHANGES · DONE ·
 none - Step 1 complete; waiting for user go-ahead to open PR to `main`
 
 ## Blockers / waiting on user
-- User go-ahead to push/open the PR to `main` (branch is already pushed)
+- User go-ahead to open/merge the PR to `main` (branch is already pushed; check first CI run on Linux + Windows)
 - Definition of done still needs: CI green on GitHub (first run ever of macOS/Windows jobs) and the manual exit test on at least one real machine
 
 ## User must verify locally (macOS / Windows)
