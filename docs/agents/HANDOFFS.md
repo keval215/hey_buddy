@@ -6,6 +6,10 @@ _Owner: orch. Newest first. Max 60 entries; archive older ones to
 Format:
 
 ```
+## H-S2-23b 2026-11-04 S2-23b -> coder, reviewer
+Asked: runtime glue, Tauri commands, settings, exit-test doc, supervisor minors.
+Result: APPROVED round 1 (4 MINOR deferred to S2-22).
+
 ## H-S2-17 2026-11-04 S2-17+23a -> coder, reviewer
 Asked: agent supervisor wiring.
 Result: APPROVED (5 MINOR); ReverifiedAtExecute judged SAFE-IF -> D-009.
