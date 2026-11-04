@@ -10,6 +10,7 @@ pub mod download;
 pub mod engine_slot;
 pub mod error;
 pub mod events;
+pub mod gateway;
 pub mod kill;
 pub mod kill_hotkey;
 pub mod leakguard;

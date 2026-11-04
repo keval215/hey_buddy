@@ -475,6 +475,53 @@ Not covered by hardware here: the Windows message-loop thread itself (compile-ch
 S2-14c is covered by Linux tests against the fake actuator (`cargo test -p driver`, see `docs/driver.md`). The real
 input path is the next section.
 
+## Agent engine sandbox (S2-10/15) - UNTESTED on this machine (Windows only; all of it)
+
+`crates/agent/src/sandbox/windows.rs` was only compile-checked (`x86_64-pc-windows-gnu`, clippy clean); the pure
+decisions (`sandbox/spec.rs`: path validation, command line, environment block, capability list, job limits) and the
+whole protocol/engine logic are Linux-tested (the real `buddy-agent` binary runs as a plain child process there).
+Everything below needs a real Windows 10/11 machine. `buddy-agent` has NO network or file code, so network and file
+isolation cannot be probed by a debug flag: verify with Process Monitor / `netstat` instead.
+
+Install location: the sandbox launches ONLY `<install_dir>\buddy-agent.exe` (absolute local path). An AppContainer
+needs read+execute on the exe and its folder: a normal `C:\Program Files\hey_buddy` install grants it through
+`ALL APPLICATION PACKAGES`; a dev build under `C:\Users\...\target\debug` usually does NOT, and then the spawn
+fails closed (`sandbox_failed`). That is expected; for a dev check grant the ACL
+(`icacls <dir> /grant "ALL APPLICATION PACKAGES:(OI)(CI)(RX)"`) and write down which step you needed.
+
+- [ ] Spawn: a plan task starts exactly one `buddy-agent.exe` (Task Manager / Process Explorer: child of hey_buddy,
+      no console window, integrity "AppContainer", package name `hey_buddy.agent`); it ends (and its job closes)
+      after the draft. VERIFY the profile folder `%LOCALAPPDATA%\Packages\hey_buddy.agent` is gone after the last
+      task (the profile is deleted when the last spawn is reaped).
+- [ ] No network (including loopback): Process Monitor filtered on `buddy-agent.exe`, or `netstat -ano` / TCPView:
+      the child opens NO socket and issues NO TCP/UDP event, also while a model call is in flight (the model call is a
+      stdio line to hey_buddy, never a socket). VERIFY that Ollama on 127.0.0.1 is unreachable from the child by
+      construction (AppContainer loopback isolation) and that nothing needed a loopback exemption.
+- [ ] No files: Process Monitor shows the child touching only its own exe, system DLLs and its container folder
+      (`...\Packages\hey_buddy.agent\AC`); no access to the user profile, Documents, the hey_buddy data dir, the
+      audit log or the settings file (no `ACCESS DENIED` storms are needed; absence of attempts is the pass).
+- [ ] Environment: Process Explorer, process, Environment tab: ONLY `SystemRoot`, `TEMP`, `TMP`
+      (the last two = the container folder). No `PATH`, `USERPROFILE`, `ANTHROPIC_*` or any key variable.
+- [ ] Handles: Process Explorer, Handles tab: only the three pipes (stdin/stdout/stderr) beyond the usual; no handle to
+      hey_buddy's other pipes, files or the job.
+- [ ] Child processes: the engine cannot start any (CHILD_PROCESS_POLICY restricted + ACTIVE_PROCESS = 1).
+- [ ] Job limits (Process Explorer, job tab): kill-on-close, die-on-unhandled-exception, 1 active process, 512 MiB, UI
+      restrictions (handles, clipboard read/write, system parameters, display settings, global atoms, desktop, exit
+      windows). VERIFY the mitigation policy (strict handle checks, no remote images, no low-label images) is
+      accepted by the Windows build; if `CreateProcessW` refuses it the spawn fails closed and the bit must be
+      reviewed (never silently dropped).
+- [ ] Kill: start a plan while the model is slow (stop Ollama or use a cloud preview and leave it open), then press
+      the kill hotkey / tray "Stop agent": `buddy-agent.exe` disappears immediately (`TerminateJobObject`, well under
+      1 s), hey_buddy stays responsive. Dropping the plan (task superseded) kills it too.
+- [ ] Fail closed: make AppContainer unavailable (e.g. install dir without the ACL above, or a policy that blocks
+      AppContainer creation): the agent reports it is off (`Unavailable("sandbox_failed")`), NOTHING is spawned
+      unsandboxed. A path with `..`, a UNC path or another exe name is refused before any Win32 call.
+- [ ] DLL search: `buddy-agent` calls `SetDefaultDllDirectories(SYSTEM32 | APPLICATION_DIR)` first; if it fails the
+      process exits with code 3 (no plan). Drop a decoy `version.dll` next to a COPY of the exe in a user folder and
+      confirm it is not loaded (Process Monitor).
+- [ ] Clipboard / windows: put a marker on the clipboard; the child's job has no clipboard access (Process Monitor
+      shows no clipboard calls succeeding). UIPI/AppContainer: the child cannot send input to other windows.
+
 ## Windows actuator (S2-14d2) - UNTESTED on this machine (all of it)
 
 `crates/driver/src/platform/windows.rs` was only compile-checked (`x86_64-pc-windows-gnu`); the pure parts

@@ -391,6 +391,14 @@ pub enum LocalityDto {
     Cloud,
 }
 
+/// What a request is for (`RequestPurpose`). The panel says "Agent planning" for `AgentPlan`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum PurposeDto {
+    Turn,
+    AgentPlan,
+}
+
 /// The user's answer to a cloud preview (`preview_decision`). Step 1 has no "always allow".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -409,6 +417,7 @@ pub struct PreviewDto {
     pub provider_id: String,
     pub model: String,
     pub locality: LocalityDto,
+    pub purpose: PurposeDto,
     /// Full sha256 hex of the request (provider, endpoint, model, body).
     pub digest_hex: String,
     pub transcript: String,
@@ -439,6 +448,7 @@ pub struct LastRequestDto {
     pub provider_id: String,
     pub model: String,
     pub locality: LocalityDto,
+    pub purpose: PurposeDto,
     pub digest_hex: String,
     pub transcript: String,
     pub screen_text: Option<String>,

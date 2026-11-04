@@ -70,8 +70,38 @@ jobs:
           if grep -rnE '(^|[^a-z_])async[[:space:]]+(fn|move|\{)|\.await' --include='*.rs' crates/policy/src; then
             echo "policy must stay synchronous"; exit 1
           fi
-          # TODO(S2-15): once the agent crate exists, add the mirror rule from ADR 0003 section 11:
-          #   cargo tree -p agent -e normal must not list policy, driver, capture, firewall or llm.
+          # The mirror rule (agent must not depend on policy etc., and nothing below core may depend
+          # on agent) is the step "ADR 0003 section 11 - the engine has no path to the gate" below.
+      - name: ADR 0003 section 11 - the engine has no path to the gate (agent crate isolation, S2-10/15)
+        run: |
+          # 1. agent depends on none of the gate, driver, firewall, model or network crates.
+          cargo tree -p agent -e normal | grep -qE '(^|[^a-z_-])serde ' # not vacuous
+          if cargo tree -p agent -e normal | grep -E '(^|[^a-z_-])(policy|driver|action|capture|firewall|llm|voice|reqwest|tauri|buddy-core) '; then
+            echo "agent crate has a forbidden dependency"; exit 1
+          fi
+          # 2. Mirror: nothing below core depends on agent (only core, and the desktop app via core).
+          for c in policy driver action firewall audit capture llm voice frame; do
+            if cargo tree -p "$c" -e normal | grep -E '(^|[^a-z_-])agent '; then
+              echo "$c depends on agent"; exit 1
+            fi
+          done
+          hits=$(grep -rlE '^[[:space:]]*agent[[:space:]]*=' --include=Cargo.toml apps crates tools \
+            | grep -vE '^(crates/core|crates/agent|apps/desktop/src-tauri)/Cargo.toml$' || true)
+          if [ -n "$hits" ]; then
+            echo "agent listed in Cargo.toml outside crates/core and apps/desktop:"; echo "$hits"; exit 1
+          fi
+          # 3. No file, network or process code in the engine except the sandbox module (which also
+          #    holds the test sandbox).
+          hits=$(grep -rnE 'std::net|TcpStream|TcpListener|UdpSocket|reqwest|std::fs|File::|Command::new|std::process::Command|fs::read|fs::write' \
+            --include='*.rs' crates/agent/src | grep -vE '^crates/agent/src/sandbox/' || true)
+          if [ -n "$hits" ]; then
+            echo "file/network/process code in crates/agent/src outside the sandbox module:"; echo "$hits"; exit 1
+          fi
+          test -f crates/agent/src/sandbox/test.rs # the grep above is not vacuous
+          # 4. The test sandbox and the doubles never reach the shipped app tree.
+          if cargo tree -p desktop -e features | grep -E 'fakes|test-support'; then
+            echo "fakes/test-support feature enabled in desktop tree"; exit 1
+          fi
       - name: ADR 0003 section 13 - audit log stays std-only (no async runtime, network, llm, capture, voice, driver, platform crates)
         run: |
           if cargo tree -p audit -e normal | grep -E '(^|[^a-z_-])(tokio|reqwest|llm|capture|voice|driver|windows) '; then

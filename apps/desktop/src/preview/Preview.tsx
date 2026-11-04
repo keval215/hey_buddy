@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, onThisWindow } from "../api/client";
 import type { PreviewDto } from "../ipc/PreviewDto";
 import { RequestFields } from "../request/RequestView";
-import { isCloud, secondsLeft } from "../request/logic";
+import { isCloud, purposeText, secondsLeft } from "../request/logic";
 import { errorText } from "../settings/form";
 
 /** Review panel: shows the exact request; nothing is sent until Send is pressed. */
@@ -78,7 +78,11 @@ export default function Preview() {
   return (
     <main className="space-y-3 p-4">
       <h1 className="text-lg font-semibold">
-        {isCloud(dto) ? "Send this to the cloud?" : "Local request"}
+        {isCloud(dto)
+          ? purposeText(dto)
+            ? "Agent planning: send this to the cloud?"
+            : "Send this to the cloud?"
+          : "Local request"}
       </h1>
       <p className="rounded border border-amber-400 bg-amber-50 p-2 text-sm">
         Nothing is sent until you press Send. Cancel, Esc, closing this window or waiting for the

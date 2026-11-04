@@ -62,6 +62,7 @@ crates/llm/            LlmProvider trait, ollama + anthropic adapters
 crates/action/         agent Action vocabulary: validated TypedText/KeyCombo/LaunchId, canonical bytes, digest (pure)
 crates/policy/         (target, not yet created) tier gate, plan/step approvals, sealed ApprovedAction
 crates/driver/         DesktopDriver trait, Driver<A: Actuator>, FakeActuator, limits (Windows actuator: S2-14d)
+crates/agent/          plan engine (ADR 0003): stdio protocol, sandbox launcher, MinimalEngine, ProcessEngine, `buddy-agent` bin; no path to policy/driver/firewall
 crates/core/           (package buddy-core) wiring: hotkey → capture → firewall → STT → LLM → TTS
 models/registry.json   model catalog with licence flags
 tools/bench/           latency benchmark

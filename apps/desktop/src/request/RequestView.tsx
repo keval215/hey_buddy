@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { badgeText, clipRaw, isCloud, isWindows, previewSrc, shortDigest } from "./logic";
+import { badgeText, clipRaw, isCloud, isWindows, previewSrc, purposeText, shortDigest } from "./logic";
 import type { RequestView } from "./logic";
 
 /** Exactly what a request contains: shared by the preview panel and the "Last request" view. */
@@ -35,6 +35,11 @@ export function RequestFields({ r, cacheKey }: { r: RequestView; cacheKey?: stri
         >
           {badgeText(r)}
         </span>
+        {purposeText(r) && (
+          <span className="rounded bg-indigo-700 px-2 py-0.5 text-xs font-bold text-white">
+            {purposeText(r)}
+          </span>
+        )}
         <span>
           {r.provider_id} / {r.model}
         </span>

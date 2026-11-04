@@ -45,6 +45,8 @@ struct MessagesBody<'a> {
     system: &'a str,
     messages: [UserMessage<'a>; 1],
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -134,15 +136,28 @@ impl LlmProvider for AnthropicProvider {
             });
         }
         content.push(Block::Text { text: &user });
+        // The schema travels as text in the system prompt (the API has no `format`); core
+        // validates the reply anyway. It is inside the body, so digest and preview cover it.
+        let system = match &req.output_schema {
+            Some(s) => format!(
+                "{}\n\nReply with ONE JSON object that follows this JSON schema ({}) and nothing \
+                 else:\n{}",
+                req.system,
+                s.name(),
+                s.text()
+            ),
+            None => req.system.to_string(),
+        };
         let body = MessagesBody {
             model: &self.config.model,
             max_tokens: MAX_TOKENS,
-            system: &req.system,
+            system: &system,
             messages: [UserMessage {
                 role: "user",
                 content,
             }],
             stream: true,
+            temperature: req.output_schema.as_ref().map(|_| 0.0),
         };
         let bytes = serde_json::to_vec(&body).map_err(|_| LlmError::Encode("body_serialize"))?;
         Ok(PreparedRequest::assemble(
