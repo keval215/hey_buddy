@@ -7,7 +7,6 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use buddy_core::api::SwapTarget;
 use buddy_core::Buddy;
 use tauri::AppHandle;
 
@@ -33,6 +32,7 @@ fn start_voice(_app: &AppHandle, buddy: &Arc<Buddy>, _deny: Arc<buddy_core::Deny
 
 #[cfg(feature = "real-voice")]
 fn start_voice(app: &AppHandle, buddy: &Arc<Buddy>, deny: Arc<buddy_core::DenyList>) {
+    use buddy_core::api::SwapTarget;
     use buddy_core::real_voice;
     use tauri::Manager;
 

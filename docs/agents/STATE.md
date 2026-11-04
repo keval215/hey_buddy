@@ -45,7 +45,7 @@ Gate G1 before any 2B coding: [ ] Step 1 PR CI green (Linux+Windows; macOS defer
 | S2-5 | Title and URL leak hardening | TODO | 0 |  |
 | S2-6 | Real hardware bench and CI | BLOCKED | 0 | needs user's bench JSON; CI = Linux+Windows (D-005) |
 | S2-7 | Settings polish | TODO | 0 |  |
-| S2-8 | [ARCH] Agent engine and approval model -> ADR 0003 | ARCH-PENDING | 0 | Opus drafting ADR 0003 (docs only); user approval = hard stop |
+| S2-8 | [ARCH] Agent engine and approval model -> ADR 0003 | ARCH-PENDING | 0 | ADR 0003 DRAFT written (PROPOSED, docs/adr/0003-agent-engine-and-approvals.md); waiting on user approval + 5 open questions; tier table needs separate sign-off |
 | S2-9 | [ARCH] Desktop driver and observation -> ADR 0004 | ARCH-PENDING | 0 | ADR 0004 DRAFT written (PROPOSED, docs/adr/0004-desktop-driver.md); waiting on user approval + 5 open questions (§18) |
 | S2-10 | Harness server crate | TODO | 0 | after G1 |
 | S2-11 | Policy gate and permission broker | TODO | 0 | HARD STOP: user signs off tier table first; after G1 |
@@ -63,9 +63,12 @@ Gate G1 before any 2B coding: [ ] Step 1 PR CI green (Linux+Windows; macOS defer
 | S2-23 | End-to-end wiring and Step 2 exit test | TODO | 0 | after G1 |
 
 ## In progress
-S2-2 (coder, branch step2a/hardening); S2-8/S2-9 ADR drafts (Opus, docs only, parallel)
+S2-2 (coder, branch step2a/hardening); ADR 0003 + 0004 drafted, waiting on user
 
 ## Blockers / waiting on user
+- ADR 0003 (S2-8) + ADR 0004 (S2-9): read, answer their open questions (5 each), approve; plus tier table sign-off (ADR 0003 §5) = Gate G1 items
+- ADR inconsistency to reconcile at approval: ADR 0003 §6 action digest vs ADR 0004 §7 canonical digest; ADR 0003 sandboxes the engine (planner-only, no observations) while ADR 0004 has one-observation-one-action — compatible but confirm
+- S2-1/S2-6: user's Windows findings + bench JSON
 - User go-ahead to open/merge the PR to `main` (branch is already pushed; check first CI run on Linux + Windows)
 - Definition of done still needs: CI green on GitHub (first run ever of macOS/Windows jobs) and the manual exit test on at least one real machine
 
