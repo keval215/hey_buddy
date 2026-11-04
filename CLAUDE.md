@@ -30,9 +30,12 @@ Model policy: Sonnet 5.5 for everything; Opus 5.5 only for architecture decision
    opt-in per request.
 4. **Swappable parts.** STT, TTS, LLM, capture, agent engine and desktop driver
    each sit behind a small trait/interface.
-5. **Clean licensing.** Project licence Apache-2.0. Dependencies: MIT, Apache-2.0,
-   BSD, ISC, Zlib, MPL-2.0 only. Non-commercial models are never bundled; they
-   may only be optional user downloads behind an explicit licence prompt.
+5. **Clean licensing.** Project licence Apache-2.0. Code dependencies: any permissive
+   licence (MIT, Apache-2.0, BSD, ISC, Zlib, MPL-2.0, Unlicense, CC0-1.0, 0BSD and similar
+   OSI-permissive ones) is auto-approved; GPL/AGPL/LGPL and non-commercial or source-available code
+   licences need the user's approval first (D-004). Models: no licence restrictions, but weights are
+   never committed to the repo; any model is an optional user download that shows its licence in
+   the download UI (`commercial_ok` in the registry is information only).
 
 ## Stack
 
@@ -51,11 +54,12 @@ Model policy: Sonnet 5.5 for everything; Opus 5.5 only for architecture decision
 
 ```
 apps/desktop/          Tauri app: tray, hotkey, overlay, preview panel
+crates/frame/          Frame, Rect, DisplayInfo, WindowInfo (pure data, no platform deps)
 crates/voice/          VAD, SttProvider, TtsProvider + adapters
 crates/capture/        CaptureSource trait, platform impls, app deny-list
 crates/firewall/       secure-field detection, blackout, lock-screen pause
 crates/llm/            LlmProvider trait, ollama + anthropic adapters
-crates/core/           wiring: hotkey → capture → firewall → STT → LLM → TTS
+crates/core/           (package buddy-core) wiring: hotkey → capture → firewall → STT → LLM → TTS
 models/registry.json   model catalog with licence flags
 tools/bench/           latency benchmark
 docs/                  STEP1.md, adr/, agents/ (team memory)
@@ -65,7 +69,9 @@ docs/                  STEP1.md, adr/, agents/ (team memory)
 
 - Rust: `cargo fmt --all`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`
 - JS/TS: `pnpm install`, `pnpm lint`, `pnpm typecheck`, `pnpm test`
-- App: `pnpm --filter desktop tauri dev`
+- App: `pnpm --filter desktop tauri dev` (no voice engines); real voice: `pnpm --filter desktop tauri dev --features real-voice`
+  (cmake + clang, models in `<app data>/models` or `HEY_BUDDY_MODELS_DIR`, `ORT_DYLIB_PATH`; see `docs/manual-tests.md`)
+- Core e2e (fakes): `cargo test -p buddy-core --test e2e`; `cargo clippy -p buddy-core --features real-voice` checks the real adapters compile
 
 (Update this list when tooling changes.)
 

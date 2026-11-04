@@ -1,0 +1,50 @@
+[package]
+name = "buddy-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "hey_buddy core crate (package buddy-core: `core` would shadow Rust built-in)"
+
+[features]
+fakes = []
+# Real voice adapters (whisper.cpp STT, Silero VAD, Phonon TTS, cpal mic/speaker). OFF by
+# default so Linux/CI builds stay light; needs cmake + clang + libasound2-dev (Linux) to build
+# and ORT_DYLIB_PATH + model files at runtime. See `real_voice` and docs/manual-tests.md.
+real-voice = [
+    "voice/stt-whisper",
+    "voice/vad-silero",
+    "voice/tts-phonon",
+    "voice/mic-cpal",
+    "voice/speaker-cpal",
+]
+
+[dependencies]
+voice = { path = "../voice" }
+capture = { path = "../capture" }
+firewall = { path = "../firewall" }
+llm = { path = "../llm", features = ["keychain", "ollama", "anthropic"] }
+frame = { path = "../frame" }
+serde_json = "1"
+ts-rs = "11"
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+bytes = "1"
+secrecy = "0.10"
+tokio = { version = "1", default-features = false, features = ["sync", "time", "rt", "macros"] }
+futures = { version = "0.3", default-features = false, features = ["std", "alloc"] }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+capture = { path = "../capture", features = ["fakes"] }
+firewall = { path = "../firewall", features = ["fakes"] }
+tempfile = "3"
+sha2 = "0.10"
+# Test doubles only (L-006): never reaches the desktop tree.
+llm = { path = "../llm", features = ["fakes"] }
+voice = { path = "../voice", features = ["fakes"] }
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "time", "test-util", "sync"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+png = "0.18"
+async-trait = "0.1"
+base64 = "0.23"

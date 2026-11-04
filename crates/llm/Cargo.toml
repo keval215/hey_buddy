@@ -1,0 +1,53 @@
+[package]
+name = "llm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "hey_buddy LLM provider trait, exact-bytes request preview, cloud opt-in, Ollama + Anthropic adapters"
+
+[features]
+default = []
+# FakeLlm, FakeTransport, FakeCredentialStore. Only enable from dev-dependencies (L-006).
+fakes = []
+# Real HTTP (reqwest + rustls/ring). Pure types, builders, parsers and providers with an
+# injected transport compile without any feature.
+ollama = ["dep:reqwest", "dep:rustls"]
+anthropic = ["dep:reqwest", "dep:rustls"]
+# OS keychain (macOS / Windows only; on Linux this feature is a no-op, see credential.rs).
+keychain = ["dep:keyring"]
+
+[dependencies]
+firewall = { path = "../firewall" }
+frame = { path = "../frame" }
+async-trait = "0.1"
+base64 = "0.23"
+bytes = "1"
+futures = { version = "0.3", default-features = false, features = ["std", "alloc"] }
+png = "0.18"
+secrecy = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "1"
+tokio = { version = "1", default-features = false, features = ["time"] }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+url = "2"
+
+# L-009: no default features (native-tls / openssl); rustls with the ring provider only.
+# `rustls-no-provider` + our own `ring` provider install; deny.toml bans openssl/native-tls.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+
+# Platform keychains are target-gated so Linux never sees them (a no-backend keyring silently
+# falls back to an in-memory mock).
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native"], optional = true }
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "time", "test-util"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+firewall = { path = "../firewall", features = ["fakes"] }
+frame = { path = "../frame" }

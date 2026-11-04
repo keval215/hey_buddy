@@ -1,0 +1,39 @@
+[package]
+name = "voice"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "hey_buddy voice crate"
+
+[features]
+fakes = ["dep:tokio"]
+# Optional local backends. None are default; default builds need no cmake/ONNX/ALSA.
+# `stt-whisper` needs cmake + a C++ toolchain (builds whisper.cpp). whisper-rs is Unlicense (D-002).
+vad-silero = ["dep:ort"]
+mic-cpal = ["dep:cpal"]
+stt-whisper = ["dep:whisper-rs"]
+# Local TTS. `tts-phonon`: ptts (MIT OR Apache-2.0), Phonon 31m only (Apache-2.0 weights).
+# `tts-kokoro`: Kokoro-82M via ort (needs ORT_DYLIB_PATH at runtime, like vad-silero).
+# `speaker-cpal`: streaming playback; separate from mic-cpal so output-only builds don't
+# need the mic feature. Both use cpal (needs libasound2-dev on Linux).
+tts-phonon = ["dep:ptts"]
+tts-kokoro = ["dep:ort"]
+speaker-cpal = ["dep:cpal"]
+
+[dependencies]
+async-trait = "0.1"
+futures = "0.3"
+tokio = { version = "1", features = ["rt"], optional = true }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+ort = { version = "=2.0.0-rc.15", optional = true, default-features = false, features = ["std", "ndarray", "load-dynamic", "api-24"] }
+cpal = { version = "0.18", optional = true }
+whisper-rs = { version = "0.16", optional = true }
+ptts = { version = "0.6", optional = true, default-features = false, features = ["hf"] }
+
+[dev-dependencies]
+hound = "3"
+tokio = { version = "1", features = ["rt", "macros", "time"] }

@@ -30,8 +30,8 @@ follow that section. Otherwise do a code review.
    2. **Correctness** — does it meet every acceptance criterion? Edge cases,
       error handling, platform differences.
    3. **Scope** — only what the ticket asked; no stray changes.
-   4. **Licences** — every new dependency is MIT, Apache-2.0, BSD, ISC, Zlib or
-      MPL-2.0; no model weights committed.
+   4. **Licences** — every new code dependency is permissive (MIT, Apache-2.0, BSD, ISC, Zlib, MPL-2.0, Unlicense, CC0-1.0, 0BSD, similar OSI-permissive; GPL/AGPL/LGPL/non-commercial/source-available are not);
+      no model weights committed.
    5. **Tests** — they test behaviour, not mocks of the thing under test; no
       network calls; no secrets.
    6. **Quality** — readability, naming, consistency with existing code.

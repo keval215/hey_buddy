@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "tools/bench", "apps/desktop/src-tauri"]
+# src-tauri needs system webview libs on Linux; build it explicitly with -p desktop.
+default-members = ["crates/*", "tools/bench"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.85"
+publish = false

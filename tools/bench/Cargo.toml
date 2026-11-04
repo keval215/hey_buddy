@@ -1,0 +1,22 @@
+[package]
+name = "bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "hey_buddy latency benchmark: speech end to first audio"
+
+[features]
+# Real stages; all off by default. Each forwards to the voice crate feature of the same name.
+# stt-whisper needs cmake + C++ toolchain + libclang; tts-phonon needs Rust >= 1.85 and --release.
+stt-whisper = ["voice/stt-whisper"]
+vad-silero = ["voice/vad-silero"]
+tts-phonon = ["voice/tts-phonon"]
+
+[dependencies]
+# `fakes` is enabled here only; bench is not part of the desktop dependency tree (L-006).
+voice = { path = "../../crates/voice", features = ["fakes"] }
+async-trait = "0.1"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

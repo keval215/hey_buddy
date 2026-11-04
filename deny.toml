@@ -1,0 +1,41 @@
+[graph]
+all-features = false
+
+[licenses]
+confidence-threshold = 0.9
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "MPL-2.0",
+  # Approved by user (D-002): whisper-rs / whisper-rs-sys are Unlicense.
+  "Unlicense",
+  "CC0-1.0",
+  "0BSD",
+  # Permissive additions beyond the CLAUDE.md list, approved via orch note:
+  "Apache-2.0 WITH LLVM-exception",
+  # (also approved via orch note) Unicode tables in unicode-ident etc.
+  "Unicode-3.0",
+  # D-004: other permissive licences are auto-approved (no GPL/AGPL/LGPL/non-commercial).
+  "BSD-1-Clause",
+  "BSL-1.0",
+  "CDLA-Permissive-2.0",
+  "Unicode-DFS-2016",
+  "MIT-0",
+]
+
+[bans]
+multiple-versions = "allow"
+# ADR 0002 section 7: one TLS stack (rustls + ring). No OpenSSL / native-tls anywhere.
+deny = [
+  { name = "openssl-sys" },
+  { name = "openssl" },
+  { name = "native-tls" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

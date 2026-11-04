@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "models": [
+    {"id": "whisper-small", "task": "stt", "size": "244M params", "licence": "MIT", "commercial_ok": true, "bundled": false, "url": "TODO", "sha256": "TODO", "languages": ["multilingual"], "default": true},
+    {"id": "whisper-base", "task": "stt", "size": "74M params", "licence": "MIT", "commercial_ok": true, "bundled": false, "url": "TODO", "sha256": "TODO", "languages": ["multilingual"], "default": false},
+    {"id": "whisper-large-v3-turbo", "task": "stt", "size": "809M params", "licence": "MIT", "commercial_ok": true, "bundled": false, "url": "TODO", "sha256": "TODO", "languages": ["multilingual"], "default": false},
+    {"id": "silero-vad-v5", "task": "vad", "size": "TODO", "licence": "MIT", "commercial_ok": true, "bundled": false, "url": "TODO", "sha256": "TODO", "languages": ["TODO"], "default": true},
+    {"id": "phonon-31m", "task": "tts", "size": "31M params", "licence": "Apache-2.0", "commercial_ok": true, "bundled": false, "url": "TODO", "sha256": "TODO", "languages": ["TODO"], "default": true},
+    {"id": "kokoro-82m", "task": "tts", "size": "82M params", "licence": "Apache-2.0", "commercial_ok": true, "bundled": false, "url": "TODO", "sha256": "TODO", "languages": ["TODO"], "default": false},
+    {"id": "phonon-40m", "task": "tts", "size": "40M params", "licence": "TODO-verify-non-commercial", "commercial_ok": false, "bundled": false, "url": "TODO", "sha256": "TODO", "languages": ["TODO"], "default": false},
+    {"id": "fish-s2-pro", "task": "tts", "size": "TODO", "licence": "TODO-verify-non-commercial", "commercial_ok": false, "bundled": false, "url": "TODO", "sha256": "TODO", "languages": ["TODO"], "default": false},
+    {"id": "qwen3-4b-q4", "task": "llm", "size": "4B params, Q4", "licence": "TODO-verify", "commercial_ok": false, "bundled": false, "url": "TODO", "sha256": "TODO", "languages": ["TODO"], "default": true, "ollama_tag": "qwen3:4b"},
+    {"id": "qwen3-1.7b", "task": "llm", "size": "1.7B params", "licence": "TODO-verify", "commercial_ok": false, "bundled": false, "url": "TODO", "sha256": "TODO", "languages": ["TODO"], "default": false, "ollama_tag": "qwen3:1.7b"},
+    {"id": "qwen3-vl-2b", "task": "vlm", "size": "2B params", "licence": "TODO-verify", "commercial_ok": false, "bundled": false, "url": "TODO", "sha256": "TODO", "languages": ["TODO"], "default": true, "ollama_tag": "qwen3-vl:2b"}
+  ],
+  "profiles": {
+    "default": {
+      "description": "rtx2050-4gb: STT and TTS on CPU, LLM and VLM on the 4 GB GPU via Ollama",
+      "stt": {"model": "whisper-small", "device": "cpu"},
+      "tts": {"model": "phonon-31m", "device": "cpu"},
+      "llm": {"model": "qwen3-4b-q4", "device": "gpu"},
+      "vlm": {"model": "qwen3-vl-2b", "device": "gpu"}
+    },
+    "low-memory": {
+      "description": "Small models, vision disabled",
+      "stt": {"model": "whisper-base", "device": "cpu"},
+      "tts": {"model": "phonon-31m", "device": "cpu"},
+      "llm": {"model": "qwen3-1.7b", "device": "gpu"},
+      "vlm": null
+    }
+  }
+}

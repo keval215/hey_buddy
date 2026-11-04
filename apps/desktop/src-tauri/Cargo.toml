@@ -1,0 +1,23 @@
+[package]
+name = "desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "hey_buddy desktop app"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[features]
+# Real voice engines (whisper.cpp STT, Silero VAD, Phonon TTS, cpal mic/speaker). OFF by
+# default so CI and Linux builds stay light. Needs cmake + clang (+ libasound2-dev on Linux)
+# to build, model files and ORT_DYLIB_PATH at runtime: see docs/manual-tests.md.
+real-voice = ["buddy-core/real-voice"]
+
+[dependencies]
+# macos-private-api: needed for transparent windows on macOS (the overlay). Not App Store safe;
+# acceptable for an open-source direct download.
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri-plugin-global-shortcut = "2"
+buddy-core = { path = "../../../crates/core" }

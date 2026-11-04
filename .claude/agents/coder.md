@@ -31,9 +31,10 @@ packet, `CLAUDE.md` and the repo are your only context.
 - Follow the rules in `CLAUDE.md`, especially:
   - no secrets, keys or tokens in code, tests or fixtures
   - no network calls in tests
-  - no non-commercial model weights in the repo
-  - new dependencies only with MIT, Apache-2.0, BSD, ISC, Zlib or MPL-2.0
-    licences; anything else, stop and report
+  - no model weights in the repo (any model licence is fine as an optional user download)
+  - new code dependencies: any permissive licence (MIT, Apache-2.0, BSD, ISC, Zlib, MPL-2.0,
+    Unlicense, CC0-1.0, 0BSD and similar OSI-permissive) is fine, no need to stop; for GPL/AGPL/LGPL
+    or non-commercial/source-available code, stop and report. Report every new dep's licence.
   - privacy firewall code must fail closed (on error, block capture)
 - Do not commit, push, or change branches. orch handles git.
 - Do not edit files in `docs/agents/`. orch owns them.

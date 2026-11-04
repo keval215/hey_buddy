@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "preview",
+  "description": "Preview panel: listen to events and answer Send/Cancel. Nothing else (no settings, no keys, no fs, shell, http or dialog).",
+  "windows": ["preview"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-preview-decision",
+    "allow-get-pending-preview"
+  ]
+}
