@@ -75,25 +75,33 @@ jobs:
       - name: ADR 0003 section 11 - the engine has no path to the gate (agent crate isolation, S2-10/15)
         run: |
           # 1. agent depends on none of the gate, driver, firewall, model or network crates.
+          #    Both the host tree and the all-targets tree (target-gated deps, e.g. Windows-only).
           cargo tree -p agent -e normal | grep -qE '(^|[^a-z_-])serde ' # not vacuous
-          if cargo tree -p agent -e normal | grep -E '(^|[^a-z_-])(policy|driver|action|capture|firewall|llm|voice|reqwest|tauri|buddy-core) '; then
-            echo "agent crate has a forbidden dependency"; exit 1
-          fi
+          for tree in "cargo tree -p agent -e normal" "cargo tree -p agent -e normal --target all"; do
+            if $tree | grep -E '(^|[^a-z_-])(policy|driver|action|capture|firewall|llm|voice|reqwest|tauri|buddy-core) '; then
+              echo "agent crate has a forbidden dependency ($tree)"; exit 1
+            fi
+          done
+          cargo tree -p agent -e normal --target all | grep -qE '(^|[^a-z_-])windows ' # not vacuous
           # 2. Mirror: nothing below core depends on agent (only core, and the desktop app via core).
           for c in policy driver action firewall audit capture llm voice frame; do
             if cargo tree -p "$c" -e normal | grep -E '(^|[^a-z_-])agent '; then
               echo "$c depends on agent"; exit 1
             fi
           done
-          hits=$(grep -rlE '^[[:space:]]*agent[[:space:]]*=' --include=Cargo.toml apps crates tools \
+          #    Also renamed dependencies (`package = "agent"`) and path dependencies on the crate.
+          hits=$(grep -rlE '^[[:space:]]*agent[[:space:]]*=|package[[:space:]]*=[[:space:]]*"agent"|path[[:space:]]*=[[:space:]]*"[^"]*(crates/|\.\./)agent/?"' --include=Cargo.toml apps crates tools \
             | grep -vE '^(crates/core|crates/agent|apps/desktop/src-tauri)/Cargo.toml$' || true)
           if [ -n "$hits" ]; then
             echo "agent listed in Cargo.toml outside crates/core and apps/desktop:"; echo "$hits"; exit 1
           fi
           # 3. No file, network or process code in the engine except the sandbox module (which also
           #    holds the test sandbox).
-          hits=$(grep -rnE 'std::net|TcpStream|TcpListener|UdpSocket|reqwest|std::fs|File::|Command::new|std::process::Command|fs::read|fs::write' \
-            --include='*.rs' crates/agent/src | grep -vE '^crates/agent/src/sandbox/' || true)
+          #    main.rs may name `windows::Win32::System::LibraryLoader` (DLL search hardening) and
+          #    nothing else from `windows::`.
+          hits=$(grep -rnE 'std::net|TcpStream|TcpListener|UdpSocket|reqwest|std::fs|File::|Command::new|std::process::Command|fs::read|fs::write|tokio::net|tokio::process|tokio::fs|windows::|libc' \
+            --include='*.rs' crates/agent/src | grep -vE '^crates/agent/src/sandbox/' \
+            | grep -vE '^crates/agent/src/main\.rs:[0-9]+:.*windows::Win32::System::LibraryLoader' || true)
           if [ -n "$hits" ]; then
             echo "file/network/process code in crates/agent/src outside the sandbox module:"; echo "$hits"; exit 1
           fi

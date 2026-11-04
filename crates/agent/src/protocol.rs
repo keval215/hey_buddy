@@ -199,13 +199,23 @@ fn static_ops(requested: &[&'static str]) -> Option<&'static [&'static str]> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "k", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ModelOutcome {
     #[serde(rename = "ok")]
     Text { text: String },
     #[serde(rename = "err")]
     Failed { code: String },
+}
+
+/// Content-free `Debug`: model text and error codes never reach logs.
+impl fmt::Debug for ModelOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ModelOutcome::Text { text } => write!(f, "ok {} B", text.len()),
+            ModelOutcome::Failed { .. } => f.write_str("err"),
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

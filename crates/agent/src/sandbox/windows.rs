@@ -104,6 +104,24 @@ fn owned(handle: HANDLE) -> OwnedHandle {
 /// serialises create and delete so a new spawn can never lose its profile to an old reaper.
 static LIVE: Mutex<usize> = Mutex::new(0);
 
+/// One counted reference to the profile. Acquired before the profile is created, released exactly
+/// once on drop: on a failed spawn, or when the `WinProcess` that owns it is dropped or reaped
+/// (also if `wait` is never called).
+struct ProfileRef(());
+
+impl ProfileRef {
+    fn acquire() -> Self {
+        *lock(&LIVE) += 1;
+        ProfileRef(())
+    }
+}
+
+impl Drop for ProfileRef {
+    fn drop(&mut self) {
+        release_profile();
+    }
+}
+
 fn release_profile() {
     let mut n = lock(&LIVE);
     *n = n.saturating_sub(1);
@@ -329,24 +347,17 @@ impl EngineSandbox for WindowsSandbox {
         spec::validate_local_path(&system_root).map_err(|_| fail("environment"))?;
 
         // 2. Profile (counted so the last reaper deletes it).
-        {
-            *lock(&LIVE) += 1;
-        }
-        let spawned = (|| {
+        let profile = ProfileRef::acquire();
+        let spawned = (move || {
             let guard = lock(&LIVE);
             let sid = container_sid();
             drop(guard);
             let sid = sid?;
             let folder = container_folder(&sid)?;
-            launch(exe, &cmd, &system_root, &folder, &sid)
+            // On any error the guard is dropped (released) on the way out.
+            launch(exe, &cmd, &system_root, &folder, &sid, profile)
         })();
-        match spawned {
-            Ok(p) => Ok(Box::new(p)),
-            Err(e) => {
-                release_profile();
-                Err(e)
-            }
-        }
+        spawned.map(|p| Box::new(p) as Box<dyn EngineProcess>)
     }
 }
 
@@ -354,6 +365,8 @@ struct WinProcess {
     streams: Option<ProcessStreams>,
     process: OwnedHandle,
     job: Arc<Job>,
+    /// Released when this process object is dropped (after `wait`, or without one).
+    _profile: ProfileRef,
 }
 
 fn launch(
@@ -362,6 +375,7 @@ fn launch(
     system_root: &str,
     folder: &str,
     sid: &Sid,
+    profile: ProfileRef,
 ) -> Result<WinProcess, SandboxError> {
     // 3. Environment block and directory.
     let env = spec::build_env_block(system_root, folder).ok_or(fail("environment"))?;
@@ -489,6 +503,7 @@ fn launch(
         }),
         process,
         job: Arc::new(job),
+        _profile: profile,
     })
 }
 
@@ -511,7 +526,6 @@ impl EngineProcess for WinProcess {
     fn wait(&mut self) -> Option<i32> {
         // SAFETY: valid process handle owned by `self`.
         let r = unsafe { WaitForSingleObject(h(&self.process), u32::MAX) };
-        release_profile();
         (r == WAIT_OBJECT_0).then_some(0)
     }
 }

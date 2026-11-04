@@ -6,6 +6,13 @@ _Owner: orch. Newest first. Max 60 entries; archive older ones to
 Format:
 
 ```
+## H-S2-10 2026-11-04 S2-10+15 -> coder x2, reviewer
+Asked: agent crate, sandbox, gateway, llm schema.
+Result: round 1 CHANGES REQUESTED (1 MAJOR Debug leak + minors), round 2 fixes accepted by orch (each fix has a test).
+Key points:
+- No path from engine to gate/driver; 29/36 mutations caught in review, gaps now tested.
+- WindowsSandbox compile-checked only (untested on Windows).
+
 ## H-000 <YYYY-MM-DD HH:MM> T<n> → <coder|reviewer|reviewer-ARCH>
 Asked: <one line>
 Result: <DONE|BLOCKED|APPROVED|CHANGES REQUESTED|decision proposed>

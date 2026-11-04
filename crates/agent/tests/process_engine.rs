@@ -518,6 +518,107 @@ async fn fake_engine_scripts_and_kill_is_prompt() {
     assert_eq!(f.plans.load(Ordering::SeqCst), 4);
 }
 
+// ------------------------------------------------------------- round 2: hostile and races
+
+/// A child that handshakes, then sends one raw line, then waits for its pipes to close.
+fn raw_line_main(line: &'static str) -> agent::sandbox::InProcessMain {
+    Arc::new(
+        move |input: agent::sandbox::PipeReader, mut out: agent::sandbox::PipeWriter| {
+            let mut r = agent::protocol::LineReader::new(input);
+            let mut task = 0u64;
+            for _ in 0..2 {
+                let Ok(Some(l)) = r.next_line() else { return };
+                if let Ok(CoreToEngine::PlanTask(p)) = agent::protocol::Codec::decode_core(&l) {
+                    task = p.task_id;
+                }
+            }
+            let _ = out.write_all(b"{\"t\":\"ready\",\"engine_id\":\"x\",\"v\":1}\n");
+            let l = line.replace("TASK", &task.to_string());
+            let _ = out.write_all(l.as_bytes());
+            while matches!(r.next_line(), Ok(Some(_))) {}
+        },
+    )
+}
+
+#[tokio::test]
+async fn cannot_plan_with_a_token_valid_but_unlisted_code_is_a_protocol_error() {
+    let (e, rec) = engine_with(TestSandbox::in_process(raw_line_main(
+        "{\"t\":\"cannot_plan\",\"task_id\":TASK,\"code\":\"foo\"}\n",
+    )));
+    assert_eq!(
+        e.plan(input("x"), Gw::new(vec![])).await,
+        Err(EngineError::Protocol("bad_code"))
+    );
+    assert!(rec.kills.load(Ordering::SeqCst) >= 1);
+}
+
+#[tokio::test]
+async fn after_a_draft_the_last_line_sent_is_shutdown_not_cancel() {
+    let (e, rec) = engine_with(TestSandbox::in_process(agent::fakes::minimal_main()));
+    let out = e
+        .plan(input("open notepad"), Gw::new(vec![Ok(GOOD.into())]))
+        .await
+        .unwrap();
+    assert_eq!(draft(out), GOOD);
+    // The writer thread records the attempt even if the kill already closed the pipe.
+    let t0 = Instant::now();
+    loop {
+        let sent = sent_lines(&rec);
+        if matches!(sent.last(), Some(CoreToEngine::Shutdown {})) {
+            assert!(!sent
+                .iter()
+                .any(|m| matches!(m, CoreToEngine::Cancel { .. })));
+            break;
+        }
+        assert!(t0.elapsed() < Duration::from_secs(2), "Shutdown never sent");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// Calls `engine.kill()` from inside `spawn`, i.e. before the kill handle can have been stored.
+struct KillDuringSpawn {
+    inner: TestSandbox,
+    engine: Arc<std::sync::OnceLock<Arc<ProcessEngine>>>,
+    rec: Arc<Rec>,
+}
+impl EngineSandbox for KillDuringSpawn {
+    fn spawn(&self, s: &LaunchSpec) -> Result<Box<dyn EngineProcess>, SandboxError> {
+        self.rec.spawns.fetch_add(1, Ordering::SeqCst);
+        let p = RecProc {
+            inner: self.inner.spawn(s)?,
+            rec: self.rec.clone(),
+        };
+        self.engine.get().unwrap().kill();
+        Ok(Box::new(p))
+    }
+}
+
+#[tokio::test]
+async fn a_kill_that_races_the_spawn_kills_the_new_process_and_returns_killed() {
+    let rec = Arc::new(Rec::default());
+    let cell = Arc::new(std::sync::OnceLock::new());
+    let sb = Arc::new(KillDuringSpawn {
+        inner: TestSandbox::in_process(agent::fakes::minimal_main()),
+        engine: cell.clone(),
+        rec: rec.clone(),
+    });
+    let e = Arc::new(ProcessEngine::new(sb, spec(), 1));
+    assert!(cell.set(e.clone()).is_ok());
+    let gw = Gw::new(vec![]);
+    assert_eq!(
+        e.plan(input("x"), gw.clone()).await,
+        Err(EngineError::Killed)
+    );
+    assert!(
+        rec.kills.load(Ordering::SeqCst) >= 1,
+        "the new process was killed"
+    );
+    assert_eq!(gw.n(), 0, "the engine never reached the model");
+    // Dead instance: no second spawn.
+    assert_eq!(e.plan(input("x"), gw).await, Err(EngineError::Killed));
+    assert_eq!(rec.spawns.load(Ordering::SeqCst), 1);
+}
+
 // ------------------------------------------------------------------ isolation by build
 
 #[test]

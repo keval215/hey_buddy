@@ -296,9 +296,90 @@ async fn an_oversize_response_is_refused_and_a_truncated_one_is_not_returned() {
         gw(&r).complete(call(CallPurpose::Plan)).await,
         Err(GatewayError::Model("truncated"))
     );
-    // Stream ends without a done marker.
+    // Real parser: a stream that ends without a done marker is an error, never a partial reply.
     let r = rig(true, ProviderChoice::Ollama, "{\"steps\":[", None);
     assert!(gw(&r).complete(call(CallPurpose::Plan)).await.is_err());
+}
+
+#[tokio::test]
+async fn a_clean_end_of_stream_without_done_is_truncated() {
+    let r = local_rig();
+    let provider = Arc::new(OneProvider(Arc::new(llm::fakes::FakeLlm::local(vec![
+        llm::LlmDelta::Text("{\"steps\":[".into()),
+    ]))));
+    let g = CoreModelGateway::new(r.buddy.clone(), provider, TASK);
+    assert_eq!(
+        g.complete(call(CallPurpose::Plan)).await,
+        Err(GatewayError::Model("truncated"))
+    );
+}
+
+/// Local provider whose stream flips the gateway's kill flag between two deltas.
+struct KillBetweenDeltas {
+    inner: llm::fakes::FakeLlm,
+    gw: Arc<std::sync::OnceLock<Arc<CoreModelGateway>>>,
+}
+
+#[async_trait::async_trait]
+impl LlmProvider for KillBetweenDeltas {
+    fn id(&self) -> &str {
+        self.inner.id()
+    }
+    fn locality(&self) -> llm::Locality {
+        self.inner.locality()
+    }
+    fn prepare(&self, req: &llm::LlmRequest) -> Result<llm::PreparedRequest, LlmError> {
+        self.inner.prepare(req)
+    }
+    async fn stream(
+        &self,
+        _req: llm::PreparedRequest,
+        _opt_in: Option<llm::CloudOptIn>,
+    ) -> Result<futures::stream::BoxStream<'static, Result<llm::LlmDelta, LlmError>>, LlmError>
+    {
+        use futures::StreamExt;
+        let gw = self.gw.clone();
+        Ok(futures::stream::iter(0..3)
+            .map(move |i| {
+                if i == 1 {
+                    gw.get().unwrap().kill();
+                }
+                Ok(match i {
+                    0 => llm::LlmDelta::Text("{".into()),
+                    1 => llm::LlmDelta::Text("}".into()),
+                    _ => llm::LlmDelta::Done {
+                        stop: llm::StopReason::EndTurn,
+                    },
+                })
+            })
+            .boxed())
+    }
+}
+
+struct OneProvider(Arc<dyn LlmProvider>);
+impl ProviderSource for OneProvider {
+    fn local(&self, _profile: &str) -> Result<Arc<dyn LlmProvider>, LlmError> {
+        Ok(self.0.clone())
+    }
+    fn cloud(&self, _model: &str) -> Result<Arc<dyn LlmProvider>, LlmError> {
+        Err(LlmError::Config("no_cloud"))
+    }
+}
+
+#[tokio::test]
+async fn a_kill_between_deltas_is_killed_not_a_partial_reply() {
+    let r = local_rig();
+    let cell = Arc::new(std::sync::OnceLock::new());
+    let provider = Arc::new(OneProvider(Arc::new(KillBetweenDeltas {
+        inner: llm::fakes::FakeLlm::local(vec![]),
+        gw: cell.clone(),
+    })));
+    let g = Arc::new(CoreModelGateway::new(r.buddy.clone(), provider, TASK));
+    assert!(cell.set(g.clone()).is_ok());
+    assert_eq!(
+        g.complete(call(CallPurpose::Plan)).await,
+        Err(GatewayError::Killed)
+    );
 }
 
 #[tokio::test]

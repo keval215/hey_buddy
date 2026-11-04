@@ -71,8 +71,11 @@ pub fn validate_local_path(p: &str) -> Result<(), &'static str> {
         return Err("bad_char");
     }
     // After "X:\": components separated by single backslashes.
-    for comp in p[3..].split('\\') {
-        if comp.is_empty() && p.len() > 3 && !p.ends_with('\\') {
+    // Exactly one trailing separator is tolerated; any other empty component is refused.
+    let rest = &p[3..];
+    let body = rest.strip_suffix('\\').unwrap_or(rest);
+    for comp in body.split('\\') {
+        if comp.is_empty() && !rest.is_empty() {
             return Err("empty_component");
         }
         if comp == "." || comp == ".." {
@@ -181,6 +184,10 @@ mod tests {
     fn local_path_rules() {
         assert!(validate_local_path("C:\\a\\b").is_ok());
         assert!(validate_local_path("C:\\a\\\\b").is_err());
+        assert!(validate_local_path("C:\\a\\\\").is_err());
+        assert!(validate_local_path("C:\\\\").is_err());
+        assert!(validate_local_path("C:\\a\\").is_ok());
+        assert!(validate_local_path("C:\\").is_ok());
         assert!(validate_local_path("C:\\a\\..\\b").is_err());
         assert!(validate_local_path("C:\\a*").is_err());
         assert!(validate_local_path(&format!("C:\\{}", "a".repeat(300))).is_err());

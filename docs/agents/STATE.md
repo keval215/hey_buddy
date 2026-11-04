@@ -47,7 +47,7 @@ Gate G1 before any 2B coding: [ ] Step 1 PR CI green (Linux+Windows; macOS defer
 | S2-7 | Settings polish | DONE | 1 | follow-ups -> S4-8: core-side confirm gap when hand-edited deny file has built-in in both add+remove; rate-limit/OS confirm for built-in removals (compromised settings webview); invalid hotkey resets to default even if a good custom one existed; `mnt`/`media` in HOME_PARENTS; stale download events after models-dir switch; document models_dir > HEY_BUDDY_MODELS_DIR precedence |
 | S2-8 | [ARCH] Agent engine and approval model -> ADR 0003 | ARCH-PENDING | 0 | ADR 0003 DRAFT written (PROPOSED, docs/adr/0003-agent-engine-and-approvals.md); waiting on user approval + 5 open questions; tier table needs separate sign-off |
 | S2-9 | [ARCH] Desktop driver and observation -> ADR 0004 | ARCH-PENDING | 0 | ADR 0004 DRAFT written (PROPOSED, docs/adr/0004-desktop-driver.md); waiting on user approval + 5 open questions (§18) |
-| S2-10 | Harness server crate | TODO | 0 | after G1 |
+| S2-10 | Harness server crate (merged with S2-15 `agent` crate) | DONE | 2 | round 2 accepted by orch |
 | S2-11 | Policy gate and permission broker | TODO | 0 | HARD STOP: user signs off tier table first; after G1 |
 | S2-12 | Audit log | TODO | 0 | after G1 |
 | S2-13 | Kill switch | TODO | 0 | after G1 |
@@ -106,6 +106,7 @@ Branches: step2a/hardening -> step2b/agent-harness -> step3/packaging -> step4/f
 - S2-14d1 DONE (round 1): Windows ObservationSource/TargetResolver/cursor.identity (compile-checked only), firewall lexicon follow-ups (Cf strip, joined-label destructive/purchase/submit flags, FocusState::Sensitive, foreground re-read, parse_visible). Follow-ups for S2-14d2: focus_state must NOT locate per chunk — compare focused element runtime id/ancestors instead (reviewer ruling); drift test between firewall::sensitive and policy::lexicon lists; document Document/Custom OTP gap in docs/observation.md; fix psa leak path in runtime_id_variant; NFKC-lite/homoglyph folding in firewall lexicon (optional); UWP coarse deny granularity (applicationframehost); elevation mapping may lock out some hardened apps (E_ACCESSDENIED => Protected).
 
 - S2-14d2 DONE (round 2, accepted by orch: round-2 fixes map 1:1 to tests): WinActuator (UIA patterns, SendInput keyboard-only, CreateProcessW fixed paths, release_all with in-call retry + stale drain), focus_state redesign (runtime-id/ancestor compare), drift test firewall<->policy lexicons, CI input tripwires. Reviewer rulings: focus_app via SetForegroundWindow OK; first-scrollable scroll root OK; Expand-only OK. All Windows runtime UNTESTED.
+- S2-10+15 DONE (round 2, accepted by orch): `agent` crate (protocol, MinimalEngine, ProcessEngine, Fake/Hostile engines, EngineSandbox + WindowsSandbox cfg, buddy-agent bin), core `CoreModelGateway` + `ProcessEngineKiller`, llm `with_output_schema` + preview purpose. Follow-ups for S2-23: fresh ProcessEngine + gateway per task, attach/detach killer, call policy::propose on draft, PlanLimits local/cloud from settings, foreground_app only if text verdict Clear and not deny-listed; engine exe must sit where ALL APPLICATION PACKAGES can read/execute (installer S3-1 sets ACL); S2-21 needs a Read+Reversible ops table; separate agent-provider setting maybe; Last-request view shows planning prompts (review in S2-16); Anthropic max_tokens 1024 may truncate 12-step plans. BLOCKED-ON-USER: WindowsSandbox runtime, real Ollama `format` behaviour.
 - Remaining 2B plan (merged tickets to save overhead): [S2-10+S2-15] agent crate: protocol + EngineSandbox (Windows AppContainer/Job cfg) + MinimalEngine + Process/Fake/Hostile engines + gate-hook adapter; [S2-16] approval UI; [S2-17+18+19+20+21+23] core agent supervisor/runner (plan-then-execute wiring, injection defences, read-only task, dry-run/live, form demo, background limits, e2e on fakes, reuse controller.gate(), audit sink, kill controller); [S2-22] red-team suite.
 
 ## 2B execution order (dependency-driven, branch step2b/agent-harness)
@@ -121,7 +122,7 @@ S2-1 Windows findings; S2-6 bench JSON; registry urls/sha256/files (S3-5); Windo
 1. Step 1 exit test (`docs/manual-tests.md` Exit test) 2. 2A: engine swap, Kokoro samples, model download (needs real registry values), title/URL leak checks 3. 2B: observe mode, approvals, kill switch, red-team 4. Step 3: install, wizard, update check (fake) 5. Step 4: OCR/PII image checks, lock/auth signals. Then read provisional ADRs 0003-0006, open the draft PRs.
 
 ## In progress
-S2-10+15 agent crate/protocol/sandbox (branch step2b/agent-harness); ADR 0003 + 0004 drafted, waiting on user
+S2-16 approval UI (branch step2b/agent-harness). ADR 0003 + 0004 provisional (D-006/D-007)
 
 ## Blockers / waiting on user
 - ADR 0003 (S2-8) + ADR 0004 (S2-9): read, answer their open questions (5 each), approve; plus tier table sign-off (ADR 0003 §5) = Gate G1 items

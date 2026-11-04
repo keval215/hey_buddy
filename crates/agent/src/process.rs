@@ -102,8 +102,20 @@ struct Session {
     writer: std_mpsc::Sender<Vec<u8>>,
     task: TaskId,
     finished: bool,
-    busy: Arc<AtomicBool>,
+    _busy: BusyGuard,
 }
+
+/// Resets the `busy` flag on every exit path (also when the `plan` future is dropped while the
+/// sandbox is still spawning).
+struct BusyGuard(Arc<AtomicBool>);
+
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+type Spawned = Result<(Box<dyn EngineProcess>, KillHandle), crate::sandbox::SandboxError>;
 
 impl Session {
     fn send(&self, m: &CoreToEngine) -> Result<(), ProtocolError> {
@@ -128,7 +140,6 @@ impl Drop for Session {
                 let _ = p.wait();
             });
         }
-        self.busy.store(false, Ordering::SeqCst);
     }
 }
 
@@ -320,22 +331,44 @@ impl AgentEngine for ProcessEngine {
         {
             return Err(EngineError::LimitExceeded("busy"));
         }
-        // From here on the guard below resets `busy` (also on early returns).
-        let mut process = match self.sandbox.spawn(&self.spec) {
-            Ok(p) => p,
-            Err(e) => {
-                self.busy.store(false, Ordering::SeqCst);
-                return Err(e.to_engine_error());
-            }
+        // From here on the guard resets `busy` on every exit path.
+        let busy = BusyGuard(self.busy.clone());
+        // `spawn` may block (Windows: profile, job and process creation), so it runs on the
+        // blocking pool. It stores the kill handle itself and honours a kill that raced it. If this
+        // future is dropped meanwhile, the closure kills and reaps the process it just made.
+        let (tx, rx) = tokio::sync::oneshot::channel::<Spawned>();
+        {
+            let (sandbox, spec, state) =
+                (self.sandbox.clone(), self.spec.clone(), self.state.clone());
+            tokio::task::spawn_blocking(move || {
+                let r: Spawned = sandbox.spawn(&spec).map(|p| {
+                    let k = p.kill_handle();
+                    *lock(&state.handle) = Some(k.clone());
+                    (p, k)
+                });
+                if let Ok((_, k)) = &r {
+                    if state.killed.load(Ordering::SeqCst) {
+                        k();
+                    }
+                }
+                if let Err(Ok((mut p, k))) = tx.send(r) {
+                    k();
+                    std::thread::spawn(move || {
+                        let _ = p.wait();
+                    });
+                }
+            });
+        }
+        let (mut process, kill) = match rx.await {
+            Ok(Ok(x)) => x,
+            Ok(Err(e)) => return Err(e.to_engine_error()),
+            Err(_) => return Err(EngineError::Unavailable("spawn_failed")),
         };
-        let kill = process.kill_handle();
-        *lock(&self.state.handle) = Some(kill.clone());
         let streams = process.take_streams();
         let (writer, lines) = match streams {
             Some(s) => spawn_io(s),
             None => {
                 kill();
-                self.busy.store(false, Ordering::SeqCst);
                 return Err(EngineError::Unavailable("spawn_failed"));
             }
         };
@@ -345,7 +378,7 @@ impl AgentEngine for ProcessEngine {
             writer,
             task: input.task_id,
             finished: false,
-            busy: self.busy.clone(),
+            _busy: busy,
         };
         // A kill that raced the spawn: the handle was not stored yet when it ran.
         if self.state.killed.load(Ordering::SeqCst) {

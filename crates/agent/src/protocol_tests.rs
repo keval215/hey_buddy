@@ -749,3 +749,23 @@ rejected!(bad_engine, decode_engine,
     call_unknown_schema: br#"{"t":"model_call","call_id":1,"task_id":1,"purpose":"plan","system":"","user":"","schema":"x"}"# => ProtocolError::BadField,
     cannot_bad_code: br#"{"t":"cannot_plan","task_id":1,"code":"a b"}"# => ProtocolError::BadField,
 );
+
+#[test]
+fn model_outcome_debug_is_content_free() {
+    let t = ModelOutcome::Text {
+        text: "SECRET_MODEL_TEXT".into(),
+    };
+    let d = format!("{t:?}");
+    assert!(!d.contains("SECRET"), "{d}");
+    assert_eq!(d, "ok 17 B");
+    let f = ModelOutcome::Failed {
+        code: "SECRET_CODE".into(),
+    };
+    assert_eq!(format!("{f:?}"), "err");
+    // Inside the enclosing message too.
+    let m = CoreToEngine::ModelResult {
+        call_id: 1,
+        result: t,
+    };
+    assert!(!format!("{m:?}").contains("SECRET"));
+}
