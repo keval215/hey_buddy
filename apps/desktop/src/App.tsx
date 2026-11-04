@@ -11,6 +11,7 @@ import { ModelsPanel } from "./models/ModelsPanel";
 import { RequestFields } from "./request/RequestView";
 import { AuditLogPanel } from "./settings/AuditLogPanel";
 import { DenyListPanel } from "./settings/DenyListPanel";
+import { UpdatePanel } from "./updates/UpdatePanel";
 import type { Status } from "./ipc/Status";
 import {
   AGENT_ENABLED_NOTE,
@@ -410,6 +411,8 @@ export default function App() {
       <DenyListPanel />
 
       <AuditLogPanel ready={status?.audit_ready ?? false} />
+
+      <UpdatePanel />
 
       <section className="border-t pt-3 text-neutral-700">
         <div>Status: {phaseText(phase)}</div>

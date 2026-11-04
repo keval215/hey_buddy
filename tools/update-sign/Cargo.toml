@@ -1,0 +1,17 @@
+[package]
+name = "update-sign"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Offline maintainer tool for update manifests (ADR 0005): keygen, sign, verify. Never run in CI with real keys."
+
+[dependencies]
+ring = { version = "0.17", default-features = false }
+base64 = "0.23"
+serde_json = "1"
+# The real verifier and the signed-message format, so `verify` here is the app's `verify`.
+update = { path = "../../crates/update" }
+
+[dev-dependencies]
+tempfile = "3"

@@ -12,6 +12,7 @@ use buddy_core::approval::{
     ApprovalBroker, ApprovalDecisionDto, ApprovalRequestDto, APPROVAL_WINDOW,
 };
 use buddy_core::kill::{KillController, KillReason};
+use buddy_core::update::{UpdateManager, UpdateStatusDto};
 use buddy_core::Buddy;
 use tauri::{AppHandle, Manager, State};
 
@@ -298,6 +299,72 @@ pub fn agent_status(window: tauri::Window, app: AppHandle, b: B) -> Result<Agent
     })
 }
 
+/// Settings window only: what the Updates section shows. Local only: reads the session and two
+/// small files, never the network.
+#[tauri::command]
+pub fn update_status(
+    window: tauri::Window,
+    mgr: State<UpdateManager>,
+) -> Result<UpdateStatusDto, String> {
+    only_main_window(&window)?;
+    Ok(mgr.status())
+}
+
+/// Settings window only, explicit click ("Check for updates"): ONE GET of the fixed release URL.
+/// An unconfigured build (no trusted key compiled in) answers `updates_not_configured` without
+/// any network call. Errors are fixed tokens. No path or URL parameter exists.
+#[tauri::command]
+pub async fn update_check(
+    window: tauri::Window,
+    mgr: State<'_, UpdateManager>,
+) -> Result<UpdateStatusDto, String> {
+    only_main_window(&window)?;
+    mgr.check().await.map_err(|e| e.code().to_string())
+}
+
+/// Settings window only, explicit click ("Download"): fetch the offered installer in the
+/// background (needs a successful check). Progress arrives as `update_progress`, then
+/// `update_done` or `update_failed`.
+#[tauri::command]
+pub fn update_download(window: tauri::Window, mgr: State<UpdateManager>) -> Result<(), String> {
+    only_main_window(&window)?;
+    mgr.start_download().map_err(|e| e.code().to_string())
+}
+
+/// Settings window only: stop the running update download; its partial file is deleted.
+#[tauri::command]
+pub fn update_cancel(window: tauri::Window, mgr: State<UpdateManager>) -> Result<(), String> {
+    only_main_window(&window)?;
+    mgr.cancel();
+    Ok(())
+}
+
+/// Settings window only, SEPARATE explicit click ("Install and restart"): re-verify the staged
+/// installer (envelope signature + sha256 + size), start it with no arguments and exit this app.
+/// `expected_version` must be the version the user saw; `allow_downgrade` is the separate confirm
+/// for a downgrade away from a revoked version. On success the agent is stopped first (the kill
+/// switch) and the app exits; on any failure the app keeps running and the call returns a fixed
+/// token. No path, URL or argument parameter exists.
+#[tauri::command]
+pub fn update_install(
+    window: tauri::Window,
+    app: AppHandle,
+    mgr: State<UpdateManager>,
+    expected_version: String,
+    allow_downgrade: bool,
+) -> Result<(), String> {
+    only_main_window(&window)?;
+    mgr.install(&expected_version, allow_downgrade)
+        .map_err(|e| e.code().to_string())?;
+    // The installer is running: stop any agent run, then leave (the exit handler cancels any
+    // pending consent; the audit lines are already written).
+    if let Some(ctl) = app.try_state::<Arc<KillController>>() {
+        ctl.trip(KillReason::Shutdown);
+    }
+    app.exit(0);
+    Ok(())
+}
+
 /// The settings window's label.
 const MAIN_WINDOW: &str = "main";
 
@@ -366,6 +433,11 @@ mod tests {
         "clear_audit_log",
         "agent_start_task",
         "agent_status",
+        "update_status",
+        "update_check",
+        "update_download",
+        "update_cancel",
+        "update_install",
     ];
 
     /// Commands every window may call (they can only stop things).
@@ -548,6 +620,73 @@ mod tests {
         let approval = permissions(include_str!("../capabilities/approval.json"));
         assert!(!approval.contains(&allow("agent_start_task")));
         assert!(!approval.contains(&allow("agent_status")));
+    }
+
+    #[test]
+    fn update_commands_check_the_label_and_take_no_path_or_url() {
+        let src = include_str!("commands.rs");
+        for name in [
+            "update_status",
+            "update_check",
+            "update_download",
+            "update_cancel",
+            "update_install",
+        ] {
+            let at = src
+                .find(&format!("pub fn {name}("))
+                .or_else(|| src.find(&format!("pub async fn {name}(")))
+                .expect("command");
+            let body = &src[at..at + 700];
+            assert!(
+                body.contains("only_main_window(&window)?"),
+                "{name} must check the window label"
+            );
+            // The signature (up to the opening brace of the body) has no path / URL / argument.
+            let sig = &body[..body.find("{\n").expect("body")];
+            for banned in ["path", "url", "Path", "args", "PathBuf"] {
+                assert!(
+                    !sig.contains(banned),
+                    "{name} takes a {banned} parameter: {sig}"
+                );
+            }
+        }
+        // The only free-form input is the version string the user saw and the confirm flag.
+        let at = src.find("pub fn update_install(").unwrap();
+        let sig = &src[at..at + 300];
+        assert!(sig.contains("expected_version: String") && sig.contains("allow_downgrade: bool"));
+        // Never in another window's capability, only in the settings window's.
+        let approval = permissions(include_str!("../capabilities/approval.json"));
+        for cmd in [
+            "update_check",
+            "update_download",
+            "update_cancel",
+            "update_install",
+            "update_status",
+        ] {
+            assert!(!approval.contains(&allow(cmd)), "{cmd} in approval.json");
+        }
+    }
+
+    #[test]
+    fn no_update_check_runs_at_startup() {
+        // Nothing in the app shell calls the manager's network entry points on its own: the only
+        // callers are the commands (user clicks). The UI client calls them only from handlers.
+        let main = include_str!("main.rs");
+        for banned in [".check()", ".start_download()", ".install("] {
+            assert!(!main.contains(banned), "main.rs calls {banned}");
+        }
+        // The production part of this file (before the test module).
+        let at = include_str!("commands.rs")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap();
+        assert!(
+            at.contains("pub async fn update_check("),
+            "the scan is alive"
+        );
+        assert_eq!(at.matches("mgr.check().await").count(), 1);
+        assert_eq!(at.matches("mgr.start_download()").count(), 1);
+        assert_eq!(at.matches("mgr.install(").count(), 1);
     }
 
     #[test]

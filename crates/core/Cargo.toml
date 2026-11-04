@@ -26,6 +26,8 @@ audit = { path = "../audit" }
 # The desktop driver (S2-17/23): core is the only crate that wires driver + agent + policy together.
 driver = { path = "../driver" }
 policy = { path = "../policy" }
+# The pure update verifier and installer launch (ADR 0005). Only core and the desktop app list it.
+update = { path = "../update" }
 voice = { path = "../voice" }
 capture = { path = "../capture" }
 firewall = { path = "../firewall" }
@@ -68,3 +70,5 @@ tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-t
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 png = "0.18"
 base64 = "0.23"
+# Runtime-generated ed25519 test keys for the update manager tests (never committed keys).
+ring = { version = "0.17", default-features = false }

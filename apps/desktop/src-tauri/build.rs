@@ -32,6 +32,11 @@ const COMMANDS: &[&str] = &[
     "debug_fake_task",
     "agent_start_task",
     "agent_status",
+    "update_status",
+    "update_check",
+    "update_download",
+    "update_cancel",
+    "update_install",
 ];
 
 fn main() {

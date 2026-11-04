@@ -33,12 +33,14 @@ pub(crate) type Opener = dyn Fn(&Path, bool) -> std::io::Result<Writer> + Send +
 /// Test hook: `(operation, path)` -> injected error. Operations: `"marker"`, `"rename"`.
 #[cfg(test)]
 pub(crate) type Fault = dyn Fn(&str, &Path) -> std::io::Result<()> + Send + Sync;
+#[cfg(test)]
+pub(crate) type Rewrite = dyn Fn(&str) -> String + Send + Sync;
 
 static INSTALL_PROVIDER: Once = Once::new();
 
 /// reqwest is built with `rustls-no-provider`; install the `ring` provider once. If the
 /// application already installed another provider, keep that one.
-fn ensure_crypto_provider() {
+pub(crate) fn ensure_crypto_provider() {
     INSTALL_PROVIDER.call_once(|| {
         let _ = rustls::crypto::ring::default_provider().install_default();
     });
@@ -87,14 +89,29 @@ pub(crate) fn target_ok(u: &Url, allow_loopback_http: bool) -> bool {
     }
 }
 
+/// Is `u` a target of the optional host allowlist? `None` = no list (model downloads).
+/// With a list the host must match exactly (`Url` already lowercases it and turns an IDN into
+/// punycode, so look-alikes never match) and, outside tests, no explicit port is allowed.
+pub(crate) fn host_ok(u: &Url, hosts: Option<&[String]>, allow_loopback_http: bool) -> bool {
+    let Some(hosts) = hosts else { return true };
+    (allow_loopback_http || u.port().is_none())
+        && u.host_str()
+            .is_some_and(|h| hosts.iter().any(|a| a.eq_ignore_ascii_case(h)))
+}
+
 /// HTTPS-only, resumable, checksum-verifying file fetcher.
 pub struct Downloader {
     /// Only ever true through [`Downloader::for_tests`].
     allow_loopback_http: bool,
+    /// Optional exact host allowlist for the URL AND every redirect hop (updates, ADR 0005).
+    hosts: Option<Vec<String>>,
     #[cfg(test)]
     opener: Option<std::sync::Arc<Opener>>,
     #[cfg(test)]
     fault: Option<std::sync::Arc<Fault>>,
+    /// Test hook: map a (https) URL from a manifest to the loopback fake server.
+    #[cfg(test)]
+    rewrite: Option<std::sync::Arc<Rewrite>>,
 }
 
 impl Default for Downloader {
@@ -108,10 +125,13 @@ impl Downloader {
     pub fn new() -> Self {
         Self {
             allow_loopback_http: false,
+            hosts: None,
             #[cfg(test)]
             opener: None,
             #[cfg(test)]
             fault: None,
+            #[cfg(test)]
+            rewrite: None,
         }
     }
 
@@ -120,9 +140,24 @@ impl Downloader {
     pub fn for_tests(allow_loopback_http: bool) -> Self {
         Self {
             allow_loopback_http,
+            hosts: None,
             opener: None,
             fault: None,
+            rewrite: None,
         }
+    }
+
+    /// Test hook: rewrite every URL before it is validated and fetched.
+    #[cfg(test)]
+    pub fn with_rewrite(mut self, f: std::sync::Arc<Rewrite>) -> Self {
+        self.rewrite = Some(f);
+        self
+    }
+
+    /// Only these exact hosts may be fetched or redirected to.
+    pub fn with_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.hosts = Some(hosts);
+        self
     }
 
     /// Test hook: inject IO errors into the final marker write / renames.
@@ -149,8 +184,15 @@ impl Downloader {
 
     /// Validate a registry URL without touching the network.
     pub(crate) fn check_url(&self, raw: &str) -> Result<Url, DownloadError> {
+        #[cfg(test)]
+        let raw = &match &self.rewrite {
+            Some(f) => f(raw),
+            None => raw.to_string(),
+        };
         let u = Url::parse(raw).map_err(|_| DownloadError::InvalidUrl)?;
-        if target_ok(&u, self.allow_loopback_http) {
+        if target_ok(&u, self.allow_loopback_http)
+            && host_ok(&u, self.hosts.as_deref(), self.allow_loopback_http)
+        {
             Ok(u)
         } else {
             Err(DownloadError::InvalidUrl)
@@ -160,8 +202,12 @@ impl Downloader {
     fn client(&self) -> Result<Client, DownloadError> {
         ensure_crypto_provider();
         let allow_http = self.allow_loopback_http;
+        let hosts = self.hosts.clone();
         let policy = reqwest::redirect::Policy::custom(move |attempt| {
-            if attempt.previous().len() >= MAX_REDIRECTS || !target_ok(attempt.url(), allow_http) {
+            if attempt.previous().len() >= MAX_REDIRECTS
+                || !target_ok(attempt.url(), allow_http)
+                || !host_ok(attempt.url(), hosts.as_deref(), allow_http)
+            {
                 attempt.error("redirect")
             } else {
                 attempt.follow()
@@ -199,8 +245,8 @@ impl Downloader {
         progress: &(dyn Fn(u64, Option<u64>) + Sync),
     ) -> Result<(), DownloadError> {
         // Never delete through a link: check our bookkeeping dirs before touching them.
-        check_state_dirs(&job.models, &job.id)?;
-        let work = work_dir(&job.models, &job.id);
+        check_state_dirs(&job.root, &job.id)?;
+        let work = work_dir(&job.root, &job.id);
         let result = self.run_inner(job, &work, progress);
         match result {
             Ok(()) => {
@@ -227,7 +273,7 @@ impl Downloader {
         let mut targets = Vec::new();
         for f in &job.files {
             self.check_url(&f.url)?;
-            targets.push(resolve_inside(&job.models, &f.rel)?);
+            targets.push(resolve_inside(&job.root, &f.rel)?);
         }
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -258,7 +304,7 @@ impl Downloader {
         // The trust marker is written BEFORE any file lands, so a crash or failed write can
         // never leave an unverified model looking Ready (no files => Missing).
         let marker = job
-            .models
+            .root
             .join(DOWNLOADS_DIR)
             .join("unverified")
             .join(&job.id);
@@ -287,7 +333,7 @@ impl Downloader {
                     std::fs::create_dir_all(parent).map_err(|e| map_io(&e))?;
                 }
                 // Re-resolve after creating the parents (a link could have appeared meanwhile).
-                let dest = resolve_inside(&job.models, &f.rel)?;
+                let dest = resolve_inside(&job.root, &f.rel)?;
                 self.inject("rename", &dest).map_err(|e| map_io(&e))?;
                 std::fs::rename(&staged, &dest).map_err(|e| map_io(&e))?;
                 Ok(dest)

@@ -799,6 +799,55 @@ The NSIS build cannot run on Linux. Download the artifact, check `SHA256SUMS`, t
 - [ ] Uninstall: install dir is gone; settings, models and audit log in AppData are still there by default; the
       "delete application data" checkbox is OFF by default.
 
+## Updates (S3-3) - UNTESTED on this machine (Windows only for the launch; the rest runs on Linux CI with fakes)
+
+Design: `docs/adr/0005-auto-update.md` (provisional D-010); how it works: `docs/update.md`. In this repository
+`TRUSTED_KEYS` is EMPTY, so a normal build is "not configured" and never contacts the network.
+
+Unconfigured build (what CI and `main` ship today):
+
+- [ ] Settings shows an "Updates" section that says "Updates are not configured in this build."; "Check for
+      updates", "Download" and "Install and restart" are all disabled.
+- [ ] Start the app with a network monitor (Resource Monitor, or a firewall prompt): NO update-related connection
+      at startup, after an hour, or when opening Settings.
+
+Local-only test with your own key (NEVER commit or ship this; there is deliberately no test-key switch in the app):
+
+1. Generate a throw-away key OUTSIDE the repo: `cargo run -p update-sign -- keygen --id hb-local --private C:\Temp\hb.key --public C:\Temp\hb.pub`
+   (it refuses to write inside a git work tree). Copy the printed `TrustedKey { .. }` line.
+2. In a LOCAL checkout only, paste it into `TRUSTED_KEYS` in `crates/update/src/config.rs` and set the `OWNER_TODO`
+   part of the manifest URL and `hosts` to a host you control (a local HTTPS server with a certificate the machine
+   trusts, or a GitHub test repo). Build it with `pnpm --filter desktop tauri build`. Do not commit this change.
+3. Write a payload JSON (ADR 0005 section 4.2: `schema`, `product`, `channel`, `serial`, `version`, `issued_at`,
+   `expires_at` <= 180 days later, `min_supported`, `revoked`, `notes`, one `windows-x86_64`/`nsis` artifact with the
+   installer URL, its lowercase sha256 and exact size), sign it:
+   `update-sign sign --private C:\Temp\hb.key --id hb-local --payload payload.json --out update-manifest.json`,
+   check it: `update-sign verify --public C:\Temp\hb.pub --id hb-local --envelope update-manifest.json`.
+
+Then, with that local build:
+
+- [ ] "Check for updates" with a manifest for a HIGHER version: shows "Version X is available" and the notes as plain
+      text; one request in the server log, no cookie, `User-Agent: hey_buddy-update`, no query string.
+- [ ] A manifest for the SAME version: "You are up to date". An OLDER version: refused (stale). A lower `serial` than
+      before: refused (replayed). An expired manifest: "out of date" message.
+- [ ] Edit one byte of the envelope: refused (signature). Sign with a different key: refused.
+- [ ] "Download" shows progress and "downloaded and verified"; "Install and restart" is a SEPARATE click and only
+      enabled after it. Cancel mid-download leaves nothing in `%APPDATA%\dev.heybuddy.desktop\updates\.downloads`.
+- [ ] Flip one byte of `updates\installer.exe` after the download: "Install and restart" says the file changed and
+      does NOT start anything.
+- [ ] Install and restart: the NSIS installer starts with NO arguments and NO admin prompt, hey_buddy exits, the
+      per-user install is replaced. `%LOCALAPPDATA%\dev.heybuddy.desktop\updates\run\<32 hex>\` holds only
+      `setup.exe`; `icacls` on it shows SYSTEM and your user only, no inheritance.
+- [ ] Next "Check": the old `run\<hex>` directory is removed.
+- [ ] RECORD: does SmartScreen prompt for the installer launched this way (ADR 0005 expects no)? Does Smart App
+      Control (Windows 11) block the unsigned installer (`launch_blocked`)? Is the NSIS self-extraction folder
+      private?
+- [ ] Downgrade: a manifest that lists YOUR running version in `revoked` and offers a lower version shows the
+      withdrawn warning and a confirm checkbox; "Install and restart" stays disabled until it is ticked.
+- [ ] `updates\kept\` holds exactly one previous verified installer + envelope after a second download.
+- [ ] The activity log (Settings, "Agent activity log") shows `update_check` / `update_download` / `update_install`
+      lines with result codes and versions only: no URL, no path, no notes.
+
 ## Step 2 packaging note
 
 - [ ] macOS bundled builds (not `tauri dev`) need an `Info.plist` with

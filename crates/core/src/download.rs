@@ -29,7 +29,7 @@ use voice::registry::{is_safe_rel_path, ModelEntry, Registry, Task};
 
 use crate::api::{EngineSlotName, ModelRow, ModelStatus};
 
-mod fetch;
+pub(crate) mod fetch;
 pub use fetch::Downloader;
 #[cfg(test)]
 mod tests;
@@ -125,13 +125,16 @@ pub(crate) struct PlannedFile {
     /// `None` = the registry says `TODO` (unverified download).
     pub sha256: Option<String>,
     pub declared: Option<u64>,
+    /// Update installers (ADR 0005): the declared size is exact, with no slack.
+    pub exact_size: bool,
 }
 
 impl PlannedFile {
     /// Most bytes the server may send for this file.
     pub fn limit(&self) -> u64 {
+        let slack = if self.exact_size { 0 } else { SIZE_SLACK };
         self.declared
-            .map_or(DEFAULT_MAX_BYTES, |d| d.saturating_add(SIZE_SLACK))
+            .map_or(DEFAULT_MAX_BYTES, |d| d.saturating_add(slack))
     }
 }
 
@@ -164,6 +167,7 @@ pub(crate) fn plan(m: &ModelEntry) -> Result<Vec<PlannedFile>, DownloadError> {
                     url: f.url.clone(),
                     sha256: sha(&f.sha256),
                     declared: f.size_bytes,
+                    exact_size: false,
                 })
             })
             .collect();
@@ -182,6 +186,7 @@ pub(crate) fn plan(m: &ModelEntry) -> Result<Vec<PlannedFile>, DownloadError> {
         url: m.url.clone(),
         sha256: sha(&m.sha256),
         declared: m.size_bytes,
+        exact_size: false,
     }])
 }
 
@@ -274,6 +279,16 @@ fn walk_no_links<'a>(
         }
     }
     Ok(cur)
+}
+
+/// `path` itself is not a symlink / reparse point (a missing path passes).
+pub(crate) fn check_not_link(path: &Path) -> Result<(), DownloadError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(md) if link_like(&md) => Err(DownloadError::InvalidPath),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(DownloadError::Io),
+    }
 }
 
 #[cfg(windows)]
@@ -371,10 +386,12 @@ struct Active {
     cancel: Arc<AtomicBool>,
 }
 
-/// What a worker thread needs.
+/// What a worker thread needs. `root` is the folder everything happens in (the models
+/// directory, or the updates directory for ADR 0005): files land below it, bookkeeping lives in
+/// `root/.downloads`.
 pub(crate) struct Job {
     pub id: String,
-    pub models: PathBuf,
+    pub root: PathBuf,
     pub files: Vec<PlannedFile>,
     pub cancel: Arc<AtomicBool>,
 }
@@ -519,7 +536,7 @@ impl ModelManager {
         }
         let job = Job {
             id: id.to_string(),
-            models: inner.dir.clone(),
+            root: inner.dir.clone(),
             files,
             cancel,
         };

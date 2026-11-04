@@ -30,6 +30,7 @@ import type { SettingsPatch } from "../ipc/SettingsPatch";
 import type { Status } from "../ipc/Status";
 import type { TurnError } from "../ipc/TurnError";
 import type { TurnState } from "../ipc/TurnState";
+import type { UpdateStatusDto } from "../ipc/UpdateStatusDto";
 
 export const EVT = {
   turnState: "turn:state",
@@ -47,6 +48,9 @@ export const EVT = {
   downloadDone: "download_done",
   downloadFailed: "download_failed",
   agentTaskDone: "agent:task_done",
+  updateProgress: "update_progress",
+  updateDone: "update_done",
+  updateFailed: "update_failed",
 } as const;
 
 export interface EventMap {
@@ -65,6 +69,9 @@ export interface EventMap {
   download_done: DownloadDone;
   download_failed: DownloadFailed;
   "agent:task_done": AgentTaskDto;
+  update_progress: DownloadProgress;
+  update_done: DownloadDone;
+  update_failed: DownloadFailed;
 }
 
 export function on<K extends keyof EventMap>(
@@ -144,6 +151,23 @@ export const api = {
    * still needs its approvals.
    */
   agentStartTask: (transcript: string) => invoke<void>("agent_start_task", { transcript }),
+  /** Settings window only. Local state of the Updates section; never the network. */
+  updateStatus: () => invoke<UpdateStatusDto>("update_status"),
+  /**
+   * Settings window only, explicit click ONLY (never called at startup or on a timer): one GET
+   * of the fixed release URL; `updates_not_configured` without any network call in this build.
+   * Rejects with a fixed token.
+   */
+  updateCheck: () => invoke<UpdateStatusDto>("update_check"),
+  /** Explicit click: fetch the offered installer; progress arrives as update_* events. */
+  updateDownload: () => invoke<void>("update_download"),
+  updateCancel: () => invoke<void>("update_cancel"),
+  /**
+   * SEPARATE explicit click: re-verify and start the staged installer, then the app exits.
+   * `expectedVersion` is the version the user saw; `allowDowngrade` is the downgrade confirm.
+   */
+  updateInstall: (expectedVersion: string, allowDowngrade: boolean) =>
+    invoke<void>("update_install", { expectedVersion, allowDowngrade }),
   /** Dev builds only; the command does not exist in release. */
   debugPoint: (x: number, y: number, label: string) =>
     invoke<void>("debug_point", { x, y, label }),

@@ -9,7 +9,8 @@ use buddy_core::api::{
     PointEvent, ReplyDelta, TranscriptEvent, TurnError, TurnState, EVT_DOWNLOAD_DONE,
     EVT_DOWNLOAD_FAILED, EVT_DOWNLOAD_PROGRESS, EVT_ENGINE_SWAP_DONE, EVT_ENGINE_SWAP_FAILED,
     EVT_ENGINE_SWAP_REQUESTED, EVT_FIREWALL_STATUS, EVT_TURN_ERROR, EVT_TURN_POINT,
-    EVT_TURN_REPLY_DELTA, EVT_TURN_STATE, EVT_TURN_TRANSCRIPT,
+    EVT_TURN_REPLY_DELTA, EVT_TURN_STATE, EVT_TURN_TRANSCRIPT, EVT_UPDATE_DONE, EVT_UPDATE_FAILED,
+    EVT_UPDATE_PROGRESS,
 };
 use buddy_core::kill::{KillController, KillReason};
 use buddy_core::{Buddy, EventSink};
@@ -91,6 +92,16 @@ impl EventSink for TauriEvents {
     }
     fn download_failed(&self, ev: DownloadFailed) {
         let _ = self.0.emit_to(MAIN, EVT_DOWNLOAD_FAILED, ev);
+    }
+    // Update download: byte counts and fixed error tokens only; settings window only.
+    fn update_progress(&self, ev: DownloadProgress) {
+        let _ = self.0.emit_to(MAIN, EVT_UPDATE_PROGRESS, ev);
+    }
+    fn update_done(&self, ev: DownloadDone) {
+        let _ = self.0.emit_to(MAIN, EVT_UPDATE_DONE, ev);
+    }
+    fn update_failed(&self, ev: DownloadFailed) {
+        let _ = self.0.emit_to(MAIN, EVT_UPDATE_FAILED, ev);
     }
     // How an agent task ended: fixed tokens, counts and short read answers; settings window only.
     fn agent_task(&self, ev: buddy_core::agent::AgentTaskDto) {

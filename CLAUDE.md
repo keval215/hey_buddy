@@ -61,6 +61,7 @@ crates/firewall/       secure-field detection, blackout, lock-screen pause
 crates/llm/            LlmProvider trait, ollama + anthropic adapters
 crates/action/         agent Action vocabulary: validated TypedText/KeyCombo/LaunchId, canonical bytes, digest (pure)
 crates/policy/         (target, not yet created) tier gate, plan/step approvals, sealed ApprovedAction
+crates/update/         update manifest verifier + decide() + Windows installer launch (pure, no network; ADR 0005)
 crates/driver/         DesktopDriver trait, Driver<A: Actuator>, FakeActuator, limits (Windows actuator: S2-14d)
 crates/agent/          plan engine (ADR 0003): stdio protocol, sandbox launcher, MinimalEngine, ProcessEngine, `buddy-agent` bin; no path to policy/driver/firewall
 crates/core/           (package buddy-core) wiring: hotkey → capture → firewall → STT → LLM → TTS

@@ -27,6 +27,12 @@ pub const EVT_DOWNLOAD_PROGRESS: &str = "download_progress";
 pub const EVT_DOWNLOAD_DONE: &str = "download_done";
 /// A model download ended without a file (payload [`DownloadFailed`]).
 pub const EVT_DOWNLOAD_FAILED: &str = "download_failed";
+/// Update download progress (payload [`DownloadProgress`] with id `update`; settings window only).
+pub const EVT_UPDATE_PROGRESS: &str = "update_progress";
+/// The update installer is downloaded and verified (payload [`DownloadDone`]).
+pub const EVT_UPDATE_DONE: &str = "update_done";
+/// The update download ended without a file (payload [`DownloadFailed`], fixed token in `code`).
+pub const EVT_UPDATE_FAILED: &str = "update_failed";
 /// Sent only to the `preview` window.
 pub const EVT_TURN_PREVIEW: &str = "turn:preview";
 /// Sent only to the `preview` window: the pending preview ended (decided, timed out, cancelled).

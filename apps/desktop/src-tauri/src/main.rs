@@ -17,6 +17,7 @@ mod kill;
 mod overlay;
 mod preview;
 mod shell;
+mod updates;
 
 use std::sync::Arc;
 
@@ -53,6 +54,7 @@ fn main() {
             shell::setup(app.handle(), &buddy)?;
             engine::start(app.handle(), &buddy, &dir);
             agent::start(app.handle(), &buddy);
+            updates::setup(app.handle(), &buddy);
             Ok(())
         });
 
@@ -87,6 +89,11 @@ fn main() {
         commands::approval_respond,
         commands::agent_start_task,
         commands::agent_status,
+        commands::update_status,
+        commands::update_check,
+        commands::update_download,
+        commands::update_cancel,
+        commands::update_install,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -117,6 +124,11 @@ fn main() {
         commands::approval_respond,
         commands::agent_start_task,
         commands::agent_status,
+        commands::update_status,
+        commands::update_check,
+        commands::update_download,
+        commands::update_cancel,
+        commands::update_install,
     ]);
 
     builder

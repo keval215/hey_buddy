@@ -1,0 +1,28 @@
+[package]
+name = "update"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "hey_buddy update manifest verifier and installer launch (ADR 0005): pure, sync, no network"
+
+[dependencies]
+# ed25519 verify (and key generation in tests). No default features: nothing here needs the
+# allocator-backed extras, and the crate stays close to the minimum ring surface.
+ring = { version = "0.17", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.23"
+sha2 = "0.10"
+thiserror = "1"
+
+# The Windows installer launch (ADR 0005 section 7): CreateDirectoryW with a private DACL and
+# CreateProcessW. Same crate and version as driver/firewall/desktop (already in the lock).
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Threading",
+] }
