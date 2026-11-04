@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use buddy_core::agent::{AgentRuntime, AgentStatusDto};
 use buddy_core::api::{
     AuditClearDto, AuditExportDto, AuditPageDto, Decision, DenyListDto, DisplayDto, IssueCode,
     LastRequestDto, ModelRow, PreviewDto, Settings, SettingsField, SettingsIssue, SettingsPatch,
@@ -266,6 +267,53 @@ pub fn approval_respond(
         .map_err(|e| e.to_string())
 }
 
+/// Settings window only (capability `default`; also checked by label here): start ONE agent task
+/// from typed words. The task runs on the async runtime; this returns at once and the outcome
+/// arrives as the `agent:task_done` event (fixed tokens, counts and read answers) and a fixed
+/// spoken phrase. Rejected with a fixed token (`agent_disabled`, `busy`, `bad_request`,
+/// `agent_unavailable`) when the agent is not enabled in the settings, not ready (activity log,
+/// stop shortcut), already busy or has no runtime on this platform. Starting a task still needs
+/// every approval of the gate: this command never approves anything.
+#[tauri::command]
+pub fn agent_start_task(
+    window: tauri::Window,
+    app: AppHandle,
+    transcript: String,
+) -> Result<(), String> {
+    only_main_window(&window)?;
+    let rt = app
+        .try_state::<Arc<AgentRuntime>>()
+        .map(|r| Arc::clone(&r))
+        .ok_or_else(|| "agent_unavailable".to_string())?;
+    rt.start_task(transcript).map_err(|e| e.code().to_string())
+}
+
+/// Settings window only: whether the agent can start a task now, and why not.
+#[tauri::command]
+pub fn agent_status(window: tauri::Window, app: AppHandle, b: B) -> Result<AgentStatusDto, String> {
+    only_main_window(&window)?;
+    Ok(match app.try_state::<Arc<AgentRuntime>>() {
+        Some(rt) => rt.status(),
+        None => AgentStatusDto::no_runtime(&b),
+    })
+}
+
+/// The settings window's label.
+const MAIN_WINDOW: &str = "main";
+
+/// Defence in depth behind the per-window capability.
+fn only_main_window(window: &tauri::Window) -> Result<(), String> {
+    if label_is_main(window.label()) {
+        Ok(())
+    } else {
+        Err("forbidden".to_string())
+    }
+}
+
+fn label_is_main(label: &str) -> bool {
+    label == MAIN_WINDOW
+}
+
 /// Defence in depth behind the per-window capability.
 fn only_approval_window(window: &tauri::Window) -> Result<(), String> {
     if window.label() == APPROVAL_WINDOW {
@@ -316,6 +364,8 @@ mod tests {
         "get_audit_entries",
         "export_audit_log",
         "clear_audit_log",
+        "agent_start_task",
+        "agent_status",
     ];
 
     /// Commands every window may call (they can only stop things).
@@ -476,6 +526,28 @@ mod tests {
                 "main.rs must register {cmd} in both handler lists"
             );
         }
+    }
+
+    #[test]
+    fn agent_commands_check_the_main_window_label_and_the_label_check_is_exact() {
+        let src = include_str!("commands.rs");
+        for name in ["agent_start_task", "agent_status"] {
+            let at = src.find(&format!("pub fn {name}(")).expect("command");
+            let body = &src[at..at + 600];
+            assert!(
+                body.contains("only_main_window(&window)?"),
+                "{name} must check the window label"
+            );
+        }
+        assert!(super::label_is_main("main"));
+        for other in ["approval", "preview", "overlay-0", "Main", "main ", ""] {
+            assert!(!super::label_is_main(other), "{other:?}");
+        }
+        // Only the settings window's capability has them (NEW_COMMANDS test), and the approval
+        // window's capability must not.
+        let approval = permissions(include_str!("../capabilities/approval.json"));
+        assert!(!approval.contains(&allow("agent_start_task")));
+        assert!(!approval.contains(&allow("agent_status")));
     }
 
     #[test]

@@ -905,6 +905,12 @@ impl PolicyGate {
         Arc::clone(&self.clock)
     }
 
+    /// The audit sink this gate writes to. Read-only: lets the supervisor prove that its own
+    /// records go to the SAME append-only log (`audit_mismatch` otherwise).
+    pub fn audit_sink(&self) -> Arc<dyn AuditSink> {
+        Arc::clone(&self.audit)
+    }
+
     pub fn kill_switch(&self) -> &KillSwitch {
         &self.kill
     }

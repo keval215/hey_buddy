@@ -184,6 +184,9 @@ struct Stored {
     kill_hotkey: String,
     anthropic_model: String,
     models_dir: String,
+    observe_mode: bool,
+    agent_enabled: bool,
+    agent_mode: bool,
 }
 
 impl Default for Stored {
@@ -198,6 +201,9 @@ impl Default for Stored {
             kill_hotkey: DEFAULT_KILL_HOTKEY.into(),
             anthropic_model: String::new(),
             models_dir: String::new(),
+            observe_mode: d.observe_mode,
+            agent_enabled: d.agent_enabled,
+            agent_mode: d.agent_mode,
         }
     }
 }
@@ -261,6 +267,10 @@ impl Stored {
                     issues.push(issue(SettingsField::ModelsDir, code));
                 }
             }
+        }
+        // Routing voice to the agent needs the agent to be allowed.
+        if !out.agent_enabled {
+            out.agent_mode = false;
         }
         (out, issues)
     }
@@ -333,6 +343,9 @@ impl SettingsStore {
             anthropic_model: self.stored.anthropic_model.clone(),
             models_dir: self.stored.models_dir.clone(),
             default_models_dir: String::new(),
+            observe_mode: self.stored.observe_mode,
+            agent_enabled: self.stored.agent_enabled,
+            agent_mode: self.stored.agent_mode,
         }
     }
 
@@ -367,6 +380,15 @@ impl SettingsStore {
         }
         if let Some(v) = &patch.models_dir {
             next.models_dir = v.clone();
+        }
+        if let Some(v) = patch.observe_mode {
+            next.observe_mode = v;
+        }
+        if let Some(v) = patch.agent_enabled {
+            next.agent_enabled = v;
+        }
+        if let Some(v) = patch.agent_mode {
+            next.agent_mode = v;
         }
         let (next, issues) = next.sanitize(Some(patch));
         let json = serde_json::to_vec_pretty(&next).map_err(|_| SettingsError::Io)?;
@@ -1040,6 +1062,40 @@ mod tests {
         }
     }
 
+    #[test]
+    fn agent_settings_default_safe_persist_and_agent_mode_needs_agent_enabled() {
+        let (d, mut s) = store();
+        let def = s.settings();
+        assert!(def.observe_mode, "observe mode (dry run first) defaults ON");
+        assert!(
+            !def.agent_enabled && !def.agent_mode,
+            "the agent defaults OFF"
+        );
+        // agent_mode alone does nothing.
+        let out = s.apply(&patch_of(|x| x.agent_mode = Some(true))).unwrap();
+        assert!(!out.agent_mode);
+        let out = s
+            .apply(&patch_of(|x| {
+                x.agent_enabled = Some(true);
+                x.agent_mode = Some(true);
+                x.observe_mode = Some(false);
+            }))
+            .unwrap();
+        assert!(out.agent_enabled && out.agent_mode && !out.observe_mode);
+        // Persisted.
+        let again = SettingsStore::load(d.path().join("cfg").join("settings.json"));
+        assert_eq!(again.settings(), out);
+        // Turning the agent off turns the mode off with it.
+        let out = s
+            .apply(&patch_of(|x| x.agent_enabled = Some(false)))
+            .unwrap();
+        assert!(!out.agent_mode && !out.observe_mode);
+        // An unreadable file gives the safe defaults.
+        fs::write(d.path().join("cfg").join("settings.json"), b"{bad").unwrap();
+        let bad = SettingsStore::load(d.path().join("cfg").join("settings.json"));
+        assert!(bad.settings().observe_mode && !bad.settings().agent_enabled);
+    }
+
     /// Every field of every settings type, by name. Adding a field makes this test fail until
     /// the new name is added HERE, which is the moment to confirm it is not a switch for the
     /// firewall, the OCR / redaction stages, the deny-list defaults, the preview gate or
@@ -1056,6 +1112,9 @@ mod tests {
         "anthropic_model", // cloud model id
         "models_dir",  // where model files live
         "default_models_dir", // display only
+        "observe_mode", // dry run first (default ON); turning it off only skips that question, never a check
+        "agent_enabled", // opt-in to the agent (default OFF); the readiness checks still apply
+        "agent_mode",   // route voice requests to the agent (default OFF)
     ];
 
     /// Words that would name a safety switch. Checked on top of the allowlist.
@@ -1112,6 +1171,9 @@ mod tests {
                 kill_hotkey: Some(String::new()),
                 anthropic_model: Some(String::new()),
                 models_dir: Some(String::new()),
+                observe_mode: Some(true),
+                agent_enabled: Some(false),
+                agent_mode: Some(false),
             })
             .unwrap(),
         );

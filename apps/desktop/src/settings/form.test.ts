@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { Settings } from "../ipc/Settings";
 import type { SettingsIssue } from "../ipc/SettingsIssue";
+import type { AgentTaskDto } from "../ipc/AgentTaskDto";
 import {
+  AGENT_ENABLED_NOTE,
+  AGENT_MODE_NOTE,
+  OBSERVE_MODE_NOTE,
+  agentOutcomeText,
+  agentReasonText,
+  agentStartErrorText,
+  agentStatusText,
   DEFAULT_HOTKEY,
   LOCAL_ONLY_OFF_NOTE,
   applySwap,
@@ -36,6 +44,9 @@ const base: Settings = {
   anthropic_model: "",
   models_dir: "",
   default_models_dir: "C:\\Users\\me\\AppData\\models",
+  observe_mode: true,
+  agent_enabled: false,
+  agent_mode: false,
 };
 
 describe("buildPatch", () => {
@@ -258,5 +269,74 @@ describe("killHotkeyProblem", () => {
       "Your stop shortcut 'Ctrl+Alt+Shift+J' was not saved: the chord could not be registered; the previous one is still active.",
     );
     expect(unavailable).not.toContain("Using the default");
+  });
+});
+
+describe("agent settings", () => {
+  it("defaults: observe mode on, agent off, voice routing off", () => {
+    expect(base.observe_mode).toBe(true);
+    expect(base.agent_enabled).toBe(false);
+    expect(base.agent_mode).toBe(false);
+  });
+  it("sends only the changed agent fields", () => {
+    expect(buildPatch(base, { ...base, observe_mode: false })).toEqual({ observe_mode: false });
+    expect(buildPatch(base, { ...base, agent_enabled: true })).toEqual({ agent_enabled: true });
+    expect(buildPatch(base, { ...base, agent_enabled: true, agent_mode: true })).toEqual({
+      agent_enabled: true,
+      agent_mode: true,
+    });
+  });
+  it("never sends agent_mode on without the agent enabled", () => {
+    expect(isEmptyPatch(buildPatch(base, { ...base, agent_mode: true }))).toBe(true);
+    const on: Settings = { ...base, agent_enabled: true, agent_mode: true };
+    expect(buildPatch(on, { ...on, agent_enabled: false })).toEqual({
+      agent_enabled: false,
+      agent_mode: false,
+    });
+  });
+  it("says observe mode is a dry run first, and that turning it off keeps every check", () => {
+    expect(OBSERVE_MODE_NOTE).toMatch(/dry run/);
+    expect(OBSERVE_MODE_NOTE).toMatch(/Run it for real/);
+    expect(OBSERVE_MODE_NOTE).toMatch(/every approval/);
+    expect(AGENT_ENABLED_NOTE).toMatch(/Off by default/);
+    expect(AGENT_MODE_NOTE).toMatch(/Off by default/);
+  });
+  it("maps fixed tokens to text", () => {
+    expect(agentReasonText(null)).toBe("Agent: ready");
+    expect(agentReasonText("setting_off")).toMatch(/enable/);
+    expect(agentReasonText("not_ready")).toMatch(/activity log/);
+    expect(agentReasonText("no_runtime")).toMatch(/not available/);
+    expect(agentReasonText("???")).toBe("Agent: not available");
+    expect(agentStatusText(null)).toMatch(/checking/);
+    expect(
+      agentStatusText({ ready: true, running: true, observe_mode: true, agent_mode: false, reason: null }),
+    ).toMatch(/running/);
+    expect(agentStartErrorText("agent_disabled")).toMatch(/not enabled/);
+    expect(agentStartErrorText("busy")).toMatch(/already running/);
+    expect(agentStartErrorText("bad_request")).toMatch(/Type what/);
+    expect(agentStartErrorText("agent_unavailable")).toMatch(/not available/);
+    expect(agentStartErrorText("forbidden")).toBe("forbidden");
+  });
+  it("describes how a task ended from tokens and counts", () => {
+    const t = (o: Partial<AgentTaskDto>): AgentTaskDto => ({
+      task: 1,
+      outcome: "completed",
+      detail: "ok",
+      dry_run: true,
+      would_do: 2,
+      steps_done: 2,
+      executed: 2,
+      live: true,
+      answers: [],
+      ...o,
+    });
+    expect(agentOutcomeText(t({}))).toBe("Done (2 steps done, 2 actions)");
+    expect(agentOutcomeText(t({ outcome: "denied", live: false }))).toMatch(/Dry run only/);
+    expect(agentOutcomeText(t({ outcome: "killed" }))).toBe("Stopped");
+    expect(agentOutcomeText(t({ outcome: "stopped", detail: "runaway" }))).toMatch(/runaway/);
+    expect(agentOutcomeText(t({ outcome: "refused", detail: "busy" }))).toBe("Not started (busy)");
+    expect(agentOutcomeText(t({ outcome: "blocked", detail: "outside_plan" }))).toMatch(
+      /outside_plan/,
+    );
   });
 });

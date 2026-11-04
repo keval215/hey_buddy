@@ -30,6 +30,8 @@ const COMMANDS: &[&str] = &[
     "approval_displayed",
     "approval_respond",
     "debug_fake_task",
+    "agent_start_task",
+    "agent_status",
 ];
 
 fn main() {

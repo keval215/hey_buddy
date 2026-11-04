@@ -25,8 +25,26 @@ pub trait ObservationSource: Send + Sync {
     fn with_latest(&self, f: &mut dyn FnMut(&Observation)) -> bool;
 }
 
+mod sealed {
+    pub trait Sealed {}
+    impl<A: driver::Actuator + 'static> Sealed for driver::Driver<A> {}
+    #[cfg(windows)]
+    impl Sealed for super::WindowsAgentDriver {}
+}
+
 /// What the supervisor needs from the driver. `execute` consumes the sealed approval.
-pub trait AgentDriver: ObservationSource {
+///
+/// SAFE-IF: an implementation must, before EVERY input it sends, (1) call `Firewall::revalidate`
+/// (refuses an elevated, secure, denied or restricted target and a changed screen) and (2) call
+/// `LiveTarget::verify_focus` (refuses a focused password field), and send nothing when either
+/// fails. D-009: `ReverifiedAtExecute` tells the gate "not elevated, not secure" ON THE STRENGTH
+/// of exactly these two re-checks, so a driver without them voids that claim.
+///
+/// The trait is SEALED: only `driver::Driver<A>` (which does both re-checks around every actuator
+/// call, tested in the driver crate) and, on Windows, the wrapper over `windows_driver()` implement
+/// it, and nothing outside this crate can add an implementation. Tests use the REAL `Driver` over
+/// `driver::fake::FakeActuator`, so no test-only implementation is needed.
+pub trait AgentDriver: ObservationSource + sealed::Sealed {
     fn execute(
         &self,
         action: ApprovedAction,
@@ -76,6 +94,43 @@ pub fn peek<R>(src: &dyn ObservationSource, f: impl FnOnce(&Observation) -> R) -
     }
 }
 
+/// The Windows driver as `windows_driver()` returns it (`Box<dyn DesktopDriver>`: the actuator type
+/// is private to the driver crate). Compile-checked only on this machine (Linux).
+#[cfg(windows)]
+pub struct WindowsAgentDriver(Box<dyn DesktopDriver>);
+
+#[cfg(windows)]
+impl WindowsAgentDriver {
+    pub(crate) fn new(d: Box<dyn DesktopDriver>) -> Self {
+        Self(d)
+    }
+}
+
+#[cfg(windows)]
+impl ObservationSource for WindowsAgentDriver {
+    fn observe(&self, deny: &dyn AppDenyPolicy) -> ObserveOutcome {
+        self.0.observe(deny)
+    }
+    fn with_latest(&self, f: &mut dyn FnMut(&Observation)) -> bool {
+        self.0.with_latest_dyn(f)
+    }
+}
+
+#[cfg(windows)]
+impl AgentDriver for WindowsAgentDriver {
+    fn execute(
+        &self,
+        action: ApprovedAction,
+        deny: &dyn AppDenyPolicy,
+        kill: &KillSwitch,
+    ) -> ExecOutcome {
+        self.0.execute(action, deny, kill)
+    }
+    fn emergency_release(&self) {
+        self.0.emergency_release();
+    }
+}
+
 /// Plugs the driver into the kill switch (`KillController::set_driver_releaser`).
 pub struct DriverRelease(pub Arc<dyn AgentDriver>);
 
@@ -90,7 +145,12 @@ impl DriverReleaser for DriverRelease {
 pub struct BindExtras {
     pub higher_integrity: Option<bool>,
     pub focused_secure: Option<bool>,
-    /// `open_app` / `focus_window`: the target app is NOT denied, restricted, elevated or ours.
+    /// `open_app` / `focus_window`: `Some(false)` = the target app is not on the user's deny list,
+    /// not a restricted app and not an auth-surface app (exactly what `ReverifiedAtExecute`
+    /// checks). Elevation and "it is our own app" of an `open_app` / `focus_window` TARGET are NOT
+    /// checked here: the step after it starts with a fresh observation that is bound and
+    /// re-validated again (`Firewall::revalidate` refuses an elevated target, the deny list and the
+    /// own-app rule apply to the next observation), so nothing is typed or clicked in such a window.
     pub target_denied: Option<bool>,
     pub focus_target: Option<ElementRef>,
 }

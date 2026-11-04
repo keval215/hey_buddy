@@ -124,6 +124,9 @@ pipe ends, an idempotent non-blocking `kill_handle()` and a blocking `wait()`. `
   sandbox (S2-10/15)".
 - Real Ollama `format` behaviour with qwen3:4b (does it honour the schema at 4k context? is `num_predict` 1024 enough?) and
   the Anthropic reply when the schema is only in the prompt.
+- The app wiring (S2-23b) is DONE: `AgentRuntime::from_buddy`, the `agent_start_task` / `agent_status` commands, the `agent_mode` voice
+  route, persisted `observe_mode` / `agent_enabled` / `agent_mode` settings and the Step 2 exit test (`docs/manual-tests.md`). The engine
+  executable is looked up next to the app executable (`<exe dir>\buddy-agent.exe` on Windows); see `docs/supervisor.md`, "Wiring into the app".
 - The supervisor wiring (S2-17/23) is DONE in `crates/core/src/agent/` and tested on Linux with fakes (`EngineFactory` makes a fresh
   engine + `CoreModelGateway` per task, `ProcessEngineKiller::attach`/`detach`, `policy::propose_as` on the draft, `PlanLimits`
   local/cloud from `AgentSettings::cloud_planning`, `foreground_app` only when the observation was Clear and the app is not
@@ -138,4 +141,5 @@ pipe ends, an idempotent non-blocking `kill_handle()` and a blocking `wait()`. `
 | PlanLimits local/cloud from settings | `AgentSettings::cloud_planning` |
 | foreground_app only if Clear and not deny-listed | `AgentSupervisor::foreground_app` |
 | Read+Reversible ops table (S2-21) | the gate's origins (`docs/policy.md`), `RequestOrigin::policy_origin` |
+| done in S2-23b | settings UI + persistence for observe mode, Tauri start-task command, voice trigger, read answers spoken, exit-test doc |
 | still open | separate agent-provider setting; Anthropic `max_tokens` 1024 vs 12-step plans; a real `Catalogue` (Start menu) |

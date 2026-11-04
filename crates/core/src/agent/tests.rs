@@ -128,6 +128,8 @@ enum Act {
     Deny,
     /// Shown, never answered (the test answers by clock, kill or nothing).
     Silent,
+    /// The window cannot be shown: the broker is unavailable, the request is Denied.
+    Unshowable,
 }
 
 /// The "user": answers each request as shown, in order (then approves).
@@ -171,6 +173,7 @@ impl ApprovalUi for Human {
                     .unwrap();
             }
             Act::Silent => {}
+            Act::Unshowable => return false,
         }
         true
     }
@@ -207,6 +210,7 @@ struct Env {
     rig: Rig,
     sup: Arc<AgentSupervisor>,
     ctl: Arc<KillController>,
+    drv: Arc<dyn AgentDriver>,
     broker: ApprovalBroker,
     fake: FakeActuator,
     human: Arc<Human>,
@@ -282,12 +286,13 @@ fn env_with(o: Opts) -> Env {
     if let Some(l) = o.unattended {
         parts.unattended_limits = l;
     }
-    let sup = Arc::new(AgentSupervisor::new(parts));
+    let sup = Arc::new(AgentSupervisor::new(parts).expect("audit sink"));
     sup.wire_kill();
     Env {
         rig,
         sup,
         ctl,
+        drv: drv.clone(),
         broker,
         fake,
         human,
@@ -306,9 +311,7 @@ fn notepad_plan() -> String {
 impl Env {
     async fn run_as(&self, origin: RequestOrigin, plan: &str) -> TaskReport {
         self.factory.draft(plan);
-        self.sup
-            .run_task(TaskRequest::new(origin, TRANSCRIPT))
-            .await
+        bounded(self.sup.run_task(TaskRequest::new(origin, TRANSCRIPT))).await
     }
     async fn run(&self, plan: &str) -> TaskReport {
         self.run_as(RequestOrigin::Interactive, plan).await
@@ -381,6 +384,14 @@ fn audit_text(records: &[AuditRecord]) -> String {
 
 fn assert_send<T: Send>(_: &T) {}
 
+/// Every awaited task is bounded: a removed kill hook or a lost wake-up FAILS the test with a
+/// timeout instead of hanging the suite.
+async fn bounded<T>(f: impl std::future::Future<Output = T>) -> T {
+    tokio::time::timeout(Duration::from_secs(30), f)
+        .await
+        .expect("timed out: the task never ended")
+}
+
 // ---------------------------------------------------------------------------------------------
 // Happy paths
 // ---------------------------------------------------------------------------------------------
@@ -392,7 +403,7 @@ async fn read_only_task_runs_end_to_end_on_fakes() {
     e.factory.draft(&plan);
     let fut = e.sup.run_task(TaskRequest::interactive(TRANSCRIPT));
     assert_send(&fut);
-    let r = fut.await;
+    let r = bounded(fut).await;
     assert_eq!(r.outcome, TaskOutcome::Completed, "{r:?}");
     assert!(r.dry_run && r.live);
     assert_eq!((r.would_do, r.steps_done, r.executed), (2, 2, 0));
@@ -477,7 +488,7 @@ async fn the_planner_gets_the_transcript_and_context_only() {
     // the screen was Clear and the app is not deny-listed.
     let e = env();
     e.factory.draft(&steps_json(&[OBSERVE]));
-    let _ = e.sup.run_task(TaskRequest::interactive(TRANSCRIPT)).await;
+    let _ = bounded(e.sup.run_task(TaskRequest::interactive(TRANSCRIPT))).await;
     assert_eq!(e.factory.engine().plans.load(Ordering::SeqCst), 1);
     // A deny-listed foreground app: observation is withheld, nothing is passed and the task is
     // refused (no observation, no dry run).
@@ -560,7 +571,7 @@ async fn sandbox_unavailable_and_engine_unavailable_refuse_the_task() {
         ..Opts::default()
     });
     e.factory.draft("unused");
-    let r = e.sup.run_task(TaskRequest::interactive(TRANSCRIPT)).await;
+    let r = bounded(e.sup.run_task(TaskRequest::interactive(TRANSCRIPT))).await;
     assert_eq!(
         r.outcome,
         TaskOutcome::Refused(RefuseReason::SandboxUnavailable),
@@ -590,7 +601,7 @@ async fn sandbox_unavailable_and_engine_unavailable_refuse_the_task() {
 async fn empty_or_oversize_requests_are_refused() {
     let e = env();
     for t in ["", "   \n", &"x".repeat(5000)] {
-        let r = e.sup.run_task(TaskRequest::interactive(t)).await;
+        let r = bounded(e.sup.run_task(TaskRequest::interactive(t))).await;
         assert_eq!(r.outcome, TaskOutcome::Refused(RefuseReason::BadRequest));
     }
     assert_eq!(e.factory.creates.load(Ordering::SeqCst), 0);
@@ -602,7 +613,9 @@ async fn a_second_task_while_one_runs_is_refused_busy() {
     e.factory.push(Scripted::hang());
     let sup = e.sup.clone();
     let first =
-        tokio::spawn(async move { sup.run_task(TaskRequest::interactive(TRANSCRIPT)).await });
+        tokio::spawn(
+            async move { bounded(sup.run_task(TaskRequest::interactive(TRANSCRIPT))).await },
+        );
     let eng = e.factory.clone();
     wait_until(|| {
         eng.last
@@ -611,12 +624,12 @@ async fn a_second_task_while_one_runs_is_refused_busy() {
             .as_ref()
             .is_some_and(|x| x.plans.load(Ordering::SeqCst) == 1)
     });
-    let second = e.sup.run_task(TaskRequest::interactive(TRANSCRIPT)).await;
+    let second = bounded(e.sup.run_task(TaskRequest::interactive(TRANSCRIPT))).await;
     assert_eq!(second.outcome, TaskOutcome::Refused(RefuseReason::Busy));
     assert_eq!(e.factory.creates.load(Ordering::SeqCst), 1);
     // The running task is untouched until it is stopped.
     e.ctl.trip(KillReason::StopButton);
-    let r = first.await.unwrap();
+    let r = bounded(first).await.unwrap();
     assert_eq!(r.outcome, TaskOutcome::Killed(Stage::Planning), "{r:?}");
     assert!(e.ctl.wait_idle(Duration::from_secs(10)));
 }
@@ -659,11 +672,11 @@ async fn cannot_plan_and_engine_failures_are_typed_and_run_nothing() {
     let e = env();
     e.factory
         .push(Scripted::ok(PlanOutcome::CannotPlan("cannot_plan")));
-    let r = e.sup.run_task(TaskRequest::interactive(TRANSCRIPT)).await;
+    let r = bounded(e.sup.run_task(TaskRequest::interactive(TRANSCRIPT))).await;
     assert_eq!(r.outcome, TaskOutcome::Refused(RefuseReason::CannotPlan));
     e.factory
         .push(Scripted::err(EngineError::Protocol("bad_line")));
-    let r = e.sup.run_task(TaskRequest::interactive(TRANSCRIPT)).await;
+    let r = bounded(e.sup.run_task(TaskRequest::interactive(TRANSCRIPT))).await;
     assert_eq!(r.outcome, TaskOutcome::PlanFailed("engine_protocol"));
     e.executed_nothing();
 }
@@ -678,7 +691,7 @@ async fn a_hostile_engine_gets_a_protocol_error_and_nothing_runs() {
             factory: Some(Arc::new(ProcFactory(sandbox))),
             ..Opts::default()
         });
-        let r = e.sup.run_task(TaskRequest::interactive(TRANSCRIPT)).await;
+        let r = bounded(e.sup.run_task(TaskRequest::interactive(TRANSCRIPT))).await;
         assert!(
             matches!(
                 r.outcome,
@@ -827,7 +840,9 @@ async fn kill_during_planning_kills_the_engine_and_stops() {
     e.factory.push(Scripted::hang());
     let sup = e.sup.clone();
     let task =
-        tokio::spawn(async move { sup.run_task(TaskRequest::interactive(TRANSCRIPT)).await });
+        tokio::spawn(
+            async move { bounded(sup.run_task(TaskRequest::interactive(TRANSCRIPT))).await },
+        );
     let f = e.factory.clone();
     wait_until(|| {
         f.last
@@ -837,7 +852,7 @@ async fn kill_during_planning_kills_the_engine_and_stops() {
             .is_some_and(|x| x.plans.load(Ordering::SeqCst) == 1)
     });
     e.ctl.trip(KillReason::Hotkey);
-    let r = task.await.unwrap();
+    let r = bounded(task).await.unwrap();
     assert_eq!(r.outcome, TaskOutcome::Killed(Stage::Planning), "{r:?}");
     assert!(e.ctl.wait_idle(Duration::from_secs(10)));
     assert!(
@@ -863,7 +878,7 @@ async fn kill_inside_the_driver_stops_typing_within_one_chunk() {
         }
     });
     e.factory.draft(&plan);
-    let r = e.sup.run_task(TaskRequest::interactive(transcript)).await;
+    let r = bounded(e.sup.run_task(TaskRequest::interactive(transcript))).await;
     assert_eq!(r.outcome, TaskOutcome::Killed(Stage::Run), "{r:?}");
     assert_eq!(e.fake.chunk_lens(), vec![16], "stopped after one chunk");
     assert!(e.ctl.wait_idle(Duration::from_secs(10)));
@@ -1183,10 +1198,13 @@ async fn schedule_source_hands_due_triggers_to_the_supervisor() {
         },
     );
     e.factory.draft(&steps_json(&[OBSERVE]));
-    let reports = e.sup.run_due(&sched).await;
+    let reports = bounded(e.sup.run_due(&sched)).await;
     assert_eq!(reports.len(), 1, "only the due one ran");
     assert_eq!(reports[0].outcome, TaskOutcome::Completed);
-    assert!(e.sup.run_due(&sched).await.is_empty(), "returned once");
+    assert!(
+        bounded(e.sup.run_due(&sched)).await.is_empty(),
+        "returned once"
+    );
     let m = ManualTrigger {
         transcript: "x".into(),
     }
@@ -1310,10 +1328,7 @@ async fn the_audit_log_has_the_intent_first_and_no_typed_text_transcript_or_scre
     let transcript = format!("open Notepad then type {CANARY} into the Name field");
     let plan = steps_json(&[OPEN_NOTEPAD, &type_into("Name", CANARY)]);
     e.factory.draft(&plan);
-    let r = e
-        .sup
-        .run_task(TaskRequest::interactive(transcript.clone()))
-        .await;
+    let r = bounded(e.sup.run_task(TaskRequest::interactive(transcript.clone()))).await;
     assert_eq!(r.outcome, TaskOutcome::Completed, "{r:?}");
     assert_eq!(
         e.fake.chars_sent(),
@@ -1374,22 +1389,810 @@ fn origins_map_onto_the_gates_origins_with_the_stricter_reading() {
     assert!(RunLimits::unattended().max_steps < RunLimits::interactive().max_steps);
 }
 
-#[test]
-fn the_plan_fingerprint_changes_with_any_step() {
-    let cat = catalogue();
-    let rig = Rig::new();
-    let mk = |j: &str| {
-        rig.gate
-            .propose(
-                policy::TaskId(1),
-                j,
-                &PlanContext::new(TRANSCRIPT, &cat as &dyn Catalogue),
-            )
-            .unwrap()
+// ---------------------------------------------------------------------------------------------
+// S2-23b: review minors. Kill checks per phase, limits, plan input, audit sink, seal.
+// ---------------------------------------------------------------------------------------------
+
+use super::supervisor::HookPoint;
+
+/// Trips the kill switch the `nth` time the supervisor passes `point` (1 = the first time).
+fn kill_at(e: &Env, point: HookPoint, nth: u32) {
+    let (ctl, hits) = (e.ctl.clone(), Arc::new(AtomicU32::new(0)));
+    *e.sup.hooks.at.lock().unwrap() = Some((
+        point,
+        Arc::new(move || {
+            if hits.fetch_add(1, Ordering::SeqCst) + 1 == nth {
+                ctl.trip(KillReason::Hotkey);
+            }
+        }),
+    ));
+}
+
+#[tokio::test]
+async fn a_kill_between_attach_and_plan_never_starts_the_plan() {
+    let e = env();
+    kill_at(&e, HookPoint::BeforePlan, 1);
+    let r = e.run(&notepad_plan()).await;
+    assert_eq!(r.outcome, TaskOutcome::Killed(Stage::Planning), "{r:?}");
+    assert_eq!(
+        e.factory.engine().plans.load(Ordering::SeqCst),
+        0,
+        "plan() was never called"
+    );
+    assert!(
+        e.factory.engine().kills.load(Ordering::SeqCst) >= 1,
+        "the attached engine is killed"
+    );
+    assert!(e.human.seen().is_empty());
+    e.executed_nothing();
+    assert!(e.ctl.wait_idle(Duration::from_secs(10)));
+    e.gate_idle();
+}
+
+#[tokio::test]
+async fn a_kill_after_propose_stops_before_the_dry_run() {
+    let e = env();
+    kill_at(&e, HookPoint::AfterPropose, 1);
+    let r = e.run(&notepad_plan()).await;
+    assert_eq!(r.outcome, TaskOutcome::Killed(Stage::Planning), "{r:?}");
+    assert!(!r.dry_run, "no dry run was walked");
+    assert!(e.human.seen().is_empty());
+    assert!(!e.events().contains(&"sup_would_do"));
+    e.executed_nothing();
+    assert!(e.ctl.wait_idle(Duration::from_secs(10)));
+    e.gate_idle();
+}
+
+#[tokio::test]
+async fn a_kill_before_the_approval_is_asked_asks_nothing() {
+    let e = env();
+    kill_at(&e, HookPoint::AfterDryRun, 1);
+    let r = e.run(&notepad_plan()).await;
+    assert_eq!(r.outcome, TaskOutcome::Killed(Stage::PlanApproval), "{r:?}");
+    assert!(r.dry_run && !r.live);
+    assert!(e.human.seen().is_empty(), "the human was never asked");
+    e.executed_nothing();
+    assert!(e.ctl.wait_idle(Duration::from_secs(10)));
+    e.gate_idle();
+}
+
+#[tokio::test]
+async fn a_kill_at_the_start_of_the_run_loop_runs_no_step() {
+    let e = env();
+    kill_at(&e, HookPoint::LoopStart, 1);
+    let r = e.run(&notepad_plan()).await;
+    assert_eq!(r.outcome, TaskOutcome::Killed(Stage::Run), "{r:?}");
+    assert_eq!(e.human.seen().len(), 1, "the plan was approved");
+    assert_eq!(r.steps_done, 0);
+    e.executed_nothing();
+    assert!(e.ctl.wait_idle(Duration::from_secs(10)));
+}
+
+#[tokio::test]
+async fn a_kill_after_the_fresh_observation_mints_nothing() {
+    let e = env();
+    kill_at(&e, HookPoint::AfterObserve, 1);
+    let r = e.run(&notepad_plan()).await;
+    assert_eq!(r.outcome, TaskOutcome::Killed(Stage::Run), "{r:?}");
+    e.executed_nothing();
+    assert!(e.ctl.wait_idle(Duration::from_secs(10)));
+}
+
+#[tokio::test]
+async fn a_kill_after_a_step_approval_mints_nothing_for_that_step() {
+    let e = env();
+    // Plan: yes. Submit: yes. The kill lands right after the SECOND pass (the click).
+    e.human.script(&[Act::Approve, Act::Approve]);
+    kill_at(&e, HookPoint::AfterApproval, 2);
+    let r = e.run(&form_plan()).await;
+    assert_eq!(r.outcome, TaskOutcome::Killed(Stage::Run), "{r:?}");
+    assert_eq!(
+        e.human.seen().len(),
+        2,
+        "the submit was approved by the human"
+    );
+    assert_eq!(e.fake.chars_sent(), "John Smith".len(), "step 0 ran");
+    assert_eq!(
+        e.fake.count(CallKind::Invoke),
+        0,
+        "the approved click never ran"
+    );
+    assert_eq!(e.rig.audit.intents().len(), 1, "no intent for the click");
+    assert!(e.ctl.wait_idle(Duration::from_secs(10)));
+}
+
+fn scroll_limits(max_steps: u16) -> RunLimits {
+    RunLimits {
+        max_steps,
+        max_repeat: 5,
+        time_limit: Duration::from_secs(600),
+    }
+}
+
+#[tokio::test]
+async fn unattended_tasks_use_the_unattended_limits_and_interactive_ones_the_interactive() {
+    let plan = steps_json(&[SCROLL1, SCROLL_UP1]);
+    // Interactive is tight (1 step), unattended is loose (5): only the interactive task stops.
+    let mk = |i, u| {
+        env_with(Opts {
+            limits: Some(scroll_limits(i)),
+            unattended: Some(scroll_limits(u)),
+            ..Opts::default()
+        })
     };
-    let a = supervisor::fingerprint(&mk(&steps_json(&[SCROLL1])));
-    let b = supervisor::fingerprint(&mk(&steps_json(&[SCROLL_UP1])));
-    let a2 = supervisor::fingerprint(&mk(&steps_json(&[SCROLL1])));
-    assert_ne!(a, b);
-    assert_eq!(a, a2);
+    let e = mk(1, 5);
+    let r = e.run_as(RequestOrigin::Interactive, &plan).await;
+    assert_eq!(r.outcome, TaskOutcome::Stopped("step_budget"), "{r:?}");
+    let e = mk(1, 5);
+    for origin in [RequestOrigin::Manual] {
+        let r = e.run_as(origin, &plan).await;
+        assert_eq!(r.outcome, TaskOutcome::Completed, "{origin:?} {r:?}");
+        assert_eq!(r.executed, 2);
+    }
+    // And the other way round.
+    let e = mk(5, 1);
+    let r = e.run_as(RequestOrigin::Manual, &plan).await;
+    assert_eq!(r.outcome, TaskOutcome::Stopped("step_budget"), "{r:?}");
+    let e = mk(5, 1);
+    let r = e.run_as(RequestOrigin::Interactive, &plan).await;
+    assert_eq!(r.outcome, TaskOutcome::Completed, "{r:?}");
+}
+
+/// Records what the planner is given.
+#[derive(Default)]
+struct Seen {
+    inputs: Mutex<Vec<(Option<String>, Duration, usize)>>,
+}
+
+struct RecEngine(Arc<Seen>, Option<Arc<CountingDeny>>);
+
+#[async_trait]
+impl ::agent::AgentEngine for RecEngine {
+    fn id(&self) -> &str {
+        "rec"
+    }
+    async fn plan(
+        &self,
+        input: ::agent::PlanInput,
+        _models: Arc<dyn ModelGateway>,
+    ) -> Result<PlanOutcome, EngineError> {
+        let calls = self
+            .1
+            .as_ref()
+            .map_or(0, |d| d.calls.load(Ordering::SeqCst));
+        self.0.inputs.lock().unwrap().push((
+            input.context.foreground_app.as_deref().map(str::to_owned),
+            input.limits.deadline,
+            calls,
+        ));
+        Err(EngineError::Cancelled)
+    }
+    fn kill(&self) {}
+}
+
+struct RecFactory(Arc<Seen>, Option<Arc<CountingDeny>>);
+impl EngineFactory for RecFactory {
+    fn create(&self, _task: ::agent::TaskId) -> Result<EngineParts, EngineError> {
+        Ok(EngineParts {
+            engine: Arc::new(RecEngine(self.0.clone(), self.1.clone())),
+            gateway: Arc::new(NoModels),
+            core_gateway: None,
+        })
+    }
+}
+
+/// Counts `is_denied` calls; denies from call number `after` on (0-based).
+struct CountingDeny {
+    calls: std::sync::atomic::AtomicUsize,
+    after: usize,
+}
+impl AppDenyPolicy for CountingDeny {
+    fn is_denied(&self, _a: &str) -> bool {
+        self.calls.fetch_add(1, Ordering::SeqCst) >= self.after
+    }
+}
+
+#[tokio::test]
+async fn a_deny_listed_foreground_app_never_reaches_the_planner() {
+    // Run 1: nothing denied. The planner learns the foreground app and we learn how many deny
+    // checks happen before the planner is called (the last of them is the foreground filter).
+    let seen = Arc::new(Seen::default());
+    let deny = Arc::new(CountingDeny {
+        calls: Default::default(),
+        after: usize::MAX,
+    });
+    let e = env_with(Opts {
+        deny: deny.clone(),
+        factory: Some(Arc::new(RecFactory(seen.clone(), Some(deny.clone())))),
+        ..Opts::default()
+    });
+    let r = e.run("unused").await;
+    assert_eq!(
+        r.outcome,
+        TaskOutcome::PlanFailed("engine_cancelled"),
+        "{r:?}"
+    );
+    let (fg, _, at_plan) = seen.inputs.lock().unwrap()[0].clone();
+    assert_eq!(
+        fg.as_deref(),
+        Some("notes.exe"),
+        "a clear, allowed app is passed"
+    );
+    assert!(at_plan >= 1);
+
+    // Run 2: the app is denied exactly at the foreground filter (the observation itself was
+    // Clear). The planner must get NO app.
+    let seen = Arc::new(Seen::default());
+    let deny = Arc::new(CountingDeny {
+        calls: Default::default(),
+        after: at_plan - 1,
+    });
+    let e = env_with(Opts {
+        deny: deny.clone(),
+        factory: Some(Arc::new(RecFactory(seen.clone(), Some(deny.clone())))),
+        ..Opts::default()
+    });
+    let _ = e.run("unused").await;
+    assert_eq!(
+        seen.inputs.lock().unwrap()[0].0,
+        None,
+        "a denied app is never passed"
+    );
+
+    // A deny-listed app from the start: the screen is withheld, so none either.
+    let seen = Arc::new(Seen::default());
+    let e = env_with(Opts {
+        deny: Arc::new(Deny(&["notes.exe"])),
+        factory: Some(Arc::new(RecFactory(seen.clone(), None))),
+        ..Opts::default()
+    });
+    let _ = e.run("unused").await;
+    assert_eq!(seen.inputs.lock().unwrap()[0].0, None);
+}
+
+#[tokio::test]
+async fn cloud_planning_gets_the_45s_deadline_and_local_the_60s_one() {
+    for (cloud, secs) in [(true, 45), (false, 60)] {
+        let seen = Arc::new(Seen::default());
+        let e = env_with(Opts {
+            settings: FixedSettings {
+                cloud,
+                ..FixedSettings::default()
+            },
+            factory: Some(Arc::new(RecFactory(seen.clone(), None))),
+            ..Opts::default()
+        });
+        let _ = e.run("unused").await;
+        assert_eq!(
+            seen.inputs.lock().unwrap()[0].1,
+            Duration::from_secs(secs),
+            "cloud={cloud}"
+        );
+    }
+}
+
+fn test_buddy(dir: &tempfile::TempDir) -> Arc<crate::Buddy> {
+    Arc::new(crate::Buddy::with_credentials(
+        dir.path().join("settings.json"),
+        Box::new(capture::fake::FakeCapture::new(
+            capture::fake::FakeMode::ExcludeWindows,
+        )),
+        Arc::new(llm::fakes::FakeCredentialStore::new()),
+    ))
+}
+
+struct NoProviders;
+impl crate::ProviderSource for NoProviders {
+    fn local(&self, _p: &str) -> Result<Arc<dyn llm::LlmProvider>, llm::LlmError> {
+        Err(llm::LlmError::Config("none"))
+    }
+    fn cloud(&self, _m: &str) -> Result<Arc<dyn llm::LlmProvider>, llm::LlmError> {
+        Err(llm::LlmError::Config("none"))
+    }
+}
+
+/// A factory whose parts carry a REAL `CoreModelGateway`, so a kill can be seen reaching it.
+struct GwFactory {
+    buddy: Arc<crate::Buddy>,
+    script: Mutex<VecDeque<Scripted>>,
+    made: Mutex<Vec<Arc<crate::gateway::CoreModelGateway>>>,
+}
+impl EngineFactory for GwFactory {
+    fn create(&self, task: ::agent::TaskId) -> Result<EngineParts, EngineError> {
+        let gw = Arc::new(crate::gateway::CoreModelGateway::new(
+            self.buddy.clone(),
+            Arc::new(NoProviders),
+            task,
+        ));
+        self.made.lock().unwrap().push(gw.clone());
+        let s = self.script.lock().unwrap().pop_front();
+        Ok(EngineParts {
+            engine: Arc::new(FakeEngine::new(s.into_iter().collect())),
+            gateway: gw.clone(),
+            core_gateway: Some(gw),
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_kill_in_the_planning_window_kills_the_model_gateway() {
+    let dir = tempfile::tempdir().unwrap();
+    let gw = Arc::new(GwFactory {
+        buddy: test_buddy(&dir),
+        script: Mutex::default(),
+        made: Mutex::default(),
+    });
+    gw.script
+        .lock()
+        .unwrap()
+        .push_back(Scripted::ok(PlanOutcome::Draft(
+            PlanDraftJson::new(steps_json(&[OBSERVE])).unwrap(),
+        )));
+    let e = env_with(Opts {
+        factory: Some(gw.clone()),
+        ..Opts::default()
+    });
+    kill_at(&e, HookPoint::BeforePlan, 1);
+    let r = e.run("unused").await;
+    assert_eq!(r.outcome, TaskOutcome::Killed(Stage::Planning), "{r:?}");
+    assert!(
+        gw.made.lock().unwrap()[0].is_killed(),
+        "core_gateway.kill() was called"
+    );
+    assert!(e.ctl.wait_idle(Duration::from_secs(10)));
+
+    // Control: an untouched task leaves its gateway alone.
+    let e = env_with(Opts {
+        factory: Some(gw.clone()),
+        ..Opts::default()
+    });
+    gw.script
+        .lock()
+        .unwrap()
+        .push_back(Scripted::ok(PlanOutcome::Draft(
+            PlanDraftJson::new(steps_json(&[OBSERVE])).unwrap(),
+        )));
+    let r = e.run("unused").await;
+    assert_eq!(r.outcome, TaskOutcome::Completed, "{r:?}");
+    assert!(!gw.made.lock().unwrap()[1].is_killed());
+}
+
+#[tokio::test]
+async fn an_unavailable_approval_broker_at_a_step_is_a_deny() {
+    let e = env();
+    // The plan is shown and approved; the submit's approval cannot be shown at all.
+    e.human.script(&[Act::Approve, Act::Unshowable]);
+    let r = e.run(&form_plan()).await;
+    assert_eq!(r.outcome, TaskOutcome::Denied(Stage::StepApproval), "{r:?}");
+    assert_eq!(e.fake.count(CallKind::Invoke), 0, "the submit never ran");
+    assert_eq!(e.human.seen().len(), 2);
+    assert_eq!(e.broker.pending_count(), 0);
+    e.gate_idle();
+}
+
+#[tokio::test]
+async fn the_supervisor_refuses_an_audit_sink_that_is_not_the_gates() {
+    let e = env();
+    let parts = SupervisorParts::new(
+        e.ctl.clone(),
+        Arc::new(policy::MemoryAudit::new()),
+        e.broker.clone(),
+        e.drv.clone(),
+        e.factory.clone(),
+        Arc::new(FixedSettings::default()),
+        Arc::new(FixedDeny(Arc::new(Deny(&[])))),
+        Arc::new(catalogue()),
+    );
+    let err = AgentSupervisor::new(parts).unwrap_err();
+    assert_eq!(err, SupervisorError::AuditMismatch);
+    assert_eq!(err.code(), "audit_mismatch");
+    // The gate's own sink is accepted.
+    let ok = SupervisorParts::new(
+        e.ctl.clone(),
+        e.rig.audit.clone(),
+        e.broker.clone(),
+        e.drv.clone(),
+        e.factory.clone(),
+        Arc::new(FixedSettings::default()),
+        Arc::new(FixedDeny(Arc::new(Deny(&[])))),
+        Arc::new(catalogue()),
+    );
+    assert!(AgentSupervisor::new(ok).is_ok());
+}
+
+#[tokio::test]
+async fn the_supervisors_records_land_in_the_same_log_as_the_gates_intents() {
+    let e = env();
+    let r = e.run(&notepad_plan()).await;
+    assert_eq!(r.outcome, TaskOutcome::Completed, "{r:?}");
+    // One sink holds the gate's intents AND the supervisor's would-do / end records.
+    assert_eq!(e.rig.audit.intents().len(), 2);
+    assert!(e.events().contains(&"sup_would_do") && e.events().contains(&"sup_task_end"));
+}
+
+#[test]
+fn the_agent_driver_trait_is_sealed() {
+    // The doc on `AgentDriver` states the SAFE-IF condition, and nothing outside `port.rs` can
+    // implement the trait (the supertrait `Sealed` is private).
+    let src = include_str!("port.rs");
+    assert!(src.contains("pub trait AgentDriver: ObservationSource + sealed::Sealed"));
+    assert!(src.contains("SAFE-IF"));
+    assert!(src.contains("mod sealed {"));
+    for other in [
+        include_str!("supervisor.rs"),
+        include_str!("runtime.rs"),
+        include_str!("types.rs"),
+        include_str!("tests.rs"),
+    ] {
+        assert!(
+            !other.contains(&format!("impl {} for", "AgentDriver")),
+            "AgentDriver is implemented only in port.rs"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// S2-23b: the glue. A real `Buddy`, its kill controller and audit sink, `AgentRuntime`.
+// ---------------------------------------------------------------------------------------------
+
+use crate::api::SettingsPatch;
+
+/// Answers every request like a patient user, on the REAL clock (the broker's 500 ms guard).
+struct SysHuman(Mutex<Option<ApprovalBroker>>);
+impl ApprovalUi for SysHuman {
+    fn show(&self, r: &ApprovalRequestDto) -> bool {
+        let b = self.0.lock().unwrap().clone().expect("broker");
+        let (id, digest) = (r.id.clone(), r.digest_hex.clone());
+        thread::spawn(move || {
+            b.mark_displayed(&id).unwrap();
+            thread::sleep(Duration::from_millis(600));
+            let _ = b.respond(&id, ApprovalDecisionDto::Approve, &digest);
+        });
+        true
+    }
+    fn close(&self, _c: &ApprovalClosedDto) {}
+}
+
+#[derive(Default)]
+struct RecVoice(Mutex<Vec<String>>);
+#[async_trait]
+impl AgentVoice for RecVoice {
+    async fn say(&self, text: String) {
+        self.0.lock().unwrap().push(text);
+    }
+}
+impl RecVoice {
+    fn said(&self) -> Vec<String> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+#[derive(Default)]
+struct RecEvents(Mutex<Vec<AgentTaskDto>>);
+impl crate::EventSink for RecEvents {
+    fn turn_state(&self, _: crate::api::TurnState) {}
+    fn transcript(&self, _: crate::api::TranscriptEvent) {}
+    fn reply_delta(&self, _: crate::api::ReplyDelta) {}
+    fn point(&self, _: crate::api::PointEvent) {}
+    fn firewall_status(&self, _: crate::api::FirewallStatus) {}
+    fn error(&self, _: crate::api::TurnError) {}
+    fn agent_task(&self, ev: AgentTaskDto) {
+        self.0.lock().unwrap().push(ev);
+    }
+}
+
+struct Glue {
+    _dir: tempfile::TempDir,
+    buddy: Arc<crate::Buddy>,
+    ctl: Arc<KillController>,
+    rt: Arc<AgentRuntime>,
+    fake: FakeActuator,
+    factory: Arc<Factory>,
+    voice: Arc<RecVoice>,
+    events: Arc<RecEvents>,
+}
+
+fn glue(enable: bool, facts: Arc<dyn BindFacts>) -> Glue {
+    let dir = tempfile::tempdir().unwrap();
+    let buddy = test_buddy(&dir);
+    buddy.set_data_dir(dir.path().join("data"));
+    buddy.set_config_dir(dir.path().join("cfg"));
+    buddy.set_kill_hotkey_registered(true);
+    buddy
+        .update_settings(&SettingsPatch {
+            agent_enabled: Some(enable),
+            observe_mode: Some(false),
+            ..Default::default()
+        })
+        .unwrap();
+    let events = Arc::new(RecEvents::default());
+    buddy.set_event_sink(events.clone());
+    let ctl = KillController::for_buddy(&buddy);
+    let broker = ApprovalBroker::with_system_clock(ctl.gate().kill_switch());
+    broker.set_ui(Arc::new(SysHuman(Mutex::new(Some(broker.clone())))));
+    let desk = desktop();
+    let fake = FakeActuator::new(desk.clone());
+    let launch = LaunchAllowlist::empty()
+        .with("notepad", "C:\\Windows\\System32\\notepad.exe")
+        .unwrap();
+    let drv = Arc::new(
+        Driver::new(Arc::new(firewall_of(&desk)), fake.clone()).with_launch_allowlist(launch),
+    );
+    let factory = Arc::new(Factory::default());
+    let voice = Arc::new(RecVoice::default());
+    let rt = AgentRuntime::with_factory(
+        &buddy,
+        ctl.clone(),
+        broker,
+        drv,
+        facts,
+        factory.clone(),
+        Arc::new(catalogue()),
+        tokio::runtime::Handle::current(),
+    )
+    .unwrap()
+    .with_voice(voice.clone());
+    Glue {
+        _dir: dir,
+        buddy,
+        ctl,
+        rt: Arc::new(rt),
+        fake,
+        factory,
+        voice,
+        events,
+    }
+}
+
+fn audit_events(b: &crate::Buddy) -> Vec<String> {
+    b.get_audit_entries(None, Some(500))
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|e| e.event)
+        .collect()
+}
+
+#[tokio::test]
+async fn a_task_runs_end_to_end_through_the_buddys_audit_sink_and_event_and_speech() {
+    let g = glue(true, Arc::new(ReverifiedAtExecute));
+    assert!(g.rt.status().ready, "{:?}", g.rt.status());
+    g.factory.draft(&notepad_plan());
+    let r = bounded(g.rt.run(TRANSCRIPT.into())).await;
+    assert_eq!(r.outcome, TaskOutcome::Completed, "{r:?}");
+    assert_eq!((r.steps_done, r.executed), (2, 2));
+    assert_eq!(g.fake.count(CallKind::Launch), 1);
+    assert_eq!(g.fake.chars_sent(), "John Smith".len());
+    // The Buddy's own audit sink holds the gate's intents and the supervisor's end record.
+    let ev = audit_events(&g.buddy);
+    assert_eq!(ev.iter().filter(|e| *e == "intent").count(), 2, "{ev:?}");
+    assert!(ev.iter().any(|e| e == "sup_task_end"), "{ev:?}");
+    // The typed event: fixed tokens and counts.
+    let dtos = g.events.0.lock().unwrap().clone();
+    assert_eq!(dtos.len(), 1);
+    assert_eq!(dtos[0].outcome, AgentOutcomeKind::Completed);
+    assert_eq!(dtos[0].detail, "ok");
+    assert_eq!((dtos[0].executed, dtos[0].live), (2, true));
+    // A fixed phrase, nothing from the plan or the screen.
+    assert_eq!(g.voice.said(), vec!["Done.".to_string()]);
+    assert!(g.ctl.wait_idle(Duration::from_secs(10)));
+}
+
+#[tokio::test]
+async fn a_kill_through_the_buddys_controller_stops_the_task_and_speaks_nothing_itself() {
+    let g = glue(true, Arc::new(ReverifiedAtExecute));
+    let ctl = g.ctl.clone();
+    g.fake.set_hook(move |c| {
+        if c.kind == CallKind::Launch {
+            ctl.trip(KillReason::Hotkey);
+        }
+    });
+    g.factory.draft(&notepad_plan());
+    let r = bounded(g.rt.run(TRANSCRIPT.into())).await;
+    assert_eq!(r.outcome, TaskOutcome::Killed(Stage::Run), "{r:?}");
+    assert_eq!(g.fake.chars_sent(), 0);
+    assert!(g.ctl.wait_idle(Duration::from_secs(10)));
+    let ev = audit_events(&g.buddy);
+    assert!(ev.iter().any(|e| e == "sup_task_end"), "{ev:?}");
+    // "Stopped." is the kill controller's sentence; the runtime adds none.
+    assert!(g.voice.said().is_empty(), "{:?}", g.voice.said());
+    assert_eq!(
+        g.events.0.lock().unwrap()[0].outcome,
+        AgentOutcomeKind::Killed
+    );
+}
+
+#[tokio::test]
+async fn start_task_is_rejected_unless_the_agent_is_enabled_and_idle() {
+    // The user setting is OFF by default: nothing starts.
+    let g = glue(false, Arc::new(UnknownFacts));
+    assert_eq!(
+        g.rt.start_task("open notepad".into()),
+        Err(StartError::Disabled)
+    );
+    assert_eq!(g.rt.status().reason.as_deref(), Some("setting_off"));
+    assert!(!g.rt.status().ready);
+    assert_eq!(g.factory.creates.load(Ordering::SeqCst), 0);
+    // On, but no stop shortcut registered: still off (fail closed).
+    g.buddy
+        .update_settings(&SettingsPatch {
+            agent_enabled: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
+    g.buddy.set_kill_hotkey_registered(false);
+    assert_eq!(g.rt.start_task("x".into()), Err(StartError::Disabled));
+    assert_eq!(g.rt.status().reason.as_deref(), Some("not_ready"));
+    g.buddy.set_kill_hotkey_registered(true);
+    assert_eq!(g.rt.start_task("  ".into()), Err(StartError::BadRequest));
+    assert!(g.rt.status().ready);
+    // Enabled: it starts on the runtime and the outcome arrives as an event.
+    g.factory.draft(&steps_json(&[OBSERVE]));
+    g.rt.start_task(TRANSCRIPT.into()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while g.events.0.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "the task never ended");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(
+        g.events.0.lock().unwrap()[0].outcome,
+        AgentOutcomeKind::Completed
+    );
+}
+
+#[tokio::test]
+async fn from_buddy_without_a_sandbox_refuses_with_sandbox_unavailable() {
+    let dir = tempfile::tempdir().unwrap();
+    let buddy = test_buddy(&dir);
+    buddy.set_data_dir(dir.path().join("data"));
+    buddy.set_config_dir(dir.path().join("cfg"));
+    buddy.set_kill_hotkey_registered(true);
+    buddy
+        .update_settings(&SettingsPatch {
+            agent_enabled: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
+    let ctl = KillController::for_buddy(&buddy);
+    let broker = ApprovalBroker::with_system_clock(ctl.gate().kill_switch());
+    let desk = desktop();
+    let platform = PlatformAgent {
+        driver: Arc::new(Driver::new(
+            Arc::new(firewall_of(&desk)),
+            FakeActuator::new(desk.clone()),
+        )),
+        facts: Arc::new(UnknownFacts),
+        sandbox: Arc::new(::agent::UnsupportedSandbox),
+        spec: LaunchSpec {
+            exe: "/opt/hey_buddy/buddy-agent".into(),
+            install_dir: "/opt/hey_buddy".into(),
+        },
+        catalogue: Arc::new(catalogue()),
+    };
+    let rt = AgentRuntime::from_buddy(
+        &buddy,
+        ctl,
+        broker,
+        platform,
+        Arc::new(NoProviders),
+        tokio::runtime::Handle::current(),
+    )
+    .unwrap()
+    .with_voice(Arc::new(RecVoice::default()));
+    let r = bounded(rt.run(TRANSCRIPT.into())).await;
+    assert_eq!(
+        r.outcome,
+        TaskOutcome::Refused(RefuseReason::SandboxUnavailable),
+        "{r:?}"
+    );
+    assert_eq!(sentences_for(&r), vec!["I couldn't do that.".to_string()]);
+}
+
+#[test]
+fn the_platform_wiring_is_read_only_off_windows_and_never_picks_reverified_facts_there() {
+    let desk = desktop();
+    let p = platform_agent(
+        std::path::Path::new("/opt/hey_buddy"),
+        Arc::new(firewall_of(&desk)),
+    );
+    #[cfg(not(windows))]
+    {
+        let p = p.unwrap();
+        // Every fact unknown: only reads can run (D-009).
+        let obs = observe_of(&desk);
+        let steps = [];
+        let x = p.facts.extras(&steps, &obs, &Deny(&[]));
+        assert!(
+            x.higher_integrity.is_none() && x.focused_secure.is_none() && x.target_denied.is_none()
+        );
+        assert!(matches!(
+            p.sandbox.spawn(&p.spec),
+            Err(::agent::SandboxError::Unsupported)
+        ));
+    }
+    #[cfg(windows)]
+    let _ = p;
+    // The facts are chosen in exactly one non-test place, under cfg(windows).
+    let src = include_str!("runtime.rs");
+    let body = src.split("#[cfg(test)]").next().unwrap();
+    let code: String = body
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    let uses: Vec<_> = code.match_indices("ReverifiedAtExecute").collect();
+    assert_eq!(uses.len(), 1, "one use outside tests");
+    let before = &code[..uses[0].0];
+    assert!(
+        before.rfind("#[cfg(windows)]").unwrap()
+            > before.rfind("#[cfg(not(windows))]").unwrap_or(0),
+        "ReverifiedAtExecute sits in the cfg(windows) function"
+    );
+}
+
+#[test]
+fn spoken_sentences_are_fixed_or_made_of_cleared_labels_only() {
+    let rep = |o| {
+        let mut r = TaskReport::refused(RefuseReason::Busy);
+        r.outcome = o;
+        r
+    };
+    let fixed = |o| sentences_for(&rep(o));
+    assert_eq!(fixed(TaskOutcome::Completed), vec!["Done."]);
+    assert_eq!(fixed(TaskOutcome::Stopped("runaway")), vec!["Stopped."]);
+    assert!(fixed(TaskOutcome::Killed(Stage::Run)).is_empty());
+    assert_eq!(
+        fixed(TaskOutcome::Denied(Stage::LiveOffer)),
+        vec!["Okay, I won't."]
+    );
+    assert_eq!(
+        fixed(TaskOutcome::Paused(PauseReason::NeedsUser)),
+        vec!["I need you to take a look."]
+    );
+    for o in [
+        TaskOutcome::Refused(RefuseReason::Busy),
+        TaskOutcome::PlanFailed("engine_protocol"),
+        TaskOutcome::PlanRejected("unknown_op"),
+        TaskOutcome::Blocked("outside_plan"),
+        TaskOutcome::Failed("platform"),
+    ] {
+        assert_eq!(fixed(o), vec!["I couldn't do that."], "{o:?}");
+    }
+    // The DTO carries tokens and counts; Debug is content-free.
+    let d = AgentTaskDto::from(&rep(TaskOutcome::Blocked("outside_plan")));
+    assert_eq!(
+        (d.outcome, d.detail.as_str()),
+        (AgentOutcomeKind::Blocked, "outside_plan")
+    );
+    assert!(!format!("{d:?}").contains("Smith"));
+}
+
+#[tokio::test]
+async fn find_text_results_are_read_from_cleared_screen_text_and_spoken() {
+    let g = glue(true, Arc::new(UnknownFacts));
+    // A read-only plan runs even with unknown facts. The query is the engine's; only matching
+    // cleared labels are quoted. "Password" is a secure field: the firewall hides its label.
+    g.factory.draft(&steps_json(&[
+        r#"{"op":"find_text","query":"save"}"#,
+        r#"{"op":"find_text","query":"zzz-not-there"}"#,
+    ]));
+    let r = bounded(g.rt.run(TRANSCRIPT.into())).await;
+    assert_eq!(r.outcome, TaskOutcome::Completed, "{r:?}");
+    assert_eq!(r.answers.len(), 2);
+    assert_eq!(r.answers[0].matches(), 1);
+    assert_eq!(r.answers[0].first_label(), "Save");
+    assert_eq!(r.answers[0].first_role(), "button");
+    assert_eq!(r.answers[1].matches(), 0);
+    assert_eq!(
+        g.voice.said(),
+        vec![
+            "I found one match. The first is a button: Save.".to_string(),
+            "I could not find that on the screen.".to_string()
+        ]
+    );
+    // Debug never prints the label; the DTO carries it for the (capture-protected) window.
+    assert!(!format!("{:?}", r.answers[0]).contains("Save"));
+    let dto = AgentTaskDto::from(&r);
+    assert_eq!(dto.answers[0].first_label, "Save");
+    assert_eq!(g.fake.call_count(), 0, "reads never reach the driver");
 }

@@ -2,6 +2,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { type UnlistenFn, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import type { AgentStatusDto } from "../ipc/AgentStatusDto";
+import type { AgentTaskDto } from "../ipc/AgentTaskDto";
 import type { ApprovalClosedDto } from "../ipc/ApprovalClosedDto";
 import type { ApprovalDecisionDto } from "../ipc/ApprovalDecisionDto";
 import type { ApprovalRequestDto } from "../ipc/ApprovalRequestDto";
@@ -44,6 +46,7 @@ export const EVT = {
   downloadProgress: "download_progress",
   downloadDone: "download_done",
   downloadFailed: "download_failed",
+  agentTaskDone: "agent:task_done",
 } as const;
 
 export interface EventMap {
@@ -61,6 +64,7 @@ export interface EventMap {
   download_progress: DownloadProgress;
   download_done: DownloadDone;
   download_failed: DownloadFailed;
+  "agent:task_done": AgentTaskDto;
 }
 
 export function on<K extends keyof EventMap>(
@@ -132,6 +136,14 @@ export const api = {
   /** The key goes to the OS keychain; it is never returned. Provider allowlist: "anthropic". */
   setApiKey: (provider: string, key: string) => invoke<Settings>("set_api_key", { provider, key }),
   clearApiKey: (provider: string) => invoke<Settings>("clear_api_key", { provider }),
+  /** Settings window only. Whether the agent can start a task now, and why not (fixed tokens). */
+  agentStatus: () => invoke<AgentStatusDto>("agent_status"),
+  /**
+   * Settings window only. Starts one agent task and returns at once; the outcome arrives as
+   * `agent:task_done`. Rejected with a fixed token (`agent_disabled`, `busy`, ...). Every step
+   * still needs its approvals.
+   */
+  agentStartTask: (transcript: string) => invoke<void>("agent_start_task", { transcript }),
   /** Dev builds only; the command does not exist in release. */
   debugPoint: (x: number, y: number, label: string) =>
     invoke<void>("debug_point", { x, y, label }),

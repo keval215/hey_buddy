@@ -22,6 +22,7 @@ use voice::registry::{Device, Registry, Task};
 use voice::{SttProvider, TtsProvider};
 
 use crate::activity::ActivityProbe;
+use crate::agent::AgentTrigger;
 use crate::api::{
     AuditClearDto, AuditExportDto, AuditPageDto, Decision, DenyListDto, DisplayDto, DownloadDone,
     DownloadFailed, DownloadProgress, EngineSlotName, EngineSwapEvent, FirewallStatus,
@@ -169,6 +170,8 @@ pub struct Buddy {
     kill_registration_reported: AtomicBool,
     /// What the agent is doing (S2-13); `None` = no agent = idle.
     activity: Mutex<Option<Arc<dyn ActivityProbe>>>,
+    /// Where `agent_mode` voice requests go (S2-23b); `None` = no agent runtime.
+    agent_trigger: Mutex<Option<Arc<dyn AgentTrigger>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -253,6 +256,7 @@ impl Buddy {
             audit_attempted: AtomicBool::new(false),
             kill_registration_reported: AtomicBool::new(false),
             activity: Mutex::new(None),
+            agent_trigger: Mutex::new(None),
         }
     }
 
@@ -616,6 +620,15 @@ impl Buddy {
     /// `GateProbe(gate)`). Until then the agent is considered idle (there is none).
     pub fn set_activity_probe(&self, probe: Arc<dyn ActivityProbe>) {
         *lock(&self.activity) = Some(probe);
+    }
+
+    /// Installs where `agent_mode` voice requests are handed (`AgentRuntime::install`).
+    pub fn set_agent_trigger(&self, t: Arc<dyn AgentTrigger>) {
+        *lock(&self.agent_trigger) = Some(t);
+    }
+
+    pub(crate) fn agent_trigger(&self) -> Option<Arc<dyn AgentTrigger>> {
+        lock(&self.agent_trigger).clone()
     }
 
     /// An activity probe is installed (the agent supervisor refuses to run without one: with no

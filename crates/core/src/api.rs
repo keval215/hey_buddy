@@ -236,6 +236,16 @@ pub struct Settings {
     /// The default models directory, for display (filled by `Buddy`; empty before the shell
     /// has set it). Never persisted.
     pub default_models_dir: String,
+    /// Observe mode (dry run first), default ON: every agent task starts as a dry run that shows
+    /// what it WOULD do and executes nothing; going live is a separate "Run it for real?" answer
+    /// for that one task. Turning it off only skips that dry-run-first question: every approval
+    /// and every gate check still applies.
+    pub observe_mode: bool,
+    /// The user allows the agent to run at all (default OFF). The agent also needs a writable
+    /// activity log and a registered stop shortcut (`Status.agent_enabled`).
+    pub agent_enabled: bool,
+    /// Voice requests go to the agent instead of the chat (default OFF; needs `agent_enabled`).
+    pub agent_mode: bool,
 }
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+Space";
@@ -255,6 +265,9 @@ impl Default for Settings {
             anthropic_model: String::new(),
             models_dir: String::new(),
             default_models_dir: String::new(),
+            observe_mode: true,
+            agent_enabled: false,
+            agent_mode: false,
         }
     }
 }
@@ -288,6 +301,12 @@ pub struct SettingsPatch {
     /// Custom models directory; an empty string goes back to the default.
     #[ts(optional)]
     pub models_dir: Option<String>,
+    #[ts(optional)]
+    pub observe_mode: Option<bool>,
+    #[ts(optional)]
+    pub agent_enabled: Option<bool>,
+    #[ts(optional)]
+    pub agent_mode: Option<bool>,
 }
 
 /// Which setting an issue is about (`File` = the settings file itself).

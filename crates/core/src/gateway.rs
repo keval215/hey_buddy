@@ -67,6 +67,11 @@ impl CoreModelGateway {
         self.killed.store(true, Ordering::SeqCst);
     }
 
+    /// `kill` was called.
+    pub fn is_killed(&self) -> bool {
+        self.killed.load(Ordering::SeqCst)
+    }
+
     /// Calls attempted so far (refused attempts count).
     pub fn calls_used(&self) -> u8 {
         self.calls.load(Ordering::SeqCst).min(MAX_CALLS)
@@ -195,6 +200,11 @@ impl ProcessEngineKiller {
     }
     pub fn detach(&self) {
         *lock(&self.current) = None;
+    }
+    /// Kills the attached engine now (the supervisor's own kill check; the controller's trip
+    /// calls the same thing through `EngineKiller`). No-op when none is attached.
+    pub fn kill_engine_now(&self) {
+        self.kill_engine();
     }
 }
 

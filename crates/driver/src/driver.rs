@@ -79,6 +79,10 @@ pub trait DesktopDriver: Send + Sync {
     /// already running (it refuses its next primitive). Idempotent; needs no `ApprovedAction`.
     /// An `execute` that starts afterwards is not affected (it needs a fresh approval anyway).
     fn emergency_release(&self);
+    /// Runs `f` on the cached, unspent observation (for core's `policy::bind_step`); `false` and
+    /// `f` not run when there is none. Object-safe twin of `Driver::with_latest`, so core can bind
+    /// steps through the `Box<dyn DesktopDriver>` that `windows_driver` returns.
+    fn with_latest_dyn(&self, f: &mut dyn FnMut(&Observation)) -> bool;
 }
 
 struct Latest {
@@ -578,6 +582,10 @@ impl<A: Actuator + 'static> DesktopDriver for Driver<A> {
             ObserveVerdict::Paused(p) => ObserveOutcome::Paused(p),
             ObserveVerdict::Blocked(b) => ObserveOutcome::Blocked(b),
         }
+    }
+
+    fn with_latest_dyn(&self, f: &mut dyn FnMut(&Observation)) -> bool {
+        self.with_latest(|o| f(o)).is_some()
     }
 
     fn describe(&self, r: ElementRef) -> Result<TargetDescriptor, DriverError> {

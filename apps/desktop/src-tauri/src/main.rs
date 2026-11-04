@@ -8,6 +8,7 @@
 // Prevents an extra console window on Windows in release.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agent;
 mod approval;
 mod commands;
 mod engine;
@@ -51,6 +52,7 @@ fn main() {
             }
             shell::setup(app.handle(), &buddy)?;
             engine::start(app.handle(), &buddy, &dir);
+            agent::start(app.handle(), &buddy);
             Ok(())
         });
 
@@ -83,6 +85,8 @@ fn main() {
         commands::approval_ready,
         commands::approval_displayed,
         commands::approval_respond,
+        commands::agent_start_task,
+        commands::agent_status,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -111,6 +115,8 @@ fn main() {
         commands::approval_ready,
         commands::approval_displayed,
         commands::approval_respond,
+        commands::agent_start_task,
+        commands::agent_status,
     ]);
 
     builder

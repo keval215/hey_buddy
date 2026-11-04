@@ -27,6 +27,8 @@
     "allow-export-audit-log",
     "allow-clear-audit-log",
     "allow-kill-agent",
-    "allow-debug-fake-task"
+    "allow-debug-fake-task",
+    "allow-agent-start-task",
+    "allow-agent-status"
   ]
 }

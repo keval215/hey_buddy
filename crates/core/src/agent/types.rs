@@ -231,7 +231,7 @@ impl TaskOutcome {
 }
 
 /// The typed result of `run_task`. No content: counts and tokens only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskReport {
     /// 0 when the task was refused before it got an id.
     pub task: u64,
@@ -246,6 +246,9 @@ pub struct TaskReport {
     pub executed: u16,
     /// The user chose live for this task.
     pub live: bool,
+    /// Results of `find_text` / `answer_from_screen` steps, in plan order (at most
+    /// `MAX_ANSWERS`). Made only from firewall-cleared screen text.
+    pub answers: Vec<super::read::ReadAnswer>,
 }
 
 impl TaskReport {
@@ -258,6 +261,7 @@ impl TaskReport {
             steps_done: 0,
             executed: 0,
             live: false,
+            answers: Vec::new(),
         }
     }
 }
@@ -312,33 +316,28 @@ pub trait AgentSettings: Send + Sync {
     fn cloud_planning(&self) -> bool;
 }
 
-/// Settings of the real app: the buddy's own state. Observe mode is ON until changed.
+/// Settings of the real app: the buddy's own persisted settings. Observe mode is ON until the
+/// user turns it off; the agent needs BOTH the user's `agent_enabled` setting (default OFF) and the
+/// readiness `Buddy::agent_enabled` (activity log writable, stop shortcut registered).
 pub struct BuddyAgentSettings {
     buddy: Arc<Buddy>,
-    observe: std::sync::atomic::AtomicBool,
 }
 
 impl BuddyAgentSettings {
     pub fn new(buddy: Arc<Buddy>) -> Self {
-        Self {
-            buddy,
-            observe: std::sync::atomic::AtomicBool::new(true),
-        }
-    }
-    pub fn set_observe_mode(&self, on: bool) {
-        self.observe.store(on, std::sync::atomic::Ordering::SeqCst);
+        Self { buddy }
     }
 }
 
 impl AgentSettings for BuddyAgentSettings {
     fn agent_enabled(&self) -> bool {
-        self.buddy.agent_enabled()
+        self.buddy.agent_enabled() && self.buddy.get_settings().agent_enabled
     }
     fn activity_probe_installed(&self) -> bool {
         self.buddy.has_activity_probe()
     }
     fn observe_mode(&self) -> bool {
-        self.observe.load(std::sync::atomic::Ordering::SeqCst)
+        self.buddy.get_settings().observe_mode
     }
     fn cloud_planning(&self) -> bool {
         self.buddy.get_settings().provider == crate::api::ProviderChoice::Anthropic

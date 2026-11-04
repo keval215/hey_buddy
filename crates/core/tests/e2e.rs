@@ -2359,3 +2359,79 @@ async fn the_leak_guard_panics_when_a_registered_marker_is_in_a_built_request() 
     .unwrap();
     let _ = r.buddy.prepare_and_consent(&provider, &req).await;
 }
+
+// ------------------------------------------------------------------ agent_mode (S2-23b)
+
+#[derive(Default)]
+struct RecTrigger {
+    got: Mutex<Vec<String>>,
+    refuse: AtomicBool,
+}
+impl buddy_core::agent::AgentTrigger for RecTrigger {
+    fn start(&self, transcript: String) -> Result<(), buddy_core::agent::StartError> {
+        self.got.lock().unwrap().push(transcript);
+        if self.refuse.load(Ordering::SeqCst) {
+            Err(buddy_core::agent::StartError::Disabled)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn agent_patch(agent_enabled: bool, agent_mode: bool) -> SettingsPatch {
+    SettingsPatch {
+        agent_enabled: Some(agent_enabled),
+        agent_mode: Some(agent_mode),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn agent_mode_sends_the_transcript_to_the_agent_and_never_to_the_chat_model() {
+    let r = rig(Opts {
+        patch: agent_patch(true, true),
+        ..Opts::default()
+    });
+    let trig = Arc::new(RecTrigger::default());
+    r.buddy.set_agent_trigger(trig.clone());
+    r.turn().await;
+    assert_eq!(*trig.got.lock().unwrap(), vec![QUESTION.to_string()]);
+    assert_eq!(r.ollama.call_count(), 0, "no chat call");
+    assert_eq!(r.cloud.call_count(), 0);
+    assert_eq!(
+        r.captures.load(Ordering::SeqCst),
+        0,
+        "no chat screen capture either"
+    );
+    assert_eq!(r.buddy.get_status().phase, Phase::Idle);
+
+    // The agent cannot start: a fixed sentence, and still no chat call.
+    trig.refuse.store(true, Ordering::SeqCst);
+    r.turn().await;
+    assert_eq!(trig.got.lock().unwrap().len(), 2);
+    assert_eq!(r.ollama.call_count(), 0);
+    assert_eq!(
+        r.tts_inputs.lock().unwrap().last().unwrap(),
+        spoken::notice(Notice::AgentCouldNot, Locale::En)
+    );
+}
+
+#[tokio::test]
+async fn agent_mode_off_or_agent_not_enabled_keeps_the_chat_path() {
+    // Default settings: chat as before; the trigger is never called.
+    for patch in [
+        SettingsPatch::default(),
+        agent_patch(false, true),
+        agent_patch(true, false),
+    ] {
+        let r = rig(Opts {
+            patch,
+            ..Opts::default()
+        });
+        let trig = Arc::new(RecTrigger::default());
+        r.buddy.set_agent_trigger(trig.clone());
+        r.turn().await;
+        assert!(trig.got.lock().unwrap().is_empty());
+        assert_eq!(r.ollama.call_count(), 1, "the chat model answered");
+    }
+}

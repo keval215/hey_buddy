@@ -92,6 +92,10 @@ impl EventSink for TauriEvents {
     fn download_failed(&self, ev: DownloadFailed) {
         let _ = self.0.emit_to(MAIN, EVT_DOWNLOAD_FAILED, ev);
     }
+    // How an agent task ended: fixed tokens, counts and short read answers; settings window only.
+    fn agent_task(&self, ev: buddy_core::agent::AgentTaskDto) {
+        let _ = self.0.emit_to(MAIN, buddy_core::agent::EVT_AGENT_TASK, ev);
+    }
 }
 
 pub fn setup(app: &AppHandle, buddy: &Arc<Buddy>) -> tauri::Result<()> {

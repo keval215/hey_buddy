@@ -9,4 +9,4 @@ export type SettingsPatch = { local_only?: boolean, vision_mode?: VisionMode, pr
 /**
  * Custom models directory; an empty string goes back to the default.
  */
-models_dir?: string, };
+models_dir?: string, observe_mode?: boolean, agent_enabled?: boolean, agent_mode?: boolean, };

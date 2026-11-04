@@ -30,9 +30,9 @@ use policy::{
     PolicyGate, ProposedPlan, Refusal, StepGrant, Tier, PLAN_APPROVAL_TIMEOUT,
     STEP_APPROVAL_TIMEOUT,
 };
-use sha2::{Digest, Sha256};
 
 use super::port::{peek, AgentDriver, BindExtras, BindFacts, DriverRelease};
+use super::read::{ReadAnswer, ReadKind, MAX_ANSWERS};
 use super::types::{
     AgentNotice, AgentSettings, DenyProvider, EngineFactory, Notifier, Pace, PauseReason,
     RefuseReason, RunLimits, ScheduleSource, Stage, TaskOutcome, TaskReport, TaskRequest,
@@ -51,12 +51,27 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Why a supervisor could not be built. Fixed token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupervisorError {
+    /// `SupervisorParts::audit` is not the gate's audit sink.
+    AuditMismatch,
+}
+
+impl SupervisorError {
+    pub fn code(self) -> &'static str {
+        match self {
+            SupervisorError::AuditMismatch => "audit_mismatch",
+        }
+    }
+}
+
 /// Everything the supervisor owns or borrows. `controller` supplies the ONE gate (the supervisor
 /// never builds a second one) and the kill switch.
 pub struct SupervisorParts {
     pub controller: Arc<KillController>,
     /// The sink the gate was built with (`buddy.audit_sink()`): supervisor records go to the same
-    /// append-only log.
+    /// append-only log. `AgentSupervisor::new` checks it is the gate's own (`audit_mismatch`).
     pub audit: Arc<dyn AuditSink>,
     pub broker: ApprovalBroker,
     pub driver: Arc<dyn AgentDriver>,
@@ -113,6 +128,30 @@ pub(crate) struct TestHooks {
     pub digest_tamper: AtomicBool,
     /// Skip the fresh observation before this step index (an observation reuse attempt).
     pub reuse_observation_at: Mutex<Option<usize>>,
+    /// Runs at one of the kill-check points (a kill landing exactly in that window).
+    pub at: Mutex<Option<HookAt>>,
+}
+
+/// A hook and where it runs.
+#[cfg(test)]
+pub(crate) type HookAt = (HookPoint, Arc<dyn Fn() + Send + Sync>);
+
+/// The windows between phases where the kill switch is checked (one hook point each).
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HookPoint {
+    /// After `attach` and the foreground read, right before `engine.plan`.
+    BeforePlan,
+    /// After `propose_as`.
+    AfterPropose,
+    /// After the dry run, before the approval is asked.
+    AfterDryRun,
+    /// Top of every live step loop iteration.
+    LoopStart,
+    /// After the fresh observation of a live step.
+    AfterObserve,
+    /// After the (step) approval, before the read / mint.
+    AfterApproval,
 }
 
 pub struct AgentSupervisor {
@@ -182,6 +221,7 @@ struct Progress {
     steps_done: u16,
     executed: u16,
     live: bool,
+    answers: Vec<ReadAnswer>,
 }
 
 /// Per-task constants.
@@ -197,14 +237,6 @@ struct RunCtx {
 enum Verdict {
     Approved,
     End(TaskOutcome),
-}
-
-/// The plan as it was dry-run: the supervisor repeats exactly this, nothing else.
-pub(crate) fn fingerprint(plan: &ProposedPlan) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(b"hey_buddy/supervisor/plan-fp/v1");
-    h.update(plan.plan().canonical_bytes());
-    h.finalize().into()
 }
 
 fn op_kind(s: &PlanStep) -> OpKind {
@@ -255,10 +287,20 @@ fn observe_refusal(o: &driver::ObserveOutcome) -> &'static str {
 }
 
 impl AgentSupervisor {
-    pub fn new(parts: SupervisorParts) -> Self {
+    /// `Err(SupervisorError::AuditMismatch)` when `parts.audit` is not the sink the gate writes to:
+    /// the supervisor's records and the gate's write-ahead intents must land in the SAME
+    /// append-only log (fail closed: no supervisor at all).
+    pub fn new(parts: SupervisorParts) -> Result<Self, SupervisorError> {
         let gate = Arc::clone(parts.controller.gate());
+        let same_sink = std::ptr::eq(
+            Arc::as_ptr(&parts.audit).cast::<()>(),
+            Arc::as_ptr(&gate.audit_sink()).cast::<()>(),
+        );
+        if !same_sink {
+            return Err(SupervisorError::AuditMismatch);
+        }
         let clock = gate.clock();
-        Self {
+        Ok(Self {
             ctl: parts.controller,
             gate,
             clock,
@@ -281,7 +323,12 @@ impl AgentSupervisor {
             last_mint: Mutex::new(None),
             #[cfg(test)]
             hooks: TestHooks::default(),
-        }
+        })
+    }
+
+    /// A task is running (one at a time).
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
     }
 
     /// The one gate (`KillController::gate()`).
@@ -364,11 +411,12 @@ impl AgentSupervisor {
             steps_done: pr.steps_done,
             executed: pr.executed,
             live: pr.live,
+            answers: pr.answers.clone(),
         }
     }
 
     async fn run_inner(&self, req: &TaskRequest, pr: &mut Progress) -> TaskOutcome {
-        use TaskOutcome::{Blocked, Killed, PlanFailed, PlanRejected, Refused};
+        use TaskOutcome::{Killed, PlanFailed, PlanRejected, Refused};
 
         // 1. Fail closed before anything.
         if !self.settings.agent_enabled() {
@@ -425,6 +473,17 @@ impl AgentSupervisor {
                 PlanLimits::local()
             },
         };
+        // A kill that landed after `attach` (or before it: nothing was attached to stop) and
+        // before the engine is asked to plan must not start the plan.
+        #[cfg(test)]
+        self.hook(HookPoint::BeforePlan);
+        if !self.alive(ctx.epoch0) {
+            if let Some(g) = &parts.core_gateway {
+                g.kill();
+            }
+            self.engine_killer.kill_engine_now();
+            return Killed(Stage::Planning);
+        }
         let planned = parts.engine.plan(input, Arc::clone(&parts.gateway)).await;
         drop(attach);
         if !self.alive(ctx.epoch0) {
@@ -461,7 +520,8 @@ impl AgentSupervisor {
             }
         };
         drop(draft);
-        let fp = fingerprint(&plan);
+        #[cfg(test)]
+        self.hook(HookPoint::AfterPropose);
         if !self.alive(ctx.epoch0) {
             return Killed(Stage::Planning);
         }
@@ -515,6 +575,8 @@ impl AgentSupervisor {
             // plan with a refused step is never offered for real.
             return Refused(RefuseReason::PlanRefusedStep);
         }
+        #[cfg(test)]
+        self.hook(HookPoint::AfterDryRun);
         if !self.alive(ctx.epoch0) {
             return Killed(Stage::PlanApproval);
         }
@@ -527,14 +589,17 @@ impl AgentSupervisor {
             Err(o) => return o,
         };
         pr.live = true;
-        // Live repeats exactly the dry-run plan: any difference aborts.
-        if fingerprint(&plan) != fp {
-            return Blocked("plan_changed");
-        }
+        // Live repeats exactly the dry-run plan. This is guaranteed by construction, not by a
+        // compare: there is ONE frozen `ProposedPlan` value (dry run, approval digest and every
+        // live step read it), `approve_plan` refuses a grant whose digest differs from the digest
+        // the human was shown, and the gate refuses any step that is not the plan's next step
+        // (`out_of_plan`, mapped to `Blocked("outside_plan")`). Defence in depth, all in the gate.
 
         // 6. Live: per frozen step.
         let mut run = 0u16;
         for i in 0..plan.len() {
+            #[cfg(test)]
+            self.hook(HookPoint::LoopStart);
             if !self.alive(ctx.epoch0) {
                 return Killed(Stage::Run);
             }
@@ -885,6 +950,8 @@ impl AgentSupervisor {
                 Err(()) => return Err(Blocked("observe_failed")),
             }
         }
+        #[cfg(test)]
+        self.hook(HookPoint::AfterObserve);
         if !self.alive(c.epoch0) {
             return Err(Killed(Stage::Run));
         }
@@ -908,6 +975,8 @@ impl AgentSupervisor {
             Evaluation::Deny(r) => return Err(self.map_refusal(r, c, Some(step))),
             Evaluation::WouldDo(_) => return Err(Blocked("observe_mode")),
         };
+        #[cfg(test)]
+        self.hook(HookPoint::AfterApproval);
         if !self.alive(c.epoch0) {
             return Err(Killed(Stage::Run));
         }
@@ -917,6 +986,21 @@ impl AgentSupervisor {
             self.gate
                 .complete_read(&bound, grant)
                 .map_err(|r| self.map_refusal(r, c, Some(step)))?;
+            // S2-18: the result of a read, from the cleared text of THIS step's observation.
+            let read = match step {
+                PlanStep::FindText { query } => Some((ReadKind::FindText, query)),
+                PlanStep::AnswerFromScreen { query } => Some((ReadKind::AnswerFromScreen, query)),
+                _ => None,
+            };
+            if let Some((kind, query)) = read {
+                if pr.answers.len() < MAX_ANSWERS {
+                    if let Some(a) = peek(&*self.driver, |o| {
+                        ReadAnswer::from_screen(kind, query, o.text())
+                    }) {
+                        pr.answers.push(a);
+                    }
+                }
+            }
             pr.steps_done += 1;
             return Ok(());
         }
@@ -957,6 +1041,15 @@ impl AgentSupervisor {
 
 #[cfg(test)]
 impl AgentSupervisor {
+    fn hook(&self, p: HookPoint) {
+        let f = lock(&self.hooks.at)
+            .as_ref()
+            .filter(|(q, _)| *q == p)
+            .map(|(_, f)| Arc::clone(f));
+        if let Some(f) = f {
+            f();
+        }
+    }
     pub(crate) fn engine_killer(&self) -> &Arc<ProcessEngineKiller> {
         &self.engine_killer
     }
