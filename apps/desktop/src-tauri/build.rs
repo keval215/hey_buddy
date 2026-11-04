@@ -6,6 +6,7 @@ const COMMANDS: &[&str] = &[
     "get_status",
     "get_settings",
     "update_settings",
+    "request_engine_swap",
     "list_displays",
     "cancel_turn",
     "debug_point",

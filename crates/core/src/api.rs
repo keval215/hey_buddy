@@ -15,6 +15,12 @@ pub const EVT_TURN_ERROR: &str = "turn:error";
 pub const EVT_TURN_TRANSCRIPT: &str = "turn:transcript";
 /// A piece of the reply with `[POINT:..]` tags already removed (sent to the settings window).
 pub const EVT_TURN_REPLY_DELTA: &str = "turn:reply_delta";
+/// A voice-engine swap was accepted and started loading (payload [`EngineSwapEvent`]).
+pub const EVT_ENGINE_SWAP_REQUESTED: &str = "engine_swap_requested";
+/// The new engine is active (payload [`EngineSwapEvent`]).
+pub const EVT_ENGINE_SWAP_DONE: &str = "engine_swap_done";
+/// The load failed; the old engine stays (payload [`EngineSwapEvent`] with `error`).
+pub const EVT_ENGINE_SWAP_FAILED: &str = "engine_swap_failed";
 /// Sent only to the `preview` window.
 pub const EVT_TURN_PREVIEW: &str = "turn:preview";
 /// Sent only to the `preview` window: the pending preview ended (decided, timed out, cancelled).
@@ -98,6 +104,41 @@ impl Default for FirewallStatus {
 pub struct TurnError {
     pub code: String,
     pub message: String,
+}
+
+/// Which voice engine a swap is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum EngineSlotName {
+    Stt,
+    Tts,
+}
+
+/// Argument of `request_engine_swap`: one slot or both. Anything else is rejected at the
+/// command boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum SwapTarget {
+    Stt,
+    Tts,
+    #[default]
+    All,
+}
+
+/// Events `engine_swap_requested`, `engine_swap_done`, `engine_swap_failed` (settings window
+/// only). `engine_id` is the registry model id. `error` is a fixed token (`model_missing`,
+/// `load_failed`) and only on failure (the command itself refuses with `invalid_model` /
+/// `loader_unavailable`); `path` is the expected model file for `model_missing`. Never any
+/// user content.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct EngineSwapEvent {
+    pub slot: EngineSlotName,
+    pub engine_id: String,
+    pub error: Option<String>,
+    pub path: Option<String>,
 }
 
 /// A display in the capture crate's units (global points on macOS; physical pixels with

@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { Settings } from "../ipc/Settings";
 import {
+  applySwap,
   buildPatch,
   errorText,
   isEmptyPatch,
   keyErrorText,
   keyStatusText,
+  needsEngineSwap,
   shownVision,
+  swapErrorText,
+  swapText,
   visionLocked,
 } from "./form";
 
@@ -80,5 +84,33 @@ describe("key texts", () => {
   it("shows only masked status", () => {
     expect(keyStatusText(true)).toMatch(/hidden/);
     expect(keyStatusText(false)).toMatch(/not set/);
+  });
+});
+
+describe("engine swap status", () => {
+  const ev = { slot: "stt", engine_id: "whisper-base", error: null, path: null } as const;
+  it("only a profile change needs a swap", () => {
+    expect(needsEngineSwap({ profile: "low-memory" })).toBe(true);
+    expect(needsEngineSwap({ local_only: false })).toBe(false);
+  });
+  it("goes loading, then done", () => {
+    let s = applySwap({}, "requested", ev);
+    expect(swapText("stt", s.stt!)).toBe("Speech recognition: loading whisper-base…");
+    s = applySwap(s, "done", ev);
+    expect(swapText("stt", s.stt!)).toBe("Speech recognition: whisper-base ready");
+    expect(s.tts).toBeUndefined();
+  });
+  it("failure shows the model id and, for a missing file, the expected path", () => {
+    const s = applySwap({}, "failed", { ...ev, error: "model_missing", path: "C:\\m\\whisper-base.bin" });
+    const t = swapText("stt", s.stt!);
+    expect(t).toContain("whisper-base");
+    expect(t).toContain("Expected at C:\\m\\whisper-base.bin");
+    const o = applySwap({}, "failed", { ...ev, slot: "tts", error: "load_failed" });
+    expect(swapText("tts", o.tts!)).toBe("Speech synthesis: whisper-base could not load (load_failed)");
+  });
+  it("maps command error tokens", () => {
+    expect(swapErrorText("loader_unavailable")).toContain("not built");
+    expect(swapErrorText("invalid_model")).toContain("no valid");
+    expect(swapErrorText("zzz")).toBe("zzz");
   });
 });

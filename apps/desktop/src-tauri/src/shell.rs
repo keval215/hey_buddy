@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use buddy_core::api::{
-    FirewallStatus, Phase, PointEvent, ReplyDelta, TranscriptEvent, TurnError, TurnState,
+    EngineSwapEvent, FirewallStatus, Phase, PointEvent, ReplyDelta, TranscriptEvent, TurnError,
+    TurnState, EVT_ENGINE_SWAP_DONE, EVT_ENGINE_SWAP_FAILED, EVT_ENGINE_SWAP_REQUESTED,
     EVT_FIREWALL_STATUS, EVT_TURN_ERROR, EVT_TURN_POINT, EVT_TURN_REPLY_DELTA, EVT_TURN_STATE,
     EVT_TURN_TRANSCRIPT,
 };
@@ -67,6 +68,17 @@ impl EventSink for TauriEvents {
     }
     fn error(&self, e: TurnError) {
         let _ = self.0.emit(EVT_TURN_ERROR, e);
+    }
+    // Engine swaps: model id, fixed error token and the expected model path only. Settings
+    // window only (the overlays and the preview panel have no use for them).
+    fn engine_swap_requested(&self, ev: EngineSwapEvent) {
+        let _ = self.0.emit_to(MAIN, EVT_ENGINE_SWAP_REQUESTED, ev);
+    }
+    fn engine_swap_done(&self, ev: EngineSwapEvent) {
+        let _ = self.0.emit_to(MAIN, EVT_ENGINE_SWAP_DONE, ev);
+    }
+    fn engine_swap_failed(&self, ev: EngineSwapEvent) {
+        let _ = self.0.emit_to(MAIN, EVT_ENGINE_SWAP_FAILED, ev);
     }
 }
 

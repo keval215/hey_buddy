@@ -9,6 +9,7 @@
     "allow-get-status",
     "allow-get-settings",
     "allow-update-settings",
+    "allow-request-engine-swap",
     "allow-list-displays",
     "allow-cancel-turn",
     "allow-debug-point",

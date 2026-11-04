@@ -7,6 +7,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use buddy_core::api::SwapTarget;
 use buddy_core::Buddy;
 use tauri::AppHandle;
 
@@ -42,23 +43,25 @@ fn start_voice(app: &AppHandle, buddy: &Arc<Buddy>, deny: Arc<buddy_core::DenyLi
         return;
     };
     let dir = real_voice::models_dir(&data_dir);
-    let profile = buddy.get_settings().profile;
-    let missing = real_voice::missing_models(&profile, &dir);
-    if !missing.is_empty() {
-        for m in &missing {
-            buddy.add_notice(m.notice());
-        }
-        buddy.set_engine_unavailable("model_missing", &missing[0].notice());
-        return;
-    }
     buddy.set_engine_unavailable("voice_loading", "Voice engines are still loading.");
     let providers = buddy.default_providers();
     let runtime = tauri::async_runtime::handle().inner().clone();
     let buddy = buddy.clone();
-    // Loading whisper and the other models takes a few seconds: not on the setup thread.
+    // Loading the VAD, whisper and the other models takes a few seconds: not on the setup
+    // thread. The profile-dependent STT and TTS engines are loaded through the engine slots,
+    // so startup is just the first swap (a missing model file arrives as an `engine_swap_failed`
+    // event and a status notice naming the file; nothing is downloaded).
     std::thread::spawn(move || {
-        match real_voice::engine_deps(&profile, &dir, deny, providers, runtime) {
-            Ok(deps) => buddy.attach_engine(deps),
+        match real_voice::base_deps(&dir, deny, providers, runtime) {
+            Ok(deps) => {
+                buddy.attach_engine(deps);
+                buddy.set_engine_loader(Arc::new(real_voice::RealLoader::new(dir)));
+                if let Err(e) = buddy.request_engine_swap(SwapTarget::All) {
+                    let msg = format!("Voice engines could not start ({e}).");
+                    buddy.add_notice(msg.clone());
+                    buddy.set_engine_unavailable("voice_unavailable", &msg);
+                }
+            }
             Err(e) => {
                 // Adapter errors are fixed text (model path, library missing), never content.
                 let msg = match &e {

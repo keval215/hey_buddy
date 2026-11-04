@@ -14,9 +14,14 @@ import {
   isEmptyPatch,
   keyErrorText,
   keyStatusText,
+  needsEngineSwap,
   phaseText,
   shownVision,
+  swapErrorText,
+  swapText,
   visionLocked,
+  applySwap,
+  type SwapStates,
 } from "./settings/form";
 
 export default function App() {
@@ -26,6 +31,7 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>("Idle");
   const [error, setError] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [swaps, setSwaps] = useState<SwapStates>({});
 
   useEffect(() => {
     void api.getSettings().then((s) => {
@@ -45,8 +51,13 @@ export default function App() {
     const unFw = on("firewall:status", (f) =>
       setStatus((s) => (s ? { ...s, firewall: f } : s)),
     );
+    const unSwap = [
+      on("engine_swap_requested", (e) => setSwaps((s) => applySwap(s, "requested", e))),
+      on("engine_swap_done", (e) => setSwaps((s) => applySwap(s, "done", e))),
+      on("engine_swap_failed", (e) => setSwaps((s) => applySwap(s, "failed", e))),
+    ];
     return () => {
-      for (const u of [un, unErr, unListen, unFw]) void u.then((f) => f());
+      for (const u of [un, unErr, unListen, unFw, ...unSwap]) void u.then((f) => f());
     };
   }, []);
 
@@ -59,6 +70,11 @@ export default function App() {
       setCurrent(next);
       setDraft(next);
       setError(null);
+      // A new profile means new STT/TTS engines: load them in the background (no restart).
+      // Progress and the result show up below as engine_swap_* events.
+      if (needsEngineSwap(patch)) {
+        await api.requestEngineSwap("all").catch((e) => setError(swapErrorText(e)));
+      }
     } catch (e) {
       setError(errorText(e));
       setDraft(current);
@@ -174,6 +190,20 @@ export default function App() {
             {n}
           </div>
         ))}
+        {(["stt", "tts"] as const).map((slot) => {
+          const st = swaps[slot];
+          return (
+            st && (
+              <div
+                key={slot}
+                role={st.state === "failed" ? "alert" : "status"}
+                className={st.state === "failed" ? "text-red-600" : "text-neutral-700"}
+              >
+                {swapText(slot, st)}
+              </div>
+            )
+          );
+        })}
         {lastError && (
           <div role="alert" className="text-red-600">
             {lastError}

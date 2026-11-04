@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use buddy_core::api::{
-    Decision, DisplayDto, LastRequestDto, PreviewDto, Settings, SettingsPatch, Status,
+    Decision, DisplayDto, LastRequestDto, PreviewDto, Settings, SettingsPatch, Status, SwapTarget,
 };
 use buddy_core::Buddy;
 use tauri::{AppHandle, State};
@@ -38,6 +38,17 @@ pub fn update_settings(app: AppHandle, b: B, patch: SettingsPatch) -> Result<Set
         b.set_hotkey_registered(true);
     }
     Ok(update.settings)
+}
+
+/// Settings window only: (re)load the STT/TTS engines of the current profile in the
+/// background. Returns at once; progress arrives as `engine_swap_requested`,
+/// `engine_swap_done` and `engine_swap_failed` events. A running turn is never disturbed: the
+/// new engine is applied after it ends. Errors are fixed tokens (`invalid_model`,
+/// `loader_unavailable`); `slot` is `stt`, `tts` or `all` (default).
+#[tauri::command]
+pub fn request_engine_swap(b: B, slot: Option<SwapTarget>) -> Result<(), String> {
+    b.request_engine_swap(slot.unwrap_or_default())
+        .map_err(|e| e.to_string())
 }
 
 /// Preview window only (capability `preview`): Send or Cancel for a pending cloud request.

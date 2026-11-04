@@ -1,4 +1,6 @@
 // Pure settings-form logic (unit-tested).
+import type { EngineSlotName } from "../ipc/EngineSlotName";
+import type { EngineSwapEvent } from "../ipc/EngineSwapEvent";
 import type { Phase } from "../ipc/Phase";
 import type { ProviderChoice } from "../ipc/ProviderChoice";
 import type { Settings } from "../ipc/Settings";
@@ -68,4 +70,59 @@ export function keyErrorText(e: unknown): string {
 /** Shown instead of the key: never the key itself. */
 export function keyStatusText(hasKey: boolean): string {
   return hasKey ? "Anthropic API key: stored in the OS keychain (hidden)" : "Anthropic API key: not set";
+}
+
+export type SwapState = {
+  state: "loading" | "done" | "failed";
+  id: string;
+  error: string | null;
+  path: string | null;
+};
+export type SwapStates = Partial<Record<EngineSlotName, SwapState>>;
+export type SwapKind = "requested" | "done" | "failed";
+
+/** The profile decides the engines: a profile change is what needs a swap. */
+export function needsEngineSwap(patch: SettingsPatch): boolean {
+  return patch.profile !== undefined;
+}
+
+/** Fold one engine_swap_* event into the per-slot status. */
+export function applySwap(states: SwapStates, kind: SwapKind, ev: EngineSwapEvent): SwapStates {
+  const state = kind === "requested" ? "loading" : kind;
+  return {
+    ...states,
+    [ev.slot]: { state, id: ev.engine_id, error: ev.error, path: ev.path },
+  };
+}
+
+const SLOT_NAMES: Record<EngineSlotName, string> = {
+  stt: "Speech recognition",
+  tts: "Speech synthesis",
+};
+
+/** One status line per slot; failures name the model id and, for a missing file, where it goes. */
+export function swapText(slot: EngineSlotName, s: SwapState): string {
+  const name = SLOT_NAMES[slot];
+  switch (s.state) {
+    case "loading":
+      return `${name}: loading ${s.id}…`;
+    case "done":
+      return `${name}: ${s.id} ready`;
+    case "failed":
+      return s.error === "model_missing" && s.path
+        ? `${name}: ${s.id} could not load, the model file is missing. Expected at ${s.path}`
+        : `${name}: ${s.id} could not load (${s.error ?? "load_failed"})`;
+  }
+}
+
+/** Fixed core tokens from request_engine_swap -> user text. */
+export function swapErrorText(e: unknown): string {
+  switch (e) {
+    case "loader_unavailable":
+      return "Voice engines are not built into this version, so nothing was loaded";
+    case "invalid_model":
+      return "That profile has no valid voice models";
+    default:
+      return errorText(e);
+  }
 }

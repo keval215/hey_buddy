@@ -6,6 +6,8 @@ import type { Decision } from "../ipc/Decision";
 import type { LastRequestDto } from "../ipc/LastRequestDto";
 import type { PreviewClosed } from "../ipc/PreviewClosed";
 import type { PreviewDto } from "../ipc/PreviewDto";
+import type { EngineSwapEvent } from "../ipc/EngineSwapEvent";
+import type { SwapTarget } from "../ipc/SwapTarget";
 import type { DisplayDto } from "../ipc/DisplayDto";
 import type { FirewallStatus } from "../ipc/FirewallStatus";
 import type { PointEvent } from "../ipc/PointEvent";
@@ -22,6 +24,9 @@ export const EVT = {
   turnError: "turn:error",
   turnPreview: "turn:preview",
   previewClosed: "turn:preview_closed",
+  engineSwapRequested: "engine_swap_requested",
+  engineSwapDone: "engine_swap_done",
+  engineSwapFailed: "engine_swap_failed",
 } as const;
 
 export interface EventMap {
@@ -31,6 +36,9 @@ export interface EventMap {
   "turn:error": TurnError;
   "turn:preview": PreviewDto;
   "turn:preview_closed": PreviewClosed;
+  engine_swap_requested: EngineSwapEvent;
+  engine_swap_done: EngineSwapEvent;
+  engine_swap_failed: EngineSwapEvent;
 }
 
 export function on<K extends keyof EventMap>(
@@ -55,6 +63,8 @@ export const api = {
   getStatus: () => invoke<Status>("get_status"),
   getSettings: () => invoke<Settings>("get_settings"),
   updateSettings: (patch: SettingsPatch) => invoke<Settings>("update_settings", { patch }),
+  /** Settings window only. Loads the current profile's voice engines in the background; progress arrives as engine_swap_* events. */
+  requestEngineSwap: (slot: SwapTarget = "all") => invoke<void>("request_engine_swap", { slot }),
   listDisplays: () => invoke<DisplayDto[]>("list_displays"),
   cancelTurn: () => invoke<void>("cancel_turn"),
   /** Preview window only. */

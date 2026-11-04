@@ -7,6 +7,7 @@
 //! on release or cancel; nothing here opens it otherwise. Without an engine (voice engines not
 //! built) a press reports `voice_not_built` and does nothing else.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -17,19 +18,24 @@ use llm::{
     RequestPreview, ANTHROPIC_ACCOUNT, ANTHROPIC_PROVIDER_ID,
 };
 use secrecy::SecretString;
+use voice::registry::{Device, Registry, Task};
+use voice::{SttProvider, TtsProvider};
 
 use crate::api::{
-    Decision, DisplayDto, FirewallStatus, LastRequestDto, Phase, PointEvent, Settings,
-    SettingsPatch, Status, TurnState,
+    Decision, DisplayDto, EngineSlotName, EngineSwapEvent, FirewallStatus, LastRequestDto, Phase,
+    PointEvent, Settings, SettingsPatch, Status, SwapTarget, TurnState,
 };
 use crate::consent::{
     last_request_dto, provider_allowed, ConsentError, ConsentGate, PreviewSink, PreviewStore,
     LAST_KEY,
 };
+use crate::engine_slot::{
+    EngineLoader, EngineSlot, SwapFailure, SwapNotice, SwapObserver, TOKEN_MODEL_MISSING,
+};
 use crate::error::{simple_turn_error, CoreError, KeyError};
 use crate::events::{EventSink, NullSink};
 use crate::point::sanitize_label;
-use crate::settings::{SettingsError, SettingsStore};
+use crate::settings::{builtin_registry, SettingsError, SettingsStore};
 use crate::turn::{self, EngineDeps, ProviderSource, TurnControl, TurnCtx};
 
 /// Result of a settings update; the glue re-registers the hotkey when `hotkey_changed`.
@@ -48,6 +54,41 @@ struct Inner {
     hotkey_registered: bool,
 }
 
+/// Why `request_engine_swap` refused. Fixed tokens (the `Display` text), no content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SwapError {
+    /// No loader is installed (voice engines not built).
+    #[error("loader_unavailable")]
+    NoLoader,
+    /// The profile or one of its models is not valid in the registry.
+    #[error("invalid_model")]
+    InvalidModel,
+}
+
+/// The `(stt, tts)` model ids of `profile`, validated against `reg`: the profile and models
+/// must exist with the right task, and STT never runs on the GPU.
+pub fn engine_models(reg: &Registry, profile: &str) -> Result<(String, String), SwapError> {
+    let p = reg.profile(profile).ok_or(SwapError::InvalidModel)?;
+    let ok = |id: &str, task: Task| reg.get(id).is_ok_and(|m| m.task == task);
+    if !ok(&p.stt.model, Task::Stt) || !ok(&p.tts.model, Task::Tts) || p.stt.device == Device::Gpu {
+        return Err(SwapError::InvalidModel);
+    }
+    Ok((p.stt.model.clone(), p.tts.model.clone()))
+}
+
+fn failure_notice(slot: EngineSlotName, id: &str, f: &SwapFailure) -> String {
+    let which = match slot {
+        EngineSlotName::Stt => "speech recognition",
+        EngineSlotName::Tts => "speech synthesis",
+    };
+    match (&f.path, f.token) {
+        (Some(path), TOKEN_MODEL_MISSING) => format!(
+            "Missing model file for {id}: place it at {path} (nothing is downloaded automatically)."
+        ),
+        _ => format!("Could not load the {which} model {id} ({}).", f.token),
+    }
+}
+
 /// Longest accepted API key (bytes).
 const MAX_KEY_LEN: usize = 512;
 
@@ -62,7 +103,13 @@ pub struct Buddy {
     has_key: Mutex<Option<bool>>,
     /// Most recent turn's request (in memory only, replaced each turn).
     last: Mutex<Option<LastRequestDto>>,
-    sink: Mutex<Arc<dyn EventSink>>,
+    sink: Arc<Mutex<Arc<dyn EventSink>>>,
+    /// The swappable voice engines (S2-2). Turns take their engines from here at their start.
+    stt: EngineSlot<dyn SttProvider>,
+    tts: EngineSlot<dyn TtsProvider>,
+    loader: Mutex<Option<Arc<dyn EngineLoader>>>,
+    /// Latest failed swap per slot, shown as a status notice until the next request.
+    swap_failures: Arc<Mutex<BTreeMap<EngineSlotName, String>>>,
     /// The turn engine's dependencies; `None` = voice engines not built.
     engine: Mutex<Option<Arc<EngineDeps>>>,
     current: Mutex<Option<TurnControl>>,
@@ -89,6 +136,38 @@ impl Buddy {
         let store = Arc::new(PreviewStore::new());
         let consent = ConsentGate::new(store.clone());
         consent.set_local_only(settings.settings().local_only);
+        let sink: Arc<Mutex<Arc<dyn EventSink>>> = Arc::new(Mutex::new(Arc::new(NullSink)));
+        let swap_failures: Arc<Mutex<BTreeMap<EngineSlotName, String>>> = Arc::default();
+        let observer = |slot: EngineSlotName| -> SwapObserver {
+            let (sink, failures) = (sink.clone(), swap_failures.clone());
+            Arc::new(move |n: SwapNotice| {
+                let ev = |id: String, f: Option<&SwapFailure>| EngineSwapEvent {
+                    slot,
+                    engine_id: id,
+                    error: f.map(|f| f.token.to_string()),
+                    path: f.and_then(|f| f.path.clone()),
+                };
+                let out = lock(&sink).clone();
+                match n {
+                    SwapNotice::Requested { id } => {
+                        lock(&failures).remove(&slot);
+                        out.engine_swap_requested(ev(id, None));
+                    }
+                    SwapNotice::Done { id } => {
+                        lock(&failures).remove(&slot);
+                        out.engine_swap_done(ev(id, None));
+                    }
+                    SwapNotice::Failed { id, failure } => {
+                        lock(&failures).insert(slot, failure_notice(slot, &id, &failure));
+                        out.engine_swap_failed(ev(id, Some(&failure)));
+                    }
+                }
+            })
+        };
+        let (stt, tts) = (
+            EngineSlot::new(observer(EngineSlotName::Stt)),
+            EngineSlot::new(observer(EngineSlotName::Tts)),
+        );
         Self {
             settings: Mutex::new(settings),
             inner: Mutex::new(Inner {
@@ -103,7 +182,11 @@ impl Buddy {
             credentials,
             has_key: Mutex::new(None),
             last: Mutex::new(None),
-            sink: Mutex::new(Arc::new(NullSink)),
+            sink,
+            stt,
+            tts,
+            loader: Mutex::new(None),
+            swap_failures,
             engine: Mutex::new(None),
             current: Mutex::new(None),
             notices: Mutex::new(Vec::new()),
@@ -118,6 +201,45 @@ impl Buddy {
 
     pub(crate) fn sink(&self) -> Arc<dyn EventSink> {
         lock(&self.sink).clone()
+    }
+
+    /// The STT engine slot (tests and fixed setups may `set` an engine directly).
+    pub fn stt_slot(&self) -> &EngineSlot<dyn SttProvider> {
+        &self.stt
+    }
+
+    /// The TTS engine slot.
+    pub fn tts_slot(&self) -> &EngineSlot<dyn TtsProvider> {
+        &self.tts
+    }
+
+    /// Install what builds STT/TTS engines for `request_engine_swap` (the real adapters, or a
+    /// fake in tests).
+    pub fn set_engine_loader(&self, loader: Arc<dyn EngineLoader>) {
+        *lock(&self.loader) = Some(loader);
+    }
+
+    /// `request_engine_swap` command (design: explicit command, called by the settings window
+    /// after a profile change and by the startup code for the first load; `update_settings`
+    /// itself never loads anything). The model ids come from the CURRENT profile, validated
+    /// against the registry (STT never on the GPU); an invalid profile or model is refused
+    /// before anything starts. Loads run in the background, a running push-to-talk turn is
+    /// never disturbed, and results arrive as `engine_swap_*` events.
+    pub fn request_engine_swap(&self, target: SwapTarget) -> Result<(), SwapError> {
+        let loader = lock(&self.loader).clone().ok_or(SwapError::NoLoader)?;
+        let profile = lock(&self.settings).settings().profile;
+        let (stt_id, tts_id) = engine_models(builtin_registry(), &profile)?;
+        if matches!(target, SwapTarget::Stt | SwapTarget::All) {
+            let (l, id) = (loader.clone(), stt_id.clone());
+            self.stt
+                .request_swap(stt_id, Box::new(move || l.load_stt(&id)));
+        }
+        if matches!(target, SwapTarget::Tts | SwapTarget::All) {
+            let (l, id) = (loader, tts_id.clone());
+            self.tts
+                .request_swap(tts_id, Box::new(move || l.load_tts(&id)));
+        }
+        Ok(())
     }
 
     /// Install the turn engine. Until this is called a hotkey press reports `voice_not_built`.
@@ -310,7 +432,11 @@ impl Buddy {
             firewall: i.firewall.clone(),
             hotkey_registered: i.hotkey_registered,
             settings_error,
-            notices: lock(&self.notices).clone(),
+            notices: {
+                let mut n = lock(&self.notices).clone();
+                n.extend(lock(&self.swap_failures).values().cloned());
+                n
+            },
         }
     }
 
@@ -355,6 +481,18 @@ impl Buddy {
         if let Some(old) = self.cancel_current() {
             sink.turn_state(old);
         }
+        // The cancelled turn is over: a waiting engine swap lands now, before the new turn
+        // takes its engines.
+        self.engines_idle();
+        let (Some(stt), Some(tts)) = (self.stt.begin_turn(), self.tts.begin_turn()) else {
+            self.engines_idle();
+            let (code, msg) = (
+                "engine_not_loaded",
+                "The voice engines are not loaded yet. See the status notices.",
+            );
+            sink.error(simple_turn_error(code, msg));
+            return;
+        };
         // A new turn supersedes any preview still waiting from an earlier one.
         self.consent.cancel_all();
         let ev = {
@@ -370,6 +508,8 @@ impl Buddy {
                 turn_id,
                 cancelled: cancelled.clone(),
                 release: release_rx,
+                stt,
+                tts,
             };
             let task = deps.runtime.spawn(turn::run(ctx));
             *lock(&self.current) = Some(TurnControl {
@@ -412,6 +552,13 @@ impl Buddy {
         if let Some(ev) = ev {
             self.sink().turn_state(ev);
         }
+        self.engines_idle();
+    }
+
+    /// No turn is running any more: let waiting engine swaps land.
+    fn engines_idle(&self) {
+        self.stt.end_turn();
+        self.tts.end_turn();
     }
 
     /// Abort the running turn. Returns the `Idle` state to emit when a turn was in progress.
@@ -451,10 +598,18 @@ impl Buddy {
 
     /// Engine -> state: the turn is over.
     pub(crate) fn finish_turn(&self, turn_id: u32) {
+        if self.finish_turn_state(turn_id) {
+            // The turn is over: a waiting engine swap lands now (after the Idle event).
+            self.engines_idle();
+        }
+    }
+
+    /// Returns false for a stale turn (a newer one owns the engines now).
+    fn finish_turn_state(&self, turn_id: u32) -> bool {
         let ev = {
             let mut i = lock(&self.inner);
             if i.turn_id != turn_id {
-                return;
+                return false;
             }
             {
                 let mut cur = lock(&self.current);
@@ -463,7 +618,7 @@ impl Buddy {
                 }
             }
             if i.phase == Phase::Idle {
-                return;
+                return true;
             }
             i.phase = Phase::Idle;
             TurnState {
@@ -472,6 +627,7 @@ impl Buddy {
             }
         };
         self.sink().turn_state(ev);
+        true
     }
 
     /// Engine -> state: remember and announce the firewall's state for this turn.
