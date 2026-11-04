@@ -333,6 +333,22 @@ impl Observation {
         })
     }
 
+    /// Descriptors of every addressable node, in emission order (`#1`, `#2`, ...). Secure and
+    /// unaddressable nodes are skipped; a restricted app (observable, no actions) yields none.
+    /// Read-only enumeration for `policy::bind_step`; it builds nothing sealed.
+    pub fn elements(&self) -> impl Iterator<Item = TargetDescriptor> + '_ {
+        (1..=self.targets.len() as u32).filter_map(|node| {
+            let r = self.element(node)?;
+            self.describe(r)
+        })
+    }
+
+    /// The foreground app is on the built-in restricted list (ADR 0004 section 8): observable,
+    /// never actionable.
+    pub fn is_restricted_app(&self) -> bool {
+        builtin::is_restricted(self.app_id.as_str())
+    }
+
     pub(crate) fn slot(&self, node: u32) -> Option<&Slot> {
         let i = usize::try_from(node).ok()?.checked_sub(1)?;
         self.targets.get(i)

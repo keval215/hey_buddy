@@ -3274,6 +3274,8 @@ version = "0.1.0"
 dependencies = [
  "action",
  "firewall",
+ "frame",
+ "getrandom 0.3.4",
  "policy",
  "serde",
  "serde_json",

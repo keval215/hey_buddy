@@ -1008,3 +1008,33 @@ fn live_target_and_observation_debug_carry_no_content() {
         "{s}"
     );
 }
+
+#[test]
+fn elements_enumerates_addressable_nodes_in_order_and_skips_secure_ones() {
+    let o = observe(&fw_of(&desktop()));
+    let labels: Vec<_> = o
+        .elements()
+        .map(|d| (d.element.node, d.label.as_deref().unwrap_or("").to_string()))
+        .collect();
+    // #2 is the password field: no descriptor.
+    assert_eq!(
+        labels,
+        vec![
+            (1, "Email".to_string()),
+            (3, "Sign in".to_string()),
+            (4, "Delete".to_string())
+        ]
+    );
+    assert!(!o.is_restricted_app());
+    for d in o.elements() {
+        assert_eq!(o.describe(d.element).map(|x| x.element), Some(d.element));
+    }
+}
+
+#[test]
+fn a_restricted_app_is_observable_with_no_elements() {
+    let d = ScriptedDesktop::new().with_window(login_window("setup.exe"));
+    let o = observe(&fw_of(&d));
+    assert!(o.is_restricted_app());
+    assert_eq!(o.elements().count(), 0);
+}

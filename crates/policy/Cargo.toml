@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "hey_buddy policy (ADR 0003 sections 4-5): strict plan validation, provenance, tier classification (pure)"
+description = "hey_buddy policy (ADR 0003 sections 4-9): plan validation, tier classification, PolicyGate, sealed ApprovedAction, kill switch (pure, sync)"
 
 [features]
 # Test helpers (BoundStepFacts::assume_benign_environment). Off by default; never enable outside tests.
@@ -13,6 +13,7 @@ test-support = []
 [dependencies]
 action = { path = "../action" }
 firewall = { path = "../firewall" }
+getrandom = "0.3"
 serde = "1"
 serde_json = "1"
 sha2 = "0.10"
@@ -20,3 +21,6 @@ thiserror = "1"
 
 [dev-dependencies]
 policy = { path = ".", features = ["test-support"] }
+# Real Observations for binding/gate tests come from the firewall fakes (test-only; never in the normal tree).
+firewall = { path = "../firewall", features = ["fakes"] }
+frame = { path = "../frame" }

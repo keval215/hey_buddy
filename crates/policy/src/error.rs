@@ -61,6 +61,9 @@ pub enum PlanError {
     UnknownApp,
     #[error("transcript_too_large")]
     TranscriptTooLarge,
+    /// The gate could not start (no OS randomness for the session nonce): fail closed.
+    #[error("gate_unavailable")]
+    GateUnavailable,
 }
 
 impl PlanError {
@@ -96,6 +99,7 @@ impl PlanError {
             PlanError::AppNotInRequest => "app_not_in_request",
             PlanError::UnknownApp => "unknown_app",
             PlanError::TranscriptTooLarge => "transcript_too_large",
+            PlanError::GateUnavailable => "gate_unavailable",
         }
     }
 }

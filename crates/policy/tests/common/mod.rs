@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+pub mod world;
 use policy::{validate, PlanContext, PlanError, StaticCatalogue, ValidatedPlan};
 
 pub const TRANSCRIPT: &str =

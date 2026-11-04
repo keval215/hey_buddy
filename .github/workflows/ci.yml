@@ -61,13 +61,30 @@ jobs:
           if cargo tree -p action -e normal | grep -E '(^|[^a-z_-])(windows|objc2|core-foundation|llm|capture|voice|tokio|reqwest) '; then
             echo "action crate has a forbidden dependency"; exit 1
           fi
-      - name: ADR 0003 - policy must stay pure (no platform, llm, capture, voice, driver, tokio, reqwest)
+      - name: ADR 0003 - policy must stay pure and sync (no platform, llm, capture, voice, driver, tokio, async runtimes, reqwest)
         run: |
-          if cargo tree -p policy -e normal | grep -E '(^|[^a-z_-])(windows|objc2|core-foundation|llm|capture|voice|driver|tokio|reqwest) '; then
+          if cargo tree -p policy -e normal | grep -E '(^|[^a-z_-])(windows|objc2|core-foundation|llm|capture|voice|driver|tokio|async-std|async-trait|futures|smol|reqwest|hyper|mio) '; then
             echo "policy crate has a forbidden dependency"; exit 1
+          fi
+          # Sync only: no async fn, no .await in the policy sources.
+          if grep -rnE '(^|[^a-z_])async[[:space:]]+(fn|move|\{)|\.await' --include='*.rs' crates/policy/src; then
+            echo "policy must stay synchronous"; exit 1
           fi
           # TODO(S2-15): once the agent crate exists, add the mirror rule from ADR 0003 section 11:
           #   cargo tree -p agent -e normal must not list policy, driver, capture, firewall or llm.
+      - name: ADR 0003 - ApprovedAction is minted only in crates/policy/src/gate.rs
+        run: |
+          # Tripwire (the real control is review): the sealed type, its constructor and every
+          # `fn mint` live in the one file; nothing else may build or define them.
+          hits=$(grep -rnE 'ApprovedAction[[:space:]]*\{|ApprovedAction::mint|fn[[:space:]]+mint' --include='*.rs' apps crates tools \
+            | grep -v '^crates/policy/src/gate.rs:' || true)
+          if [ -n "$hits" ]; then
+            echo "ApprovedAction constructed or minted outside crates/policy/src/gate.rs:"
+            echo "$hits"; exit 1
+          fi
+          # ... and the file does define it (the tripwire is not vacuous).
+          grep -q 'pub struct ApprovedAction' crates/policy/src/gate.rs
+          grep -q 'pub(crate) fn mint' crates/policy/src/gate.rs
       - name: policy test helper stays test-only (assume_benign_environment, test-support feature)
         run: |
           # The helper may appear only in crates/policy (its cfg-gated definition and its tests).

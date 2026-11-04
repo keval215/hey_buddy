@@ -205,6 +205,11 @@ impl fmt::Debug for PlanStep {
 pub struct PlanDigest([u8; 32]);
 
 impl PlanDigest {
+    /// Tests only: a digest of arbitrary bytes.
+    #[cfg(test)]
+    pub(crate) fn from_bytes_for_test(b: [u8; 32]) -> Self {
+        Self(b)
+    }
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -305,7 +310,7 @@ fn lp(out: &mut Vec<u8>, b: &[u8]) {
     out.extend_from_slice(b);
 }
 
-fn role_code(r: Option<NodeRole>) -> u8 {
+pub(crate) fn role_code(r: Option<NodeRole>) -> u8 {
     match r {
         None => 0,
         Some(NodeRole::Window) => 1,
