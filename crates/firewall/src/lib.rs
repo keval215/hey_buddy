@@ -76,6 +76,7 @@ pub mod fake;
 #[cfg(any(test, feature = "fakes"))]
 mod scripted;
 
+pub use builtin::{is_auth_surface_app, is_restricted_app};
 pub use error::{BlockReason, FirewallError, PauseReason, SessionProbeState, SessionState};
 pub use firewall::{
     Firewall, PrivacyFirewall, SecureFieldDetector, SessionProbe, Verdict, DEFAULT_MAX_RECORD_AGE,

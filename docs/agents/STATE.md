@@ -101,6 +101,8 @@ Branches: step2a/hardening -> step2b/agent-harness -> step3/packaging -> step4/f
 
 - S2-13 DONE (round 2, accepted by orch after tests): KillController (epoch-first, worker thread, parallel timed steps, double driver release), kill hotkey (Windows own thread), tray, `kill_agent` in all capability files, gate tightenings (void bump on end_task, proposal-owned results, 10 s reservation cap, activity guard). Follow-ups: driver must implement 'released' latch (S2-14c); S2-23 must reuse `controller.gate()`, check `agent_enabled`, fail without activity probe; wire engine killer (S2-10) and driver releaser (S2-14c); approval window capability needs `allow-kill-agent` (S2-16); `late_result` flood has no rate limit; parked-thread leak per hung collaborator; panic path should call trip(Panic); push-to-talk `unavailable` wording still says 'Using the default'.
 
+- S2-14c DONE (round 2, accepted by orch: both MAJORs mutation-proven fixed): `driver` crate (execute pipeline, deadline worker, release_gen, FakeActuator, 1000-seq model test, read-ban greps). Follow-ups: S2-14d Windows (split: d1 firewall Windows ObservationSource/TargetResolver/cursor.identity; d2 WinActuator pub(crate)); 2 s ACTION_TTL vs long TypeText (Partial, fail closed); driver Busy-forever after hung OS call => core shows 'driver busy'; focused-descendant sensitive label residual risk (KeyCombo/CopySelection).
+
 ## 2B execution order (dependency-driven, branch step2b/agent-harness)
 S2-14b action crate -> S2-14a firewall observe/revalidate -> S2-11 policy gate -> S2-12 audit -> S2-13 kill switch -> S2-14c driver+fake -> S2-14d WinActuator (cfg) -> S2-10 protocol/sandbox -> S2-15 engine adapter -> S2-16 approval UI -> S2-17 plan/injection -> S2-18 -> S2-19 -> S2-20 -> S2-21 -> S2-22 red-team -> S2-23 e2e wiring. Gate G1 items are satisfied provisionally by D-006/D-007/D-008 (user absent).
 
@@ -114,7 +116,7 @@ S2-1 Windows findings; S2-6 bench JSON; registry urls/sha256/files (S3-5); Windo
 1. Step 1 exit test (`docs/manual-tests.md` Exit test) 2. 2A: engine swap, Kokoro samples, model download (needs real registry values), title/URL leak checks 3. 2B: observe mode, approvals, kill switch, red-team 4. Step 3: install, wizard, update check (fake) 5. Step 4: OCR/PII image checks, lock/auth signals. Then read provisional ADRs 0003-0006, open the draft PRs.
 
 ## In progress
-S2-14c driver crate (branch step2b/agent-harness); ADR 0003 + 0004 drafted, waiting on user
+S2-14d1 Windows firewall readers (branch step2b/agent-harness); ADR 0003 + 0004 drafted, waiting on user
 
 ## Blockers / waiting on user
 - ADR 0003 (S2-8) + ADR 0004 (S2-9): read, answer their open questions (5 each), approve; plus tier table sign-off (ADR 0003 §5) = Gate G1 items

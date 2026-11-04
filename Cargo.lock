@@ -1102,6 +1102,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "driver"
+version = "0.1.0"
+dependencies = [
+ "action",
+ "driver",
+ "firewall",
+ "frame",
+ "policy",
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "dtoa"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"

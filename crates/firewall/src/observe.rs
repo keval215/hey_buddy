@@ -276,6 +276,14 @@ impl Observation {
         self.id
     }
 
+    /// The same observation under another id (feature `fakes`): lets the driver tests present a
+    /// DIFFERENT screen under the id an approval was bound to. Never in the desktop tree.
+    #[cfg(any(test, feature = "fakes"))]
+    pub fn with_id(mut self, id: ObservationId) -> Self {
+        self.id = id;
+        self
+    }
+
     /// Screen-text v1 plus an `apps:` line after the `app:` header.
     pub fn text(&self) -> &RedactedScreenText {
         &self.text

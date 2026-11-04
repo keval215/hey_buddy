@@ -39,6 +39,16 @@ pub(crate) fn is_restricted(app_id: &str) -> bool {
         || a.ends_with("-installer.exe")
 }
 
+/// Public read-only view of the built-in auth-surface list (the driver's `FocusApp` check).
+pub fn is_auth_surface_app(app_id: &str) -> bool {
+    is_auth_surface(app_id)
+}
+
+/// Public read-only view of the built-in restricted-app list (the driver's `FocusApp` check).
+pub fn is_restricted_app(app_id: &str) -> bool {
+    is_restricted(app_id)
+}
+
 /// The user's deny policy plus the built-in auth surfaces.
 pub(crate) struct WithAuthSurfaces<'a>(pub(crate) &'a dyn AppDenyPolicy);
 

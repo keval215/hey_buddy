@@ -77,6 +77,35 @@ jobs:
           if cargo tree -p audit -e normal | grep -E '(^|[^a-z_-])(tokio|reqwest|llm|capture|voice|driver|windows) '; then
             echo "audit crate has a forbidden dependency"; exit 1
           fi
+      - name: ADR 0004 - driver dependency graph (no llm, capture, voice, core, engine, network, tauri, platform crates) and nothing below it depends on it
+        run: |
+          # The Windows actuator (S2-14d) sits behind cfg(windows), so the Linux tree never lists it.
+          cargo tree -p driver -e normal | grep -qE '(^|[^a-z_-])policy ' # not vacuous
+          if cargo tree -p driver -e normal | grep -E '(^|[^a-z_-])(llm|capture|voice|buddy-core|agent|engine|harness|reqwest|tauri|tokio|windows|objc2) '; then
+            echo "driver crate has a forbidden dependency"; exit 1
+          fi
+          for c in policy action firewall; do
+            if cargo tree -p "$c" -e normal | grep -E '(^|[^a-z_-])driver '; then
+              echo "$c depends on driver"; exit 1
+            fi
+          done
+      - name: ADR 0004 section 4.6 - driver READ-BAN (the driver never reads OS content)
+        run: |
+          # Forbidden tokens in crates/driver/src/**; `.Current*` is allowed only as CurrentIsReadOnly.
+          if grep -rnE 'CurrentName|CurrentValue|GetCurrentPropertyValue|TextPattern|FindAll|FindFirst|ElementFromHandle|ElementFromPoint|GetRootElement|GetFocusedElement|OpenClipboard|GetClipboardData|IsClipboardFormatAvailable|GetWindowText|BitBlt|GraphicsCapture' --include='*.rs' crates/driver/src; then
+            echo "driver reads OS content (read-ban token)"; exit 1
+          fi
+          if grep -rnE '\.Current[A-Z]' --include='*.rs' crates/driver/src | grep -vE '\.CurrentIsReadOnly'; then
+            echo "driver uses a UIA Current* property other than CurrentIsReadOnly"; exit 1
+          fi
+          test -f crates/driver/src/lib.rs # the grep above is not vacuous
+      - name: ADR 0004 section 4.7 - nothing reads the clipboard
+        run: |
+          if grep -rnE 'GetClipboardData|OpenClipboard' --include='*.rs' crates/firewall crates/driver crates/action crates/policy; then
+            echo "clipboard read found"; exit 1
+          fi
+      - name: compile_fail doctests report the pinned error codes (policy, driver)
+        run: bash tools/check-doctest-codes.sh
       - name: ADR 0003 - ApprovedAction is minted only in crates/policy/src/gate.rs
         run: |
           # Tripwire (the real control is review): the sealed type, its constructor and every

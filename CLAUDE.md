@@ -61,7 +61,7 @@ crates/firewall/       secure-field detection, blackout, lock-screen pause
 crates/llm/            LlmProvider trait, ollama + anthropic adapters
 crates/action/         agent Action vocabulary: validated TypedText/KeyCombo/LaunchId, canonical bytes, digest (pure)
 crates/policy/         (target, not yet created) tier gate, plan/step approvals, sealed ApprovedAction
-crates/driver/         (target, not yet created) Driver trait, UIA/AX actuators, fakes
+crates/driver/         DesktopDriver trait, Driver<A: Actuator>, FakeActuator, limits (Windows actuator: S2-14d)
 crates/core/           (package buddy-core) wiring: hotkey → capture → firewall → STT → LLM → TTS
 models/registry.json   model catalog with licence flags
 tools/bench/           latency benchmark

@@ -470,6 +470,16 @@ Build: `pnpm --filter desktop tauri dev` (debug build: has the fake-task harness
     answer "The agent is working. Stop it first".
 Not covered by hardware here: the Windows message-loop thread itself (compile-checked only).
 
+## Driver (S2-14c/d) - NOTHING RUNNABLE YET (Windows actuator is S2-14d)
+
+S2-14c is fully covered by Linux tests against the fake actuator (`cargo test -p driver`, see
+`docs/driver.md`). Until S2-14d lands there is no real input path, so none of these can be tried by hand:
+UIA pattern clicks (Invoke/Toggle/Select/ExpandCollapse), `SendInput` typing in chunks of 16 with the focus
+check, key combos, Ctrl+C copy, scroll, launching Notepad from the allowlist, focusing an app, the 3 s deadline
+on a blocking `Invoke` (modal dialog), foreground-lock behaviour of `SetFocus`, `release_all` while a key is held,
+refusal on an elevated target / lock screen / UAC, and the ADR 0004 section 19 VERIFY list. S2-14d adds the real
+checklist here.
+
 ## Step 2 packaging note
 
 - [ ] macOS bundled builds (not `tauri dev`) need an `Info.plist` with

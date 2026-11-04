@@ -1,0 +1,24 @@
+[package]
+name = "driver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "hey_buddy desktop driver (ADR 0004): the only crate that acts; accepts only a sealed ApprovedAction and acts only through a firewall-revalidated LiveTarget"
+
+[features]
+# FakeActuator (shared ScriptedDesktop world). Test doubles only (L-006): never in the desktop tree.
+fakes = ["firewall/fakes"]
+
+[dependencies]
+action = { path = "../action" }
+firewall = { path = "../firewall" }
+frame = { path = "../frame" }
+policy = { path = "../policy" }
+thiserror = "1"
+
+[dev-dependencies]
+driver = { path = ".", features = ["fakes"] }
+firewall = { path = "../firewall", features = ["fakes"] }
+# Only for the compile_fail doctest proving ObservedScreen has no Deserialize (never a normal dep).
+serde = "1"

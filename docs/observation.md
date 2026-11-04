@@ -1,7 +1,7 @@
 # Agent observation (S2-14a)
 
 Implements the firewall half of ADR 0004 (§5, §6, §8, §11). Only the firewall reads OS content for
-the agent. There is no driver crate yet (S2-14c) and no Windows adapter yet (S2-14d): on every
+the agent. The driver crate (S2-14c, `docs/driver.md`) consumes it; there is no Windows adapter yet (S2-14d): on every
 platform `platform_firewall()` installs `UnsupportedObservationSource` / `UnsupportedTargetResolver`,
 so `observe` is `Blocked(Unsupported)` and `revalidate` is `Err(Blocked(Unsupported))` (fail closed).
 

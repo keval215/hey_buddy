@@ -256,6 +256,54 @@ impl ScriptedDesktop {
     pub fn set_focus(&self, hwnd: u64, rid: Option<&[i32]>) {
         self.w().focus = rid.map(|r| (hwnd, r.to_vec()));
     }
+    /// Set (or clear) the value text of an element (fake actuators; a non-blank value shows up
+    /// as `has_value`).
+    pub fn set_value(&self, hwnd: u64, rid: &[i32], v: Option<&str>) {
+        self.with_elem(hwnd, rid, |e| e.value = v.map(str::to_string));
+    }
+    /// The value text of an element (tests only).
+    pub fn value_of(&self, hwnd: u64, rid: &[i32]) -> Option<String> {
+        let w = self.w();
+        w.windows
+            .iter()
+            .find(|x| x.hwnd == hwnd)
+            .and_then(|x| x.elements.iter().find(|e| e.runtime_id == rid))
+            .and_then(|e| e.value.clone())
+    }
+    /// Add a window without changing the foreground (a launched app).
+    pub fn add_window(&self, win: WindowSpec) {
+        self.w().windows.push(win);
+    }
+    pub fn foreground_hwnd(&self) -> u64 {
+        self.w().foreground
+    }
+    /// Where keyboard focus is now (tests only).
+    pub fn focused(&self) -> Option<(u64, Vec<i32>)> {
+        self.w().focus.clone()
+    }
+    /// Hwnd of the topmost visible window of `app_id`.
+    pub fn hwnd_of_app(&self, app_id: &str) -> Option<u64> {
+        let w = self.w();
+        w.windows
+            .iter()
+            .rev()
+            .find(|x| x.visible && x.app_id.eq_ignore_ascii_case(app_id))
+            .map(|x| x.hwnd)
+    }
+    /// Number of windows in the world (tests only).
+    pub fn window_count(&self) -> usize {
+        self.w().windows.len()
+    }
+    /// Runtime id of the element of `hwnd` whose rect is exactly `rect` (fake actuators resolve a
+    /// live target to a world element this way; the real target table is private).
+    pub fn element_at(&self, hwnd: u64, rect: Rect) -> Option<Vec<i32>> {
+        let w = self.w();
+        w.windows
+            .iter()
+            .find(|x| x.hwnd == hwnd)
+            .and_then(|x| x.elements.iter().find(|e| e.rect == rect))
+            .map(|e| e.runtime_id.clone())
+    }
     pub fn slow_source(&self, d: Duration) {
         self.w().source_delay = d;
     }
