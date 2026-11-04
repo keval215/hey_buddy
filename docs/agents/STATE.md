@@ -40,7 +40,7 @@ Gate G1 before any 2B coding: [ ] Step 1 PR CI green (Linux+Windows; macOS defer
 |---|---|---|---|---|
 | S2-1 | Real-machine fix pass (user findings) | BLOCKED | 0 | waiting on user: run docs/manual-tests.md on Windows, send findings |
 | S2-2 | Reload voice engines without restart (EngineSlot) | TODO | 0 |  |
-| S2-3 | Kokoro text frontend | TODO | 0 | hard stop if only copyleft phonemizer (espeak-ng is GPL) |
+| S2-3 | Kokoro text frontend | IN PROGRESS | 0 | hard stop if only copyleft phonemizer (espeak-ng is GPL) |
 | S2-4 | Model download screen | TODO | 0 |  |
 | S2-5 | Title and URL leak hardening | TODO | 0 |  |
 | S2-6 | Real hardware bench and CI | BLOCKED | 0 | needs user's bench JSON; CI = Linux+Windows (D-005) |
@@ -63,7 +63,7 @@ Gate G1 before any 2B coding: [ ] Step 1 PR CI green (Linux+Windows; macOS defer
 | S2-23 | End-to-end wiring and Step 2 exit test | TODO | 0 | after G1 |
 
 ## In progress
-S2-2 (coder, branch step2a/hardening); ADR 0003 + 0004 drafted, waiting on user
+S2-3 (coder, branch step2a/hardening); ADR 0003 + 0004 drafted, waiting on user
 
 ## Blockers / waiting on user
 - ADR 0003 (S2-8) + ADR 0004 (S2-9): read, answer their open questions (5 each), approve; plus tier table sign-off (ADR 0003 §5) = Gate G1 items
@@ -86,6 +86,7 @@ S2-2 (coder, branch step2a/hardening); ADR 0003 + 0004 drafted, waiting on user
 - T10 (untested here): all macOS/Windows runtime of tray, hotkey, overlay (transparency, click-through, never focus, capture exclusion WDA_EXCLUDEFROMCAPTURE/pid), DPI manifest effect, macOS compile of glue (objc2 cc), webview permissions after dropping core:default; macos-private-api => not eligible for Mac App Store (told user)
 - T11 (untested here): preview window creation/focus/always-on-top, Windows capture exclusion of preview window, preview:// loading on WebKit/WebView2 (http://preview.localhost on Windows), Keychain/Credential Manager read/write, emit_to scoping
 - Follow-ups for desktop/core: core/src/consent.rs is the ONLY place that may mint CloudOptIn (T12); Anthropic model id must come from settings (no default); call `exclude_window_from_capture` for every overlay/panel window (Win); capture before overlay takes focus; show LoadedDenyList.error/removed_defaults and tell user to add banking apps; platform capture() is blocking -> spawn_blocking; confirm per-monitor DPI awareness in Tauri manifest
+- S2-2 (untested here): real engine swap with whisper/Phonon on Windows, Tauri event delivery to settings window, settings UI (see manual-tests S2-2 section)
 - Follow-ups: Kokoro text frontend; shared ort_util module; speaker_cpal should surface stream errors; CI job for tts-phonon/speaker-cpal + `cargo deny --all-features`; real 1024px app icon; tighten CSP `unsafe-inline` later
 
 ## Done

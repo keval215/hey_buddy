@@ -286,6 +286,36 @@ a Windows credential prompt or any desktop app with a password box):
 - [ ] Push-to-talk only: the microphone indicator (macOS orange dot / Windows mic icon) is on
       only while the key is held and a moment after, never at idle.
 
+## Voice engine reload without restart (S2-2) - UNTESTED on this machine (Windows, real models)
+
+Design: `update_settings` only stores the profile. The settings window then calls the
+`request_engine_swap` command (`slot`: `stt`, `tts` or `all`, default `all`); the app also calls it
+once at startup, so the first load is just the first swap. Models come from the current profile
+(validated against the registry; STT never on the GPU), load on a background thread, and are swapped
+in only after the load succeeded and no push-to-talk turn is active. Events (settings window only):
+`engine_swap_requested`, `engine_swap_done`, `engine_swap_failed`. Nothing is downloaded.
+
+Needs `--features real-voice`, models in place (see "Prerequisites" above) for both profiles
+(`whisper-small.bin` and `whisper-base.bin`).
+
+- [ ] Change Profile `default` -> `low-memory` and Save. The settings window shows
+      "Speech recognition: loading whisper-base…" and "Speech synthesis: loading phonon-31m…",
+      then "... ready", without restarting the app. The next push-to-talk turn works. Switch back
+      to `default`: loading -> ready again.
+- [ ] Failure: rename `whisper-base.bin` away, switch to `low-memory`. The status shows
+      "Speech recognition: whisper-base could not load, the model file is missing. Expected at
+      <models dir>\whisper-base.bin". The old (small) engine keeps working: the next turn still
+      transcribes. The same note is in the status notices. Put the file back and switch the
+      profile away and back (there is no retry button yet): loading -> ready, the note disappears.
+- [ ] Swap during a held hotkey: hold the hotkey (do not release), switch the profile in the
+      settings window and Save. The status stays "loading…" until the turn is over; the turn
+      finishes with the old engines (no cut-off or repeated speech); after it returns to idle the
+      status turns to "ready". The next turn uses the new engines.
+- [ ] Two quick profile changes while a turn is active: only the last profile ends up loaded.
+- [ ] Start the app with a model file missing: a press of the hotkey says the voice engines are
+      not loaded; the status names the missing file. After placing it, switch the profile
+      away and back to load without restarting.
+
 ## Step 2 packaging note
 
 - [ ] macOS bundled builds (not `tauri dev`) need an `Info.plist` with

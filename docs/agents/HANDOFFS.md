@@ -13,6 +13,13 @@ Key points: <2–4 bullets>
 Next: <what orch does next>
 ```
 
+## H-018 2026-11-04 S2-2 -> coder, reviewer
+Result: APPROVED round 1 (EngineSlot, request_engine_swap, 29 e2e tests). NOTE: most S2-2 code was swept into the S2-8/S2-9 ADR commits by orch `git add -A` mid-run (history mislabelled, code intact). Lesson: add specific paths while a coder runs.
+Next: S2-3.
+
+## H-019 2026-11-04 S2-8/S2-9 -> reviewer-ARCH (Opus) x2
+Result: ADR 0003 and ADR 0004 drafted (PROPOSED), waiting on user approval + tier table sign-off.
+
 ## H-017 2026-11-03 T12-hardening -> coder, reviewer
 Result: APPROVED round 1 (60 s recording cap finishes like a release; non-zero-origin Windows fallback test; log-capture sanity asserts; remaining-time preview; api-key cache primed).
 Next: Step 1 complete -> final memory + PR go-ahead from user.
