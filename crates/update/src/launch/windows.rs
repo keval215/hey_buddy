@@ -21,7 +21,9 @@ use windows::Win32::System::Threading::{
     CreateProcessW, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTUPINFOW,
 };
 
-use super::{command_line, run_dir_name, setup_path, LaunchError, PRIVATE_DIR_SDDL};
+use super::{
+    any_link_in_chain, command_line, run_dir_name, setup_path, LaunchError, PRIVATE_DIR_SDDL,
+};
 use crate::Artifact;
 
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
@@ -96,10 +98,9 @@ pub fn stage(
     run_root: &Path,
     artifact: &Artifact,
 ) -> Result<StagedInstaller, LaunchError> {
-    for p in [Some(run_root), run_root.parent()].into_iter().flatten() {
-        if is_link(p)? {
-            return Err(LaunchError::UnsafePath);
-        }
+    // Neither run_root nor any ancestor up to the drive root may be a link / reparse point.
+    if any_link_in_chain(run_root, is_link)? {
+        return Err(LaunchError::UnsafePath);
     }
     std::fs::create_dir_all(run_root).map_err(|_| LaunchError::Io)?;
     if is_link(run_root)? {

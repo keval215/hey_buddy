@@ -302,12 +302,16 @@ pub fn agent_status(window: tauri::Window, app: AppHandle, b: B) -> Result<Agent
 /// Settings window only: what the Updates section shows. Local only: reads the session and two
 /// small files, never the network.
 #[tauri::command]
-pub fn update_status(
+pub async fn update_status(
     window: tauri::Window,
-    mgr: State<UpdateManager>,
+    mgr: State<'_, UpdateManager>,
 ) -> Result<UpdateStatusDto, String> {
     only_main_window(&window)?;
-    Ok(mgr.status())
+    // Hashing the staged installer is heavy: off the main thread.
+    let mgr = mgr.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || mgr.status())
+        .await
+        .map_err(|_| "update_internal".to_string())
 }
 
 /// Settings window only, explicit click ("Check for updates"): ONE GET of the fixed release URL.
@@ -346,15 +350,19 @@ pub fn update_cancel(window: tauri::Window, mgr: State<UpdateManager>) -> Result
 /// switch) and the app exits; on any failure the app keeps running and the call returns a fixed
 /// token. No path, URL or argument parameter exists.
 #[tauri::command]
-pub fn update_install(
+pub async fn update_install(
     window: tauri::Window,
     app: AppHandle,
-    mgr: State<UpdateManager>,
+    mgr: State<'_, UpdateManager>,
     expected_version: String,
     allow_downgrade: bool,
 ) -> Result<(), String> {
     only_main_window(&window)?;
-    mgr.install(&expected_version, allow_downgrade)
+    // Re-hashing and launching the installer is heavy: off the main thread.
+    let mgr = mgr.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || mgr.install(&expected_version, allow_downgrade))
+        .await
+        .map_err(|_| "update_internal".to_string())?
         .map_err(|e| e.code().to_string())?;
     // The installer is running: stop any agent run, then leave (the exit handler cancels any
     // pending consent; the audit lines are already written).
@@ -651,7 +659,7 @@ mod tests {
             }
         }
         // The only free-form input is the version string the user saw and the confirm flag.
-        let at = src.find("pub fn update_install(").unwrap();
+        let at = src.find("pub async fn update_install(").unwrap();
         let sig = &src[at..at + 300];
         assert!(sig.contains("expected_version: String") && sig.contains("allow_downgrade: bool"));
         // Never in another window's capability, only in the settings window's.

@@ -12,14 +12,29 @@
 //! [`embedded`] returns [`UpdateConfig::Unconfigured`] and the app never contacts any host.
 //!
 //! The sealed types cannot be built outside [`verify`] (private fields, no constructor). Newer
-//! rustc reports a struct literal on private fields without an error code, so the pinned-code
-//! snippets (checked by `tools/check-doctest-codes.sh`) read a private field instead:
+//! rustc reports the struct literals below as E0451 (private field; every field is supplied so
+//! no other error hides it) and a private field read as E0616. The codes are checked by
+//! `tools/check-doctest-codes.sh`:
 //!
-//! ```compile_fail
-//! // No struct literal outside the verifier.
+//! ```compile_fail,E0451
+//! // No struct literal outside the verifier, even with every field supplied.
 //! let _m = update::VerifiedManifest {
-//!     version: todo!(),
+//!     version: update::Version::default(),
 //!     serial: 1,
+//!     issued_at: 0,
+//!     expires_at: 0,
+//!     min_supported: update::Version::default(),
+//!     revoked: Vec::new(),
+//!     notes: String::new(),
+//!     artifacts: Vec::new(),
+//! };
+//! ```
+//!
+//! ```compile_fail,E0451
+//! let _a = update::Artifact {
+//!     url: String::new(),
+//!     sha256: [0u8; 32],
+//!     size: 1,
 //! };
 //! ```
 //!

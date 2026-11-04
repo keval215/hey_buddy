@@ -84,3 +84,22 @@ pub fn command_line(exe: &str) -> Result<String, LaunchError> {
     }
     Ok(format!("\"{exe}\""))
 }
+
+/// Is `path` or ANY of its ancestors up to the root a link (symlink / reparse point)? `is_link`
+/// answers for one path (a missing path is not a link). Errors from `is_link` propagate, so the
+/// caller refuses on anything it cannot read. Pure walk; the Windows stager supplies the probe.
+pub fn any_link_in_chain<F>(path: &Path, mut is_link: F) -> Result<bool, LaunchError>
+where
+    F: FnMut(&Path) -> Result<bool, LaunchError>,
+{
+    for p in path.ancestors() {
+        // The empty path (end of a relative chain) names nothing to probe.
+        if p.as_os_str().is_empty() {
+            continue;
+        }
+        if is_link(p)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}

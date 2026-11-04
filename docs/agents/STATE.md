@@ -70,7 +70,7 @@ Branches: step2a/hardening -> step2b/agent-harness -> step3/packaging -> step4/f
 |---|---|---|---|---|
 | S3-1 | Windows installer build (unsigned) | DONE | 2 | round 2 accepted by orch; NSIS/CI build untested |
 | S3-2 | [ARCH] Auto-update design -> ADR 0005 | DONE | 0 | D-010 provisional |
-| S3-3 | Update manifest parser + signature verifier (no real keys) | TODO | 0 |  |
+| S3-3 | Update manifest parser + signature verifier (no real keys) | DONE | 2 | round 2 accepted; TRUSTED_KEYS empty; Windows launch untested |
 | S3-4 | First-run wizard | TODO | 0 |  |
 | S3-5 | Registry data tooling (real urls/checksums) | TODO | 0 | filling values = BLOCKED-ON-USER |
 | S3-6 | Data locations, logs, delete my data | TODO | 0 |  |
@@ -111,6 +111,7 @@ Branches: step2a/hardening -> step2b/agent-harness -> step3/packaging -> step4/f
 - S2-17+23a DONE (review APPROVED round 1, 5 MINOR deferred to S2-23b): AgentSupervisor in core/agent (38 tests), D-009. Minors to fix in S2-23b: kill check after attach before engine.plan; vacuous fingerprint check; target_denied doc; per-phase kill tests + deny-listed foreground app + limits tests; audit sink identity; bounded-wait tests; doc on AgentDriver SAFE-IF.
 - S2-23b DONE (APPROVED, 4 MINOR -> fold into S2-22): AgentRuntime glue, agent_start_task/agent_status (main window only), settings (observe_mode ON, agent_enabled/agent_mode OFF), ReadAnswer TTS, exit-test doc in manual-tests.md. Minors: foreground-filter test vacuous (mutation survives); gate audit_sink() writable accessor -> replace by `uses_audit_sink` predicate; limit stop may speak 'Stopped.' twice; agent_enabled read only at task start (document). Untested on Windows: WindowsAgentDriver, platform_agent, WinActuator, sandbox, approval window, real planning, TTS, whole exit test.
 - S2-22+22b DONE (APPROVED): red-team suite 88 tests (docs/redteam.md, tools/check-redteam.sh, CI step); F-1 purchase lexicon, F-1b width/confusable fold (in-house, escalate-only), F-2 drift `changed`. Known table gaps: Armenian/IPA lookalikes, micro sign. Mixed-script label = submit-level (own approval).
+- S3-3 DONE: crates/update (pure), core::update manager, 5 settings-window commands, Updates UI, tools/update-sign, CI step (TRUSTED_KEYS empty tripwire: S3-7 must update when real keys added). Deviations from ADR 0005 §9 listed in docs/update.md. BLOCKED-ON-USER: generate 2 offline keys, OWNER_TODO, verify GitHub CDN host, SmartScreen/Smart App Control behaviour. Env note: `rm -rf` is denied for orch/coders; scratchpad copies (mut, mt) remain (~16 GB), avoid new heavy scratch copies.
 - Remaining 2B plan (merged tickets to save overhead): [S2-10+S2-15] agent crate: protocol + EngineSandbox (Windows AppContainer/Job cfg) + MinimalEngine + Process/Fake/Hostile engines + gate-hook adapter; [S2-16] approval UI; [S2-17+18+19+20+21+23] core agent supervisor/runner (plan-then-execute wiring, injection defences, read-only task, dry-run/live, form demo, background limits, e2e on fakes, reuse controller.gate(), audit sink, kill controller); [S2-22] red-team suite.
 
 ## 2B execution order (dependency-driven, branch step2b/agent-harness)

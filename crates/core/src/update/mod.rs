@@ -150,6 +150,19 @@ impl std::fmt::Debug for UpdateStatusDto {
     }
 }
 
+/// The trust configuration and running version for the production manager. Fails closed: with no
+/// app data folder, or a running version that does not parse (a build error, never 0.0.0), the
+/// manager is `Unconfigured` and contacts nothing.
+fn production_config(have_dir: bool, raw_version: &str) -> (update::UpdateConfig, update::Version) {
+    match (have_dir, update::Version::parse(raw_version)) {
+        (true, Ok(v)) => (update::embedded(), v),
+        _ => (
+            update::UpdateConfig::Unconfigured,
+            update::Version::default(),
+        ),
+    }
+}
+
 /// The manager the app shell uses: the embedded trust configuration (`Unconfigured` in this
 /// repository until the maintainer adds public keys, S3-7), the real HTTP checker, the platform
 /// launcher and the activity log. `dir` is `<app data>/updates`; `None` (no app data folder)
@@ -163,16 +176,11 @@ pub fn production_manager(
     use crate::download::{DownloadNotice, Downloader};
     use std::sync::Arc;
 
-    let cfg = if dir.is_some() {
-        update::embedded()
-    } else {
-        update::UpdateConfig::Unconfigured
-    };
+    let (cfg, current) = production_config(dir.is_some(), env!("CARGO_PKG_VERSION"));
     let dir = dir.unwrap_or_default();
     UpdateManager::new(UpdateDeps {
         cfg,
-        // The workspace version, the same one Tauri reports; 0.0.0 can only mean a build error.
-        current: update::Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or_default(),
+        current,
         platform: update::Platform::current(),
         dir: dir.clone(),
         checker: Arc::new(HttpUpdateChecker::new()),
@@ -191,4 +199,27 @@ pub fn production_manager(
             }),
         }),
     })
+}
+
+#[cfg(test)]
+mod production_config_tests {
+    use super::production_config;
+    use update::UpdateConfig;
+
+    #[test]
+    fn an_unparsable_running_version_or_no_folder_is_unconfigured() {
+        for (dir, v) in [
+            (true, ""),
+            (true, "not-a-version"),
+            (true, "1.2"),
+            (false, "0.1.0"),
+        ] {
+            let (cfg, _) = production_config(dir, v);
+            assert!(matches!(cfg, UpdateConfig::Unconfigured), "{dir} {v:?}");
+        }
+        // A good version keeps the embedded config (itself Unconfigured in this repository) and
+        // carries the parsed version through.
+        let (_, v) = production_config(true, "0.1.0");
+        assert_eq!(v, update::Version::parse("0.1.0").unwrap());
+    }
 }

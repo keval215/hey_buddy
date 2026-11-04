@@ -307,6 +307,8 @@ impl UpdateManager {
         cfg: &'static TrustConfig,
     ) -> Result<(Offer, Version, u64), UpdateFail> {
         let inner = &self.inner;
+        // A failed check must not leave an older session usable for download or install.
+        lock(&inner.state).session = None;
         let platform = inner.platform.ok_or(UpdateError::NoArtifact)?;
         cleanup_run_dirs(&inner.dir);
         let bytes = inner.checker.fetch_envelope(cfg).await?;

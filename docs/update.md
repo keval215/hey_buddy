@@ -58,6 +58,30 @@ Shown in the UI as fixed sentences (`apps/desktop/src/updates/logic.ts`); never 
 Audit lines (`update_check`, `update_download`, `update_install`) hold the result code, the version and serial
 (or `upgrade`/`downgrade`) only: no URL, path, notes or key.
 
+## Deviations from ADR 0005 section 9
+
+Recorded here for orch to fold into the ADR; none weakens a rule of the ADR.
+
+- **`UpdateFail` wrapper.** Manager operations return `UpdateFail` (wraps `UpdateError`, `DownloadError`, `LaunchError`
+  plus the sequencing tokens `busy`, `not_checked`, ...) instead of the bare `UpdateError`; every variant has a fixed token.
+- **`Revoked` token.** `UpdateError::Revoked` (`revoked`) is reported when the target version is revoked by the newest
+  verified manifest (the ADR only says "refused").
+- **Ungated `LaunchError`.** The `LaunchError` enum and the pure launch helpers (names, command line, SDDL, the ancestor
+  link walk) are compiled on every platform so they are testable on Linux; only `stage` / `StagedInstaller` are Windows-only.
+- **Wrong `payloadType` is `bad_signature`.** A DSSE envelope with another payload type is reported as `bad_signature`
+  (the signature is over the type too), not as a separate token.
+- **`update_status` command.** Added (local, no network) so the Updates section can show "not configured" at mount.
+- **`production_manager`.** `buddy_core::update::production_manager` builds the manager the app uses. It fails closed to
+  `Unconfigured` with no app data folder or if the running version does not parse (never 0.0.0).
+- **Reused download events.** Progress / done / failed reuse the `DownloadProgress` / `DownloadDone` / `DownloadFailed`
+  payload types, under the event names `update_progress`, `update_done`, `update_failed` (id `update`).
+- **`kept/` semantics.** `updates/kept/` holds the previous verified pair, moved when a different version is downloaded;
+  re-downloading the same version does not move it. Install looks at the staged pair first, then `kept/`; a downgrade
+  needs the flag AND a revoked running version AND the newest manifest not revoking the target. A failed check clears the
+  session, so an older check can never authorise a download or install.
+- **Blocking work off the main thread.** `update_status` and `update_install` are async commands that run the manager
+  call (hashing, verification) in `spawn_blocking`; the window label check is still their first action.
+
 ## What is verified where
 
 | Part | Verified by |

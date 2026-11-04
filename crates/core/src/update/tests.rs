@@ -889,6 +889,41 @@ async fn the_downgrade_flag_is_refused_for_an_upgrade() {
 }
 
 #[tokio::test]
+async fn a_downgrade_to_a_kept_installer_is_refused_when_the_current_version_is_not_revoked() {
+    let mut fx = Fx::new("0.1.0");
+    fx.stage(1, "0.2.0", &installer(1000, 1)).await;
+    fx.stage(2, "0.4.0", &installer(2000, 2)).await; // 0.2.0 is now kept
+    fx.restart_as("0.3.0");
+    // The newest manifest offers a HIGHER version and does not revoke the running 0.3.0.
+    fx.checker
+        .set(sign(&fx.kp, &payload(3, "0.4.0", &installer(2000, 2))));
+    let st = fx.mgr.check().await.unwrap();
+    assert!(!st.current_revoked);
+    // Even with the explicit flag, a downgrade needs a revoked current version.
+    assert_eq!(
+        fx.mgr.install("0.2.0", true).unwrap_err(),
+        UpdateFail::DowngradeNotAllowed
+    );
+    assert!(fx.launcher.launched().is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_check_drops_the_old_session() {
+    let fx = Fx::new("0.1.0");
+    fx.stage(1, "0.2.0", &installer(1000, 1)).await;
+    assert_eq!(fx.mgr.status().result, UpdateResult::Available);
+    // The next check fails (bad envelope): nothing from the earlier check may stay usable.
+    fx.checker.set(b"garbage".to_vec());
+    assert!(fx.mgr.check().await.is_err());
+    assert_eq!(
+        fx.mgr.install("0.2.0", false).unwrap_err(),
+        UpdateFail::NotChecked
+    );
+    assert_eq!(fx.mgr.start_download().unwrap_err(), UpdateFail::NotChecked);
+    assert!(fx.launcher.launched().is_empty());
+}
+
+#[tokio::test]
 async fn exactly_one_previous_installer_is_kept() {
     let fx = Fx::new("0.1.0");
     fx.stage(1, "0.2.0", &installer(1000, 1)).await;

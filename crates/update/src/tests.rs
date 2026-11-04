@@ -9,8 +9,8 @@ use serde_json::{json, Value};
 
 use crate::dsse::pae;
 use crate::launch::{
-    command_line, is_run_dir_name, run_dir_name, setup_path, LaunchError, PRIVATE_DIR_SDDL,
-    SETUP_FILE_NAME,
+    any_link_in_chain, command_line, is_run_dir_name, run_dir_name, setup_path, LaunchError,
+    PRIVATE_DIR_SDDL, SETUP_FILE_NAME,
 };
 use crate::*;
 
@@ -1138,4 +1138,43 @@ fn launch_error_codes() {
         assert_eq!(e.code(), c);
         assert_eq!(e.to_string(), c);
     }
+}
+
+#[test]
+fn the_link_walk_checks_every_ancestor_and_propagates_errors() {
+    use std::path::Path;
+    let root = Path::new("/a/b/c/run");
+    // Only the grandparent-of-parent `/a` is a link: still refused.
+    for link in ["/a/b/c/run", "/a/b/c", "/a/b", "/a", "/"] {
+        let mut seen = Vec::new();
+        let r = any_link_in_chain(root, |p| {
+            seen.push(p.to_path_buf());
+            Ok(p == Path::new(link))
+        });
+        assert_eq!(r, Ok(true), "{link}");
+    }
+    let mut seen = Vec::new();
+    assert_eq!(
+        any_link_in_chain(root, |p| {
+            seen.push(p.to_path_buf());
+            Ok(false)
+        }),
+        Ok(false)
+    );
+    let want: Vec<&Path> = ["/a/b/c/run", "/a/b/c", "/a/b", "/a", "/"]
+        .iter()
+        .map(Path::new)
+        .collect();
+    assert_eq!(seen.iter().map(|p| p.as_path()).collect::<Vec<_>>(), want);
+    // A probe error is not "no link".
+    assert_eq!(
+        any_link_in_chain(root, |p| {
+            if p == Path::new("/a") {
+                Err(LaunchError::Io)
+            } else {
+                Ok(false)
+            }
+        }),
+        Err(LaunchError::Io)
+    );
 }
