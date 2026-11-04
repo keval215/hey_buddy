@@ -50,3 +50,15 @@ Decision: Windows is the only supported/CI-gated desktop target. The macOS CI jo
 Why: user's dev machine is Windows; macOS code could not be compiled/verified here and failed first CI.
 ADR: none
 Status: accepted (user)
+
+## D-006 ADR 0003 agent engine, tiers, approvals — 2026-11-04 — PROVISIONAL (pending user review)
+Decision: as docs/adr/0003-agent-engine-and-approvals.md (in-house plan-then-execute engine, sandboxed child, sealed ApprovedAction, digest-bound single-use approvals, kill switch). Open questions 1-5 answered with the recommended answers (yes). Autonomous-mode override (user, 2026-11-04): tier defaults Read=allow; Reversible=dry-run first then allow; Consequential=approval every time; unknown=Consequential; Never=deny; no standing grants; observe mode ON by default; unattended runs Read+Reversible only. Where ADR 0003 is stricter, ADR 0003 wins (tightening is always allowed).
+Status: provisional — pending user review
+
+## D-007 ADR 0004 desktop driver and observation — 2026-11-04 — PROVISIONAL (pending user review)
+Decision: as docs/adr/0004-desktop-driver.md (in-house Windows UIA driver; firewall owns observe/revalidate; one observation = one action; semantic clicks only; SendInput typing in <=16-char focus-guarded chunks; built-in restricted apps). Open questions 1-5 answered yes (recommended).
+Status: provisional — pending user review
+
+## D-008 Autonomous mode until end of Step 4 — 2026-11-04
+Decision: user authorised autonomous execution of Step 1 finish, Step 2A+2B, Step 3 (packaging/installer/first-run wizard/auto-update design), Step 4 (firewall v1: OCR+PII, stronger lock/auth detection, threat model, internal adversarial review). Windows priority; macOS/Linux compile-check only. Hard stops that REMAIN: weakening the firewall; copyleft/non-commercial CODE deps; secrets/paid services (so NO code-signing certificates, no paid CI); force-push. Branches: step2a/hardening, step2b/agent-harness, step3/packaging, step4/firewall-v1; one DRAFT PR per step; never merge, never mark ready. Facts needing a real machine => BLOCKED-ON-USER + "User must verify locally", move on. Max 3 coder/review rounds then BLOCKED. Resume from STATE.md after a usage-limit stop. Stop condition: usage budget (orch cannot see credits; works until the limit stops the session; opens a draft PR first/at each step end so nothing is stranded).
+Status: accepted (user)
