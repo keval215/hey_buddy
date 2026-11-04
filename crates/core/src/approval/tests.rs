@@ -74,6 +74,16 @@ fn shown_ok(w: &World, p: &PendingApproval) {
     w.clock.advance(INPUT_GUARD);
 }
 
+/// `wait` with a bound, so a missing wake-up fails the test instead of hanging it.
+fn wait_bounded(p: PendingApproval) -> ApprovalOutcome {
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(p.wait());
+    });
+    rx.recv_timeout(Duration::from_secs(5))
+        .expect("wait() did not return within 5 s")
+}
+
 fn hexd(c: char) -> String {
     c.to_string().repeat(64)
 }
@@ -223,8 +233,8 @@ fn kill_resolves_every_pending_request_killed_and_closes_the_window() {
     assert!(closed
         .iter()
         .all(|c| c.outcome == ApprovalOutcomeDto::Killed));
-    assert_eq!(p.wait(), ApprovalOutcome::Killed);
-    assert_eq!(q.wait(), ApprovalOutcome::Killed);
+    assert_eq!(wait_bounded(p), ApprovalOutcome::Killed);
+    assert_eq!(wait_bounded(q), ApprovalOutcome::Killed);
 }
 
 #[test]
@@ -239,7 +249,7 @@ fn kill_epoch_moved_without_the_hook_still_refuses_the_answer() {
             .respond(p.id(), ApprovalDecisionDto::Approve, &hexd('a')),
         Err(RespondError::Killed)
     );
-    assert_eq!(p.wait(), ApprovalOutcome::Killed);
+    assert_eq!(wait_bounded(p), ApprovalOutcome::Killed);
 }
 
 #[test]
@@ -495,7 +505,7 @@ fn many_pending_requests_are_isolated() {
     // Kill takes the remaining eight and only them.
     w.kill.trip(KillReason::Limit);
     for (p, _) in rest {
-        assert_eq!(p.wait(), ApprovalOutcome::Killed);
+        assert_eq!(wait_bounded(p), ApprovalOutcome::Killed);
     }
 }
 

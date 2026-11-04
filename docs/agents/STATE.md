@@ -53,7 +53,7 @@ Gate G1 before any 2B coding: [ ] Step 1 PR CI green (Linux+Windows; macOS defer
 | S2-13 | Kill switch | TODO | 0 | after G1 |
 | S2-14 | Driver trait, fake driver, Windows UIA adapter | TODO | 0 | after G1 |
 | S2-15 | Engine adapter | TODO | 0 | after G1 |
-| S2-16 | Approval UI | TODO | 0 | after G1 |
+| S2-16 | Approval UI | DONE | 2 | round 2 accepted by orch |
 | S2-17 | Plan-then-execute and injection defences | TODO | 0 | after G1 |
 | S2-18 | First agent task: read-only | TODO | 0 | after G1 |
 | S2-19 | Reversible actions: dry run then live | TODO | 0 | after G1 |
@@ -107,6 +107,7 @@ Branches: step2a/hardening -> step2b/agent-harness -> step3/packaging -> step4/f
 
 - S2-14d2 DONE (round 2, accepted by orch: round-2 fixes map 1:1 to tests): WinActuator (UIA patterns, SendInput keyboard-only, CreateProcessW fixed paths, release_all with in-call retry + stale drain), focus_state redesign (runtime-id/ancestor compare), drift test firewall<->policy lexicons, CI input tripwires. Reviewer rulings: focus_app via SetForegroundWindow OK; first-scrollable scroll root OK; Expand-only OK. All Windows runtime UNTESTED.
 - S2-10+15 DONE (round 2, accepted by orch): `agent` crate (protocol, MinimalEngine, ProcessEngine, Fake/Hostile engines, EngineSandbox + WindowsSandbox cfg, buddy-agent bin), core `CoreModelGateway` + `ProcessEngineKiller`, llm `with_output_schema` + preview purpose. Follow-ups for S2-23: fresh ProcessEngine + gateway per task, attach/detach killer, call policy::propose on draft, PlanLimits local/cloud from settings, foreground_app only if text verdict Clear and not deny-listed; engine exe must sit where ALL APPLICATION PACKAGES can read/execute (installer S3-1 sets ACL); S2-21 needs a Read+Reversible ops table; separate agent-provider setting maybe; Last-request view shows planning prompts (review in S2-16); Anthropic max_tokens 1024 may truncate 12-step plans. BLOCKED-ON-USER: WindowsSandbox runtime, real Ollama `format` behaviour.
+- S2-16 DONE (round 2): core ApprovalBroker (random ids, digest echo, 500 ms Approve guard, TTL 10 min/30 s, kill->Killed), approval window + capability, React view (no autofocus, repeat keys ignored, ack after frame). Follow-ups for S2-23: map broker id<->gate ApprovalId with SAME digest, call gate.decide after Approved, run PendingApproval::wait on spawn_blocking; test binding broker digest to gate digest. Untested on Windows: capture exclusion, focus, keyboard path.
 - Remaining 2B plan (merged tickets to save overhead): [S2-10+S2-15] agent crate: protocol + EngineSandbox (Windows AppContainer/Job cfg) + MinimalEngine + Process/Fake/Hostile engines + gate-hook adapter; [S2-16] approval UI; [S2-17+18+19+20+21+23] core agent supervisor/runner (plan-then-execute wiring, injection defences, read-only task, dry-run/live, form demo, background limits, e2e on fakes, reuse controller.gate(), audit sink, kill controller); [S2-22] red-team suite.
 
 ## 2B execution order (dependency-driven, branch step2b/agent-harness)
@@ -122,7 +123,7 @@ S2-1 Windows findings; S2-6 bench JSON; registry urls/sha256/files (S3-5); Windo
 1. Step 1 exit test (`docs/manual-tests.md` Exit test) 2. 2A: engine swap, Kokoro samples, model download (needs real registry values), title/URL leak checks 3. 2B: observe mode, approvals, kill switch, red-team 4. Step 3: install, wizard, update check (fake) 5. Step 4: OCR/PII image checks, lock/auth signals. Then read provisional ADRs 0003-0006, open the draft PRs.
 
 ## In progress
-S2-16 approval UI (branch step2b/agent-harness). ADR 0003 + 0004 provisional (D-006/D-007)
+S2-17..21+23 core agent supervisor (branch step2b/agent-harness). ADR 0003 + 0004 provisional (D-006/D-007)
 
 ## Blockers / waiting on user
 - ADR 0003 (S2-8) + ADR 0004 (S2-9): read, answer their open questions (5 each), approve; plus tier table sign-off (ADR 0003 §5) = Gate G1 items

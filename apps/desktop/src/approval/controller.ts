@@ -27,11 +27,21 @@ export interface KeyLike {
   key: string;
   ctrlKey?: boolean;
   shiftKey?: boolean;
+  /** True for auto-repeat keydowns of a held key. */
+  repeat?: boolean;
   preventDefault(): void;
 }
 
 /** Errors that mean the request no longer exists in core. */
 const GONE = new Set(["unknown_id", "expired", "killed"]);
+
+/** Resolves after the next paint (rAF), or a macrotask where there is no rAF. */
+function defaultNextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve());
+    else setTimeout(resolve, 0);
+  });
+}
 
 export class ApprovalController {
   private state: ViewState = { queue: [], shownAt: null, busy: false, error: null, ended: null };
@@ -41,6 +51,7 @@ export class ApprovalController {
   constructor(
     private readonly api: ApprovalApi,
     private readonly now: () => number = () => Date.now(),
+    private readonly nextFrame: () => Promise<void> = defaultNextFrame,
   ) {}
 
   subscribe = (l: () => void): (() => void) => {
@@ -90,6 +101,9 @@ export class ApprovalController {
     if (!cur || this.ackFor === cur.id) return;
     this.ackFor = cur.id;
     try {
+      // The ack means "visible": wait until the browser has had a frame to paint it.
+      await this.nextFrame();
+      if (this.current()?.id !== cur.id) return;
       await this.api.displayed(cur.id);
       if (this.current()?.id === cur.id) this.set({ shownAt: this.now(), error: null });
     } catch {
@@ -154,6 +168,12 @@ export class ApprovalController {
    * nothing (they must never approve).
    */
   handleKey(e: KeyLike): void {
+    // A held key auto-repeats; a repeat is never a decision (it could hit the next request
+    // unseen). Only a fresh, non-repeat keydown can approve or deny.
+    if (e.repeat) {
+      if (e.key === "Escape" || e.key === "Enter" || e.key === " " || e.ctrlKey) e.preventDefault();
+      return;
+    }
     if (e.key === "Escape") {
       e.preventDefault();
       void this.deny();

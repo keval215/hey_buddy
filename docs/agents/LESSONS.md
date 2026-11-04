@@ -26,3 +26,4 @@ Format: `- L-000 <area>: <lesson> (from T<n>)`
 - L-019 git: never `git add -A` while a coder is running in the same worktree; commit specific paths. (S2-2)
 - L-021 (repeat of L-014) python: do NOT write open(f,'w').write(...open(f).read()...) in any form, including inside conditional expressions; read to a variable first. HANDOFFS.md was truncated a second time and restored from git. (orch)
 - L-022 serde: unit variants of internally tagged enums ignore unknown fields even with deny_unknown_fields; use `Variant {}`. Derived Debug on wire types holding text leaks content; hand-write Debug + test. cargo-tree CI greps need `--target all`. Mutate-in-scratch-copy finds untested guards. (S2-10)
+- L-023 ui: any approving keyboard shortcut must ignore KeyboardEvent.repeat; time guards don't stop a held key approving the next queued item. Bound test waits so removed hooks fail instead of hang. (S2-16)

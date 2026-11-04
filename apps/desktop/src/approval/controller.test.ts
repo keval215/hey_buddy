@@ -28,12 +28,12 @@ function setup() {
     respond: vi.fn<ApprovalApi["respond"]>(() => Promise.resolve()),
     kill: vi.fn<ApprovalApi["kill"]>(() => Promise.resolve()),
   };
-  const c = new ApprovalController(api, () => t);
+  const c = new ApprovalController(api, () => t, () => Promise.resolve());
   return { c, api, advance: (ms: number) => (t += ms), at: () => t };
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
-const key = (key: string, extra: { ctrlKey?: boolean; shiftKey?: boolean } = {}) => ({
+const key = (key: string, extra: { ctrlKey?: boolean; shiftKey?: boolean; repeat?: boolean } = {}) => ({
   key,
   ...extra,
   preventDefault: vi.fn(),
@@ -114,6 +114,58 @@ describe("keyboard", () => {
     c.handleKey(key("A", { ctrlKey: true, shiftKey: true }));
     await flush();
     expect(api.respond).toHaveBeenCalledWith("a", "Approve", DIGEST);
+  });
+});
+
+describe("held keys and display timing", () => {
+  const combo = { ctrlKey: true, shiftKey: true };
+
+  it("a held Ctrl+Shift+A does not approve the next queued request; a fresh press does", async () => {
+    const { c, api, advance } = setup();
+    c.onRequest(req("a"));
+    c.onRequest(req("b"));
+    await flush();
+    advance(GUARD_MS);
+    c.handleKey(key("A", combo));
+    await flush();
+    expect(api.respond).toHaveBeenCalledTimes(1);
+    expect(api.respond).toHaveBeenLastCalledWith("a", "Approve", DIGEST);
+    // b is now current; the key is still held and auto-repeats past b's guard.
+    await flush();
+    advance(GUARD_MS * 3);
+    expect(c.approveEnabled()).toBe(true);
+    for (let i = 0; i < 3; i++) c.handleKey(key("A", { ...combo, repeat: true }));
+    await flush();
+    expect(api.respond).toHaveBeenCalledTimes(1);
+    expect(c.current()?.id).toBe("b");
+    c.handleKey(key("A", combo));
+    await flush();
+    expect(api.respond).toHaveBeenLastCalledWith("b", "Approve", DIGEST);
+  });
+
+  it("a repeated Escape does not deny the next request", async () => {
+    const { c, api } = setup();
+    c.onRequest(req("a"));
+    await flush();
+    c.handleKey(key("Escape", { repeat: true }));
+    await flush();
+    expect(api.respond).not.toHaveBeenCalled();
+  });
+
+  it("the displayed ack is sent only after the next frame", async () => {
+    let frame: () => void = () => {};
+    const api = {
+      displayed: vi.fn<ApprovalApi["displayed"]>(() => Promise.resolve()),
+      respond: vi.fn<ApprovalApi["respond"]>(() => Promise.resolve()),
+      kill: vi.fn<ApprovalApi["kill"]>(() => Promise.resolve()),
+    };
+    const c = new ApprovalController(api, () => 0, () => new Promise<void>((r) => (frame = r)));
+    c.onRequest(req("a"));
+    await flush();
+    expect(api.displayed).not.toHaveBeenCalled();
+    frame();
+    await flush();
+    expect(api.displayed).toHaveBeenCalledWith("a");
   });
 });
 

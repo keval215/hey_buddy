@@ -6,6 +6,12 @@ _Owner: orch. Newest first. Max 60 entries; archive older ones to
 Format:
 
 ```
+## H-S2-16 2026-11-04 S2-16 -> coder x2, reviewer
+Asked: approval broker + window + UI.
+Result: round 1 CHANGES REQUESTED (MAJOR held-key repeat), round 2 accepted by orch.
+Key points:
+- 6 mutations caught by tests; kill-test waits now bounded.
+
 ## H-S2-10 2026-11-04 S2-10+15 -> coder x2, reviewer
 Asked: agent crate, sandbox, gateway, llm schema.
 Result: round 1 CHANGES REQUESTED (1 MAJOR Debug leak + minors), round 2 fixes accepted by orch (each fix has a test).
