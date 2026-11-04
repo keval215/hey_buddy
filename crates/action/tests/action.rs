@@ -68,6 +68,14 @@ fn launch_id_table() {
         "a/b",
         "a\\b",
         "..",
+        ".",
+        ".hidden",
+        "a.",
+        "a-",
+        "_a",
+        "-a",
+        "a_",
+        "...",
         "a b",
         "é",
         "a\n",
@@ -75,18 +83,12 @@ fn launch_id_table() {
         "a~",
         &"a".repeat(65),
     ] {
-        // ".." is only made of allowed chars; it is accepted by the charset rule but harmless
-        // because it is a key into the allowlist, never a path. Pin the behaviour below.
-        if bad == ".." {
-            continue;
-        }
         assert_eq!(
             LaunchId::new(bad).unwrap_err(),
             ActionError::LaunchIdInvalid,
             "{bad:?}"
         );
     }
-    assert!(LaunchId::new("..").is_ok());
 }
 
 #[test]

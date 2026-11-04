@@ -61,6 +61,28 @@ jobs:
           if cargo tree -p action -e normal | grep -E '(^|[^a-z_-])(windows|objc2|core-foundation|llm|capture|voice|tokio|reqwest) '; then
             echo "action crate has a forbidden dependency"; exit 1
           fi
+      - name: ADR 0003 - policy must stay pure (no platform, llm, capture, voice, driver, tokio, reqwest)
+        run: |
+          if cargo tree -p policy -e normal | grep -E '(^|[^a-z_-])(windows|objc2|core-foundation|llm|capture|voice|driver|tokio|reqwest) '; then
+            echo "policy crate has a forbidden dependency"; exit 1
+          fi
+          # TODO(S2-15): once the agent crate exists, add the mirror rule from ADR 0003 section 11:
+          #   cargo tree -p agent -e normal must not list policy, driver, capture, firewall or llm.
+      - name: policy test helper stays test-only (assume_benign_environment, test-support feature)
+        run: |
+          # The helper may appear only in crates/policy (its cfg-gated definition and its tests).
+          if grep -rn "assume_benign_environment" --include='*.rs' --include='*.toml' . --exclude-dir=target --exclude-dir=.git | grep -v '^\./crates/policy/'; then
+            echo "assume_benign_environment used outside crates/policy"; exit 1
+          fi
+          # Definition must be cfg-gated.
+          grep -B2 "pub fn assume_benign_environment" crates/policy/src/facts.rs | grep -q 'cfg(any(test, feature = "test-support"))'
+          # No other crate may enable the feature.
+          if grep -rn "test-support" --include=Cargo.toml . --exclude-dir=target | grep -v '^\./crates/policy/Cargo.toml'; then
+            echo "test-support enabled outside crates/policy"; exit 1
+          fi
+          if cargo tree --workspace -e normal,build,features | grep "test-support"; then
+            echo "policy test-support feature is active in the normal graph"; exit 1
+          fi
       - name: ADR 0002 - CloudOptIn::for_request only in core/src/consent.rs and crates/llm
         run: |
           # Tripwire (real control is review): match the bare identifier, and ban aliasing CloudOptIn.

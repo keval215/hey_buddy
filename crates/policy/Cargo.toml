@@ -1,0 +1,22 @@
+[package]
+name = "policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "hey_buddy policy (ADR 0003 sections 4-5): strict plan validation, provenance, tier classification (pure)"
+
+[features]
+# Test helpers (BoundStepFacts::assume_benign_environment). Off by default; never enable outside tests.
+test-support = []
+
+[dependencies]
+action = { path = "../action" }
+firewall = { path = "../firewall" }
+serde = "1"
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "1"
+
+[dev-dependencies]
+policy = { path = ".", features = ["test-support"] }

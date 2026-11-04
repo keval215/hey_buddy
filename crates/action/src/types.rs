@@ -47,17 +47,21 @@ impl fmt::Debug for TypedText {
     }
 }
 
-/// Key into the launch allowlist: `[a-z0-9._-]{1,64}`.
+/// Key into the launch allowlist: `[a-z0-9._-]{1,64}` that starts and ends with `[a-z0-9]`
+/// (so never `.`, `..`, a dotfile or a trailing separator).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LaunchId(String);
 
 impl LaunchId {
     pub fn new(raw: &str) -> Result<Self, ActionError> {
-        let ok = !raw.is_empty()
-            && raw.len() <= MAX_LAUNCH_ID_CHARS
-            && raw
-                .bytes()
-                .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'));
+        let b = raw.as_bytes();
+        let alnum = |c: &u8| matches!(c, b'a'..=b'z' | b'0'..=b'9');
+        let ok = !b.is_empty()
+            && b.len() <= MAX_LAUNCH_ID_CHARS
+            && b.first().is_some_and(alnum)
+            && b.last().is_some_and(alnum)
+            && b.iter()
+                .all(|c| alnum(c) || matches!(c, b'.' | b'_' | b'-'));
         if ok {
             Ok(Self(raw.to_owned()))
         } else {
