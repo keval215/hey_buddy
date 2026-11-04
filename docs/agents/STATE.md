@@ -41,8 +41,8 @@ Gate G1 before any 2B coding: [ ] Step 1 PR CI green (Linux+Windows; macOS defer
 | S2-1 | Real-machine fix pass (user findings) | BLOCKED | 0 | waiting on user: run docs/manual-tests.md on Windows, send findings |
 | S2-2 | Reload voice engines without restart (EngineSlot) | TODO | 0 |  |
 | S2-3 | Kokoro text frontend | DONE | 2 | round 1 BLOCKER: Unicode case-fold panic (İ) fixed; follow-ups: max-length split in tts_stream for unpunctuated long sentences (affects Kokoro 510-token cap); espeak-ng runtime option = user decision, not built; ascii_base lacks ß/æ/œ |
-| S2-4 | Model download screen | IN PROGRESS | 0 |  |
-| S2-5 | Title and URL leak hardening | TODO | 0 |  |
+| S2-4 | Model download screen | DONE | 2 | round 1 MAJOR: unverified marker written after rename (fail-open) fixed; follow-ups: registry has NO real urls/sha256/size_bytes/files lists yet (user to supply verified values; phonon-31m + kokoro need `files` lists); real_voice notice could point to Models table |
+| S2-5 | Title and URL leak hardening | IN PROGRESS | 0 |  |
 | S2-6 | Real hardware bench and CI | BLOCKED | 0 | needs user's bench JSON; CI = Linux+Windows (D-005) |
 | S2-7 | Settings polish | TODO | 0 |  |
 | S2-8 | [ARCH] Agent engine and approval model -> ADR 0003 | ARCH-PENDING | 0 | ADR 0003 DRAFT written (PROPOSED, docs/adr/0003-agent-engine-and-approvals.md); waiting on user approval + 5 open questions; tier table needs separate sign-off |
@@ -63,7 +63,7 @@ Gate G1 before any 2B coding: [ ] Step 1 PR CI green (Linux+Windows; macOS defer
 | S2-23 | End-to-end wiring and Step 2 exit test | TODO | 0 | after G1 |
 
 ## In progress
-S2-4 (coder, branch step2a/hardening); ADR 0003 + 0004 drafted, waiting on user
+S2-5 (coder, branch step2a/hardening); ADR 0003 + 0004 drafted, waiting on user
 
 ## Blockers / waiting on user
 - ADR 0003 (S2-8) + ADR 0004 (S2-9): read, answer their open questions (5 each), approve; plus tier table sign-off (ADR 0003 §5) = Gate G1 items
@@ -88,6 +88,7 @@ S2-4 (coder, branch step2a/hardening); ADR 0003 + 0004 drafted, waiting on user
 - Follow-ups for desktop/core: core/src/consent.rs is the ONLY place that may mint CloudOptIn (T12); Anthropic model id must come from settings (no default); call `exclude_window_from_capture` for every overlay/panel window (Win); capture before overlay takes focus; show LoadedDenyList.error/removed_defaults and tell user to add banking apps; platform capture() is blocking -> spawn_blocking; confirm per-monitor DPI awareness in Tauri manifest
 - S2-2 (untested here): real engine swap with whisper/Phonon on Windows, Tauri event delivery to settings window, settings UI (see manual-tests S2-2 section)
 - S2-3 (untested here): Kokoro real synthesis: model, voice files (`kokoro-voices/<voice>.bin` layout VERIFY), `kokoro-82m.config.json` vocab, ORT; listen to samples in manual-tests; cmudict.dict (~3.5 MB BSD-style) must be placed by the user in the models dir
+- S2-4 (untested here): a real HTTPS download + rustls platform verifier; Windows GetDiskFreeSpaceExW + reparse-point checks (compile-only); resume after killing the app; tampered-file checksum rejection (see manual-tests 'Model download')
 - Follow-ups: Kokoro text frontend; shared ort_util module; speaker_cpal should surface stream errors; CI job for tts-phonon/speaker-cpal + `cargo deny --all-features`; real 1024px app icon; tighten CSP `unsafe-inline` later
 
 ## Done

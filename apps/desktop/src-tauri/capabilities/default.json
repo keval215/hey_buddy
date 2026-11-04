@@ -15,6 +15,9 @@
     "allow-debug-point",
     "allow-get-last-request",
     "allow-set-api-key",
-    "allow-clear-api-key"
+    "allow-clear-api-key",
+    "allow-list-models",
+    "allow-start-download",
+    "allow-cancel-download"
   ]
 }

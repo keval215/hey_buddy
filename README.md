@@ -45,7 +45,10 @@ cd apps/desktop && pnpm tauri dev --features real-voice
 ```
 
 It needs cmake + clang at build time (and `libasound2-dev` on Linux), the model files in
-`<app data folder>/models` (or `HEY_BUDDY_MODELS_DIR`; nothing is downloaded for you),
+`<app data folder>/models` (or `HEY_BUDDY_MODELS_DIR`; nothing is downloaded unless you click
+Download on the Models table in Settings, which is HTTPS only, resumable and checksum-verified;
+registry entries without a download URL yet say "no download source yet"; weights are never
+committed),
 `ORT_DYLIB_PATH` pointing at onnxruntime, and Ollama with `qwen3:4b` pulled. Step by step:
 `docs/manual-tests.md` ("Step 1 EXIT TEST").
 

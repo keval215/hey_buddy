@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use buddy_core::api::{
-    Decision, DisplayDto, LastRequestDto, PreviewDto, Settings, SettingsPatch, Status, SwapTarget,
+    Decision, DisplayDto, LastRequestDto, ModelRow, PreviewDto, Settings, SettingsPatch, Status,
+    SwapTarget,
 };
 use buddy_core::Buddy;
 use tauri::{AppHandle, State};
@@ -82,6 +83,34 @@ pub fn set_api_key(b: B, provider: String, key: String) -> Result<Settings, Stri
 #[tauri::command]
 pub fn clear_api_key(b: B, provider: String) -> Result<Settings, String> {
     b.clear_api_key(&provider).map_err(|e| e.to_string())
+}
+
+/// Settings window only: the models table (status, size, licence, disk needed / free). Reads
+/// the local filesystem only; never touches the network.
+#[tauri::command]
+pub fn list_models(b: B) -> Vec<ModelRow> {
+    b.list_models()
+}
+
+/// Settings window only, explicit click: download one registry model in the background.
+/// `accept_unknown_checksum` is the second confirm for entries whose checksum is unknown.
+/// Returns at once; progress arrives as `download_progress`, then `download_done` or
+/// `download_failed`. Errors are fixed tokens (`busy`, `no_source`, `checksum_unknown`,
+/// `disk_space`, ...).
+#[tauri::command]
+pub fn start_download(
+    b: B,
+    id: String,
+    accept_unknown_checksum: Option<bool>,
+) -> Result<(), String> {
+    b.start_download(&id, accept_unknown_checksum.unwrap_or(false))
+        .map_err(|e| e.to_string())
+}
+
+/// Settings window only: stop the running download of `id`; its partial file is deleted.
+#[tauri::command]
+pub fn cancel_download(b: B, id: String) {
+    b.cancel_download(&id);
 }
 
 #[tauri::command]

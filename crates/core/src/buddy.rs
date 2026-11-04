@@ -22,13 +22,15 @@ use voice::registry::{Device, Registry, Task};
 use voice::{SttProvider, TtsProvider};
 
 use crate::api::{
-    Decision, DisplayDto, EngineSlotName, EngineSwapEvent, FirewallStatus, LastRequestDto, Phase,
-    PointEvent, Settings, SettingsPatch, Status, SwapTarget, TurnState,
+    Decision, DisplayDto, DownloadDone, DownloadFailed, DownloadProgress, EngineSlotName,
+    EngineSwapEvent, FirewallStatus, LastRequestDto, ModelRow, Phase, PointEvent, Settings,
+    SettingsPatch, Status, SwapTarget, TurnState,
 };
 use crate::consent::{
     last_request_dto, provider_allowed, ConsentError, ConsentGate, PreviewSink, PreviewStore,
     LAST_KEY,
 };
+use crate::download::{DownloadError, DownloadNotice, DownloadObserver, Downloader, ModelManager};
 use crate::engine_slot::{
     EngineLoader, EngineSlot, SwapFailure, SwapNotice, SwapObserver, TOKEN_MODEL_MISSING,
 };
@@ -108,6 +110,8 @@ pub struct Buddy {
     stt: EngineSlot<dyn SttProvider>,
     tts: EngineSlot<dyn TtsProvider>,
     loader: Mutex<Option<Arc<dyn EngineLoader>>>,
+    /// Model downloads (S2-4); `None` until the shell calls `set_models_dir`.
+    models: Mutex<Option<ModelManager>>,
     /// Latest failed swap per slot, shown as a status notice until the next request.
     swap_failures: Arc<Mutex<BTreeMap<EngineSlotName, String>>>,
     /// The turn engine's dependencies; `None` = voice engines not built.
@@ -186,6 +190,7 @@ impl Buddy {
             stt,
             tts,
             loader: Mutex::new(None),
+            models: Mutex::new(None),
             swap_failures,
             engine: Mutex::new(None),
             current: Mutex::new(None),
@@ -217,6 +222,62 @@ impl Buddy {
     /// fake in tests).
     pub fn set_engine_loader(&self, loader: Arc<dyn EngineLoader>) {
         *lock(&self.loader) = Some(loader);
+    }
+
+    /// Enable the models screen for `dir` (the shell calls this once at startup). Touches
+    /// nothing: no directory is created and nothing is downloaded until the user clicks.
+    pub fn set_models_dir(&self, dir: PathBuf) {
+        self.set_model_manager(dir, Downloader::new(), builtin_registry().clone());
+    }
+
+    pub(crate) fn set_model_manager(&self, dir: PathBuf, dl: Downloader, reg: Registry) {
+        let sink = self.sink.clone();
+        // Events go out with no lock held (L-013): the sink is only cloned under its lock.
+        let observer: DownloadObserver = Arc::new(move |n: DownloadNotice| {
+            let out = lock(&sink).clone();
+            match n {
+                DownloadNotice::Progress { id, bytes, total } => {
+                    out.download_progress(DownloadProgress { id, bytes, total })
+                }
+                DownloadNotice::Done { id } => out.download_done(DownloadDone { id }),
+                DownloadNotice::Failed { id, code } => out.download_failed(DownloadFailed {
+                    id,
+                    code: code.to_string(),
+                }),
+            }
+        });
+        *lock(&self.models) = Some(ModelManager::new(reg, dir, dl, observer));
+    }
+
+    fn model_manager(&self) -> Option<ModelManager> {
+        lock(&self.models).clone()
+    }
+
+    /// `list_models`: the models table from the local filesystem only (no network).
+    pub fn list_models(&self) -> Vec<ModelRow> {
+        let profile = lock(&self.settings).settings().profile;
+        self.model_manager()
+            .map(|m| m.list(&profile))
+            .unwrap_or_default()
+    }
+
+    /// `start_download`: explicit click only. `accept_unknown_checksum` is the second confirm
+    /// for registry entries whose checksum is `TODO`. Errors are fixed tokens.
+    pub fn start_download(
+        &self,
+        id: &str,
+        accept_unknown_checksum: bool,
+    ) -> Result<(), DownloadError> {
+        self.model_manager()
+            .ok_or(DownloadError::Unavailable)?
+            .start(id, accept_unknown_checksum)
+    }
+
+    /// `cancel_download`: stops the running download of `id` and deletes its partial files.
+    pub fn cancel_download(&self, id: &str) {
+        if let Some(m) = self.model_manager() {
+            m.cancel(id);
+        }
     }
 
     /// `request_engine_swap` command (design: explicit command, called by the settings window

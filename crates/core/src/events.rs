@@ -4,7 +4,8 @@
 //! intended payload of exactly those two events.
 
 use crate::api::{
-    EngineSwapEvent, FirewallStatus, PointEvent, ReplyDelta, TranscriptEvent, TurnError, TurnState,
+    DownloadDone, DownloadFailed, DownloadProgress, EngineSwapEvent, FirewallStatus, PointEvent,
+    ReplyDelta, TranscriptEvent, TurnError, TurnState,
 };
 
 pub trait EventSink: Send + Sync {
@@ -26,6 +27,12 @@ pub trait EventSink: Send + Sync {
     fn engine_swap_done(&self, _ev: EngineSwapEvent) {}
     /// `engine_swap_failed`. Default: dropped.
     fn engine_swap_failed(&self, _ev: EngineSwapEvent) {}
+    /// `download_progress` (throttled). Default: dropped.
+    fn download_progress(&self, _ev: DownloadProgress) {}
+    /// `download_done`. Default: dropped.
+    fn download_done(&self, _ev: DownloadDone) {}
+    /// `download_failed`. Default: dropped.
+    fn download_failed(&self, _ev: DownloadFailed) {}
 }
 
 /// Drops every event (the default until the glue installs a sink).

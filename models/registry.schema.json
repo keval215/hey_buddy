@@ -25,7 +25,25 @@
         "sha256": {"type": "string", "pattern": "^(TODO|[0-9a-f]{64})$"},
         "languages": {"type": "array", "items": {"type": "string"}, "minItems": 1},
         "default": {"type": "boolean", "description": "Default model for its task; at most one per task."},
-        "ollama_tag": {"type": "string", "minLength": 1, "description": "Ollama model tag for llm/vlm entries; TODO-verify where unsure."}
+        "ollama_tag": {"type": "string", "minLength": 1, "description": "Ollama model tag for llm/vlm entries; TODO-verify where unsure."},
+        "size_bytes": {"type": "integer", "minimum": 0, "description": "Exact download size in bytes when known: disk-space display and a sanity limit (the download aborts if the server sends more)."},
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/file"},
+          "description": "Multi-file / directory-shaped models. Paths are relative to the models directory. When present, url and sha256 of the entry must be TODO."
+        }
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "url", "sha256"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$", "description": "Relative to the models directory; no absolute paths, no .., no drive letters."},
+        "url": {"type": "string", "minLength": 1, "description": "https URL or the placeholder TODO (never invent one)."},
+        "sha256": {"type": "string", "pattern": "^(TODO|[0-9a-f]{64})$"},
+        "size_bytes": {"type": "integer", "minimum": 0}
       }
     },
     "assignment": {

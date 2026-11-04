@@ -316,6 +316,36 @@ Needs `--features real-voice`, models in place (see "Prerequisites" above) for b
       not loaded; the status names the missing file. After placing it, switch the profile
       away and back to load without restarting.
 
+## Model download (S2-4) - UNTESTED on this machine (Windows, real download)
+
+CI only exercises the downloader against a fake server on 127.0.0.1. Nothing in the registry has a
+real download URL yet (`url`/`sha256` are `TODO`, never invented), so those rows show "no download
+source yet". To try a real download, put a verified HTTPS `url` and `sha256` (and `size_bytes`) on
+one small entry in `models/registry.json` (e.g. `silero-vad-v5` or `whisper-base`), rebuild, then:
+
+- [ ] Open Settings. The Models table lists every registry model with task, size, licence line
+      ("Licence: X - shown for information", plus a note when not commercial-ok), disk needed vs
+      free and a status. Opening Settings must not start any download (check the network monitor).
+- [ ] A row with a real URL and checksum: Download starts only after the click; progress bar moves;
+      afterwards the file sits in `<app data>/models` (e.g. `silero-vad-v5.onnx`), the row says
+      "ready" and `<models>/.downloads/work` is gone.
+- [ ] Cancel mid-download: the row goes back to "not downloaded"; `<models>/.downloads/work/<id>`
+      is empty or gone (no `.part` left).
+- [ ] Resume: start a large download, kill the app (Task Manager) halfway, restart, click Retry/
+      Download again: it continues from the `.part` size (watch the network speed/bytes) and the
+      final file is accepted. (Only works when the server sends an ETag or Last-Modified.)
+- [ ] Bad checksum: change one hex digit of `sha256` for that entry (or serve a different file),
+      download: error "did not match its checksum and was deleted"; no final file, no `.part`.
+- [ ] Unknown checksum: an entry with a real `url` but `sha256: "TODO"` shows "checksum unknown"
+      and needs a second click ("Download without verification"); afterwards status "unverified".
+- [ ] Disk space: the table shows needed vs free; with a drive that has less free space than the
+      model needs, Download is disabled with "Not enough free disk space".
+- [ ] Only one download at a time (other Download buttons are disabled while one runs).
+- [ ] After a download of a model the active profile uses (e.g. the STT model): "Load now" appears
+      and loads it without restarting. A failed engine load shows "Retry load" under Status.
+- [ ] A redirect or URL that is not https must be refused (edit the registry `url` to `http://...`:
+      the row stays downloadable only if the app rejects it with "HTTPS only").
+
 ## Step 2 packaging note
 
 - [ ] macOS bundled builds (not `tauri dev`) need an `Info.plist` with

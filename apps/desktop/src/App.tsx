@@ -3,6 +3,7 @@ import { api, on } from "./api/client";
 import type { Phase } from "./ipc/Phase";
 import type { LastRequestDto } from "./ipc/LastRequestDto";
 import type { Settings } from "./ipc/Settings";
+import { ModelsPanel } from "./models/ModelsPanel";
 import { RequestFields } from "./request/RequestView";
 import type { Status } from "./ipc/Status";
 import {
@@ -200,6 +201,16 @@ export default function App() {
                 className={st.state === "failed" ? "text-red-600" : "text-neutral-700"}
               >
                 {swapText(slot, st)}
+                {st.state === "failed" && (
+                  <button
+                    className="ml-2 rounded border px-2 text-neutral-800"
+                    onClick={() =>
+                      void api.requestEngineSwap(slot).catch((e) => setError(swapErrorText(e)))
+                    }
+                  >
+                    Retry load
+                  </button>
+                )}
               </div>
             )
           );
@@ -215,6 +226,8 @@ export default function App() {
           </div>
         )}
       </section>
+
+      <ModelsPanel profile={current.profile} />
 
       <ApiKey
         hasKey={current.has_api_key}

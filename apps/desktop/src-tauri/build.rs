@@ -15,6 +15,9 @@ const COMMANDS: &[&str] = &[
     "get_pending_preview",
     "set_api_key",
     "clear_api_key",
+    "list_models",
+    "start_download",
+    "cancel_download",
 ];
 
 fn main() {

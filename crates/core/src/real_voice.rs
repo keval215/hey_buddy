@@ -26,16 +26,7 @@ use crate::engine_slot::{EngineLoader, SwapFailure, TOKEN_LOAD_FAILED};
 use crate::settings::builtin_registry;
 use crate::turn::VadFactory;
 
-/// Environment variable that overrides the models directory.
-pub const MODELS_DIR_ENV: &str = "HEY_BUDDY_MODELS_DIR";
-
-/// `HEY_BUDDY_MODELS_DIR` if set and non-empty, else `<app_data_dir>/models`.
-pub fn models_dir(app_data_dir: &Path) -> PathBuf {
-    match std::env::var_os(MODELS_DIR_ENV) {
-        Some(v) if !v.is_empty() => PathBuf::from(v),
-        _ => app_data_dir.join("models"),
-    }
-}
+pub use crate::download::{models_dir, MODELS_DIR_ENV};
 
 /// One expected model that is not on disk.
 #[derive(Debug, Clone, PartialEq, Eq)]

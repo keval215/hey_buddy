@@ -3,6 +3,7 @@
 pub mod api;
 pub mod buddy;
 pub mod consent;
+pub mod download;
 pub mod engine_slot;
 pub mod error;
 pub mod events;

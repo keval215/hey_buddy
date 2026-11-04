@@ -21,6 +21,12 @@ pub const EVT_ENGINE_SWAP_REQUESTED: &str = "engine_swap_requested";
 pub const EVT_ENGINE_SWAP_DONE: &str = "engine_swap_done";
 /// The load failed; the old engine stays (payload [`EngineSwapEvent`] with `error`).
 pub const EVT_ENGINE_SWAP_FAILED: &str = "engine_swap_failed";
+/// Model download progress (payload [`DownloadProgress`]; settings window only, <= ~5/s).
+pub const EVT_DOWNLOAD_PROGRESS: &str = "download_progress";
+/// A model download finished and is in place (payload [`DownloadDone`]).
+pub const EVT_DOWNLOAD_DONE: &str = "download_done";
+/// A model download ended without a file (payload [`DownloadFailed`]).
+pub const EVT_DOWNLOAD_FAILED: &str = "download_failed";
 /// Sent only to the `preview` window.
 pub const EVT_TURN_PREVIEW: &str = "turn:preview";
 /// Sent only to the `preview` window: the pending preview ended (decided, timed out, cancelled).
@@ -344,6 +350,80 @@ pub struct Status {
     /// expected path), deny-list problems, apps removed from the default deny list. Never
     /// transcripts, replies or screen text.
     pub notices: Vec<String>,
+}
+
+/// Local state of one registry model, from the filesystem only (never from the network).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ModelStatus {
+    /// Not on disk; a download source exists.
+    Missing,
+    /// A download is running right now.
+    Downloading,
+    /// All files are in place.
+    Ready,
+    /// In place, but downloaded without a known checksum (the registry has `TODO`).
+    Unverified,
+    /// Not on disk and the registry has no download URL yet.
+    NoSource,
+    /// Served by Ollama (`ollama pull`), not downloaded by this screen.
+    External,
+}
+
+/// One row of the models table (`list_models`). Licence and `commercial_ok` are shown for
+/// information only (D-004); they never gate anything.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ModelRow {
+    pub id: String,
+    /// `stt`, `tts`, `vad`, `llm` or `vlm`.
+    pub task: String,
+    /// Registry size text, e.g. `244M params`.
+    pub size_text: String,
+    pub licence: String,
+    pub commercial_ok: bool,
+    pub status: ModelStatus,
+    /// A download URL exists for every file (the Download button may work).
+    pub has_source: bool,
+    /// Every checksum is known. When false, the download needs the extra confirm click.
+    pub checksum_known: bool,
+    /// Bytes to download when the registry knows the size.
+    #[ts(type = "number | null")]
+    pub disk_needed: Option<u64>,
+    /// Free bytes where the models live (best effort).
+    #[ts(type = "number | null")]
+    pub disk_free: Option<u64>,
+    /// The voice slot the CURRENT profile loads this model into, if any ("Load now").
+    pub swap_slot: Option<EngineSlotName>,
+}
+
+/// Event `download_progress`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DownloadProgress {
+    pub id: String,
+    #[ts(type = "number")]
+    pub bytes: u64,
+    #[ts(type = "number | null")]
+    pub total: Option<u64>,
+}
+
+/// Event `download_done`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DownloadDone {
+    pub id: String,
+}
+
+/// Event `download_failed`. `code` is a fixed token (`cancelled`, `checksum_mismatch`,
+/// `network`, `http_status`, `bad_redirect`, `too_large`, `disk_full`, `io_error`, ...); never a
+/// URL or any server text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DownloadFailed {
+    pub id: String,
+    pub code: String,
 }
 
 #[cfg(test)]

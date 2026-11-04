@@ -6,6 +6,10 @@ import type { Decision } from "../ipc/Decision";
 import type { LastRequestDto } from "../ipc/LastRequestDto";
 import type { PreviewClosed } from "../ipc/PreviewClosed";
 import type { PreviewDto } from "../ipc/PreviewDto";
+import type { DownloadDone } from "../ipc/DownloadDone";
+import type { DownloadFailed } from "../ipc/DownloadFailed";
+import type { DownloadProgress } from "../ipc/DownloadProgress";
+import type { ModelRow } from "../ipc/ModelRow";
 import type { EngineSwapEvent } from "../ipc/EngineSwapEvent";
 import type { SwapTarget } from "../ipc/SwapTarget";
 import type { DisplayDto } from "../ipc/DisplayDto";
@@ -27,6 +31,9 @@ export const EVT = {
   engineSwapRequested: "engine_swap_requested",
   engineSwapDone: "engine_swap_done",
   engineSwapFailed: "engine_swap_failed",
+  downloadProgress: "download_progress",
+  downloadDone: "download_done",
+  downloadFailed: "download_failed",
 } as const;
 
 export interface EventMap {
@@ -39,6 +46,9 @@ export interface EventMap {
   engine_swap_requested: EngineSwapEvent;
   engine_swap_done: EngineSwapEvent;
   engine_swap_failed: EngineSwapEvent;
+  download_progress: DownloadProgress;
+  download_done: DownloadDone;
+  download_failed: DownloadFailed;
 }
 
 export function on<K extends keyof EventMap>(
@@ -65,6 +75,15 @@ export const api = {
   updateSettings: (patch: SettingsPatch) => invoke<Settings>("update_settings", { patch }),
   /** Settings window only. Loads the current profile's voice engines in the background; progress arrives as engine_swap_* events. */
   requestEngineSwap: (slot: SwapTarget = "all") => invoke<void>("request_engine_swap", { slot }),
+  /** Settings window only. The models table; reads the local filesystem, never the network. */
+  listModels: () => invoke<ModelRow[]>("list_models"),
+  /**
+   * Settings window only, explicit click. `acceptUnknownChecksum` is only sent after the second
+   * confirm for models whose checksum is unknown. Progress arrives as download_* events.
+   */
+  startDownload: (id: string, acceptUnknownChecksum = false) =>
+    invoke<void>("start_download", { id, acceptUnknownChecksum }),
+  cancelDownload: (id: string) => invoke<void>("cancel_download", { id }),
   listDisplays: () => invoke<DisplayDto[]>("list_displays"),
   cancelTurn: () => invoke<void>("cancel_turn"),
   /** Preview window only. */
