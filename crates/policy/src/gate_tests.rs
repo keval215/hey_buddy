@@ -869,6 +869,21 @@ fn a_planned_open_app_exempts_the_app_change() {
         rig.gate.authorize(s, &mut grant, None).err(),
         Some(Refusal::DriftPause)
     );
+    // S2-22b (F-2): the step approval carries the gate's own drift verdict.
+    let s = rig.bind(&plan, 0);
+    let pending = rig.gate.request_step_approval(&s).unwrap();
+    assert!(pending.changed(), "an app change is reported as changed");
+}
+
+#[test]
+fn an_undrifted_asked_again_step_is_not_flagged_changed() {
+    let (rig, plan, mut grant) = live5();
+    rig.run_step(&plan, &mut grant, 0);
+    rig.run_step(&plan, &mut grant, 1);
+    // Step 2 asks again by its tier (see the pending-approval test above), with no drift.
+    let s = fresh_bind(&rig, &plan, 2);
+    let pending = rig.gate.request_step_approval(&s).unwrap();
+    assert!(!pending.changed());
 }
 
 #[test]

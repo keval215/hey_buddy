@@ -117,9 +117,22 @@ pub const DESTRUCTIVE: &[&str] = &[
 pub const PURCHASE: &[&str] = &[
     "buy",
     "pay",
+    "purchase",
     "checkout",
     "check out",
     "place order",
+    "place your order",
+    "order now",
+    "complete order",
+    "confirm order",
+    "submit order",
+    "make payment",
+    "complete payment",
+    "confirm payment",
+    "submit payment",
+    "send payment",
+    "authorize payment",
+    "add payment",
     "subscribe",
     "donate",
     "transfer",
@@ -141,7 +154,11 @@ fn normalise(s: &str) -> String {
     let mut last_space = true;
     // Invisible / format characters vanish (they must not split a word); whitespace-like
     // controls (`\n`, `\t`, U+2028) stay separators.
-    for c in s.chars().filter(|&c| !is_invisible(c)) {
+    for c in s
+        .chars()
+        .filter(|&c| !is_invisible(c))
+        .map(crate::fold_width)
+    {
         if c.is_alphanumeric() {
             for l in c.to_lowercase() {
                 out.push(l);
@@ -165,7 +182,13 @@ fn is_invisible(c: char) -> bool {
 
 fn matches_any(text: &str, phrases: &[&str]) -> bool {
     let n = normalise(text);
-    phrases.iter().any(|p| n.contains(&format!(" {p} ")))
+    // The plain form AND the confusable skeleton (Cyrillic / Greek lookalikes folded in mixed
+    // words): a second chance to match, never a way to un-match (S2-22b).
+    let sk = crate::skeleton(&n);
+    phrases.iter().any(|p| {
+        let needle = format!(" {p} ");
+        n.contains(&needle) || sk.contains(&needle)
+    })
 }
 
 /// The text looks like a card / bank-account field or payment form label.
@@ -340,5 +363,35 @@ mod tests {
             assert!(!destructive_label(s) && !purchase_label(s), "{s:?}");
         }
         assert!(!submit_label("Okay then"));
+    }
+
+    #[test]
+    fn purchase_words_and_confusables_in_the_firewall_matcher() {
+        for s in [
+            "Purchase",
+            "COMPLETE PURCHASE",
+            "Make\u{200B} payment",
+            "Place your order",
+            "Order now",
+            "Confirm order",
+            "Add payment",
+            "\u{ff30}ay now",
+            "P\u{430}y now",
+            "Pa\u{443}",
+            "\u{440}\u{430}\u{443}",
+        ] {
+            assert!(purchase_label(s), "{s:?}");
+        }
+        for s in ["D\u{435}lete", "Rem\u{43e}ve", "\u{ff24}elete"] {
+            assert!(destructive_label(s), "{s:?}");
+        }
+        assert!(sensitive_label("P\u{430}ssword"));
+        for s in [
+            "Order",
+            "Payment",
+            "\u{41e}\u{442}\u{43c}\u{435}\u{43d}\u{430}",
+        ] {
+            assert!(!purchase_label(s) && !destructive_label(s), "{s:?}");
+        }
     }
 }

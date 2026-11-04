@@ -72,12 +72,10 @@ async fn a_foreground_change_before_the_first_step_types_nothing_into_the_new_ap
     }
 }
 
-/// KNOWN GAP (finding F-2, already listed in `docs/supervisor.md` follow-ups): the second question
-/// after a foreground-app change is shown with `changed` derived from the tier, not from the
-/// gate's drift code, so the approval window does not say "this changed since you approved".
-/// The question IS asked (the previous test), but without the warning.
+/// Attack (finding F-2, closed in S2-22b): the second question after a foreground-app change.
+/// Expected: it is flagged `changed` so the approval window warns "changed since approved".
+/// Defence: the gate's own drift verdict (`PendingStepApproval::changed`) feeds the request.
 #[tokio::test]
-#[ignore = "known gap F-2: a step approval after an app change is not flagged `changed`"]
 async fn the_second_question_after_an_app_change_says_it_changed() {
     let e = env();
     let desk = e.rig.desk.clone();

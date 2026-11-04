@@ -64,7 +64,7 @@ pub(crate) fn provenance(s: &str) -> String {
 /// result is padded with a space on both sides so `" phrase "` is a whole-word match.
 pub(crate) fn words(s: &str) -> String {
     let mut folded = String::with_capacity(s.len());
-    for c in s.chars() {
+    for c in s.chars().map(firewall::fold_width) {
         if invisible(c) {
             continue;
         }

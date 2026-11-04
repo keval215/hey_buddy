@@ -1430,7 +1430,7 @@ impl PolicyGate {
                                 r.tier = Some(cls.tier.as_str());
                                 r.decision = Some(kind.as_str());
                                 g.aud(&mut out, now, Some(task), r);
-                                Ok((id, d))
+                                Ok((id, d, changed))
                             }
                         }
                     }
@@ -1439,11 +1439,12 @@ impl PolicyGate {
         };
         self.flush(sweep_out);
         self.flush(out);
-        let (id, digest) = res?;
+        let (id, digest, changed) = res?;
         Ok(PendingStepApproval {
             gate: Arc::clone(self),
             id,
             digest,
+            changed,
             done: false,
         })
     }
@@ -2761,10 +2762,17 @@ pub struct PendingStepApproval {
     gate: Arc<PolicyGate>,
     id: ApprovalId,
     digest: ActionDigest,
+    changed: bool,
     done: bool,
 }
 
 impl PendingStepApproval {
+    /// The gate's own drift verdict: the step differs from what the user saw at plan approval
+    /// (another app in front, a moved / renamed target, a higher tier ...). Display only: the
+    /// approval is single-step either way.
+    pub fn changed(&self) -> bool {
+        self.changed
+    }
     pub fn id(&self) -> ApprovalId {
         self.id
     }

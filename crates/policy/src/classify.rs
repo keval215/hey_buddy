@@ -243,7 +243,9 @@ fn fact_rows(f: &BoundStepFacts, ctx: &PolicyContext, a: &mut Acc) {
         if f.purchase_label || lexicon::is_purchase(label) {
             a.raise(T::Never, R::PurchaseLabel);
         }
-        if (f.submit_label || lexicon::is_submit(label)) && a.tier <= T::Consequential {
+        if (f.submit_label || lexicon::is_submit(label) || lexicon::is_mixed_script(label))
+            && a.tier <= T::Consequential
+        {
             a.tier = T::Consequential;
             a.reason = R::Submit;
             a.submit = true;

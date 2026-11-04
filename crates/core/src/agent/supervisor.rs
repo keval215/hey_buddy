@@ -872,8 +872,8 @@ impl AgentSupervisor {
         let (gate_id, gate_hex) = (pending.id(), pending.digest_hex());
         let shown = self.broker_digest(&gate_hex);
         let cls = bound.classification();
-        // Not required by the tier itself: the step changed since the plan was shown (drift).
-        let changed = !asks_again(cls);
+        // The gate's own drift verdict (S2-22b): the step changed since the plan was shown.
+        let changed = pending.changed();
         let label = bound.descriptor().and_then(|d| d.label.as_deref());
         let sf = step_facts(step, cls.tier, label, true);
         let asked = self.broker.request_step(

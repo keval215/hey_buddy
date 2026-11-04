@@ -3,7 +3,7 @@
 //! baseline, a documented limitation).
 //!
 //! Matching: invisible/format characters stripped (not turned into spaces), case-folded,
-//! accents folded, every run of non-alphanumerics one space, then whole-word phrase match.
+//! accents folded, fullwidth/math letters folded to ASCII (`firewall::fold_width`), every run of non-alphanumerics one space, then whole-word phrase match.
 
 use crate::norm;
 
@@ -28,9 +28,22 @@ pub const DESTRUCTIVE: &[&str] = &[
 pub const PURCHASE: &[&str] = &[
     "buy",
     "pay",
+    "purchase",
     "checkout",
     "check out",
     "place order",
+    "place your order",
+    "order now",
+    "complete order",
+    "confirm order",
+    "submit order",
+    "make payment",
+    "complete payment",
+    "confirm payment",
+    "submit payment",
+    "send payment",
+    "authorize payment",
+    "add payment",
     "subscribe",
     "donate",
     "transfer",
@@ -56,7 +69,18 @@ pub const SECRET: &[&str] = &[
 
 fn matches(label: &str, list: &[&str]) -> bool {
     let n = norm::words(label);
-    list.iter().any(|p| n.contains(&format!(" {p} ")))
+    // Plain form AND confusable skeleton (S2-22b): only ever an additional way to match.
+    let sk = firewall::skeleton(&n);
+    list.iter().any(|p| {
+        let needle = format!(" {p} ");
+        n.contains(&needle) || sk.contains(&needle)
+    })
+}
+
+/// A word of the label mixes Latin with Cyrillic / Greek lookalike letters ("D\u{435}lete"): no honest
+/// label needs that, so a click on it is treated as at least a submit (own approval, never batched).
+pub fn is_mixed_script(label: &str) -> bool {
+    firewall::mixed_script(&norm::words(label))
 }
 
 pub fn is_submit(label: &str) -> bool {
@@ -154,6 +178,103 @@ mod tests {
             .into_iter()
             .filter(|w| !b.contains(&w.as_str()))
             .collect()
+    }
+
+    #[test]
+    fn purchase_words_in_many_spellings() {
+        for w in [
+            "Purchase",
+            "Confirm purchase",
+            "Complete purchase",
+            "Make payment",
+            "Place your order",
+            "Place order",
+            "Order now",
+            "Confirm order",
+            "Complete order",
+            "Submit order",
+            "Add payment",
+            "Pay",
+            "Buy",
+            "Subscribe",
+            "Donate",
+            "Check-out",
+            "Checkout",
+        ] {
+            let up = w.to_uppercase();
+            let zw = w.replace(' ', "\u{200B} ");
+            let accent = w.replace('o', "\u{f3}"); // "ó" is folded to o
+            let wide: String = w
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_graphic() {
+                        char::from_u32(c as u32 - 0x21 + 0xFF01).unwrap_or(c)
+                    } else {
+                        c
+                    }
+                })
+                .collect();
+            for v in [w.to_string(), up, zw, accent, wide] {
+                assert!(is_purchase(&v), "{v:?}");
+            }
+        }
+        for w in ["Purchases history", "Payment", "Ordering", "Order", "Pays"] {
+            assert!(!is_purchase(w), "{w}");
+        }
+    }
+
+    #[test]
+    fn confusable_spellings_still_match() {
+        for w in [
+            "D\u{435}lete",
+            "Rem\u{43e}ve",
+            "P\u{430}y now",
+            "\u{ff30}ay now",
+            "Pa\u{443} now",
+            "\u{440}\u{430}\u{443} now",
+            "\u{3a1}ay",       // Greek capital rho + ay
+            "Rem\u{3bf}ve",    // Greek omicron
+            "\u{1d40f}ay now", // mathematical bold P
+            "\u{24c5}ay now",  // circled P
+        ] {
+            assert!(is_destructive(w) || is_purchase(w), "{w:?}");
+        }
+        assert!(is_submit("\u{43e}\u{43a}")); // all-lookalike "ok"
+        assert!(is_secret("P\u{430}ssword"));
+    }
+
+    #[test]
+    fn pure_non_latin_ui_text_is_not_escalated() {
+        for w in [
+            "\u{41e}\u{442}\u{43c}\u{435}\u{43d}\u{430}", // Otmena
+            "\u{423}\u{434}\u{430}\u{43b}\u{438}\u{442}\u{44c}", // Udalit
+            "\u{3a0}\u{3bb}\u{3b7}\u{3c1}\u{3c9}\u{3bc}\u{3ae}",
+            "\u{4f60}\u{597d}",
+            "Caf\u{e9} menu",
+        ] {
+            assert!(
+                !is_destructive(w) && !is_purchase(w) && !is_submit(w),
+                "{w:?}"
+            );
+            assert!(!is_mixed_script(w), "{w:?}");
+        }
+    }
+
+    #[test]
+    fn mixed_script_detection() {
+        assert!(is_mixed_script("H\u{435}llo"));
+        assert!(is_mixed_script("Name \u{3bf}f file"));
+        assert!(!is_mixed_script("Hello \u{43c}\u{438}\u{440}"));
+        assert!(!is_mixed_script("Save"));
+        assert!(!is_mixed_script(""));
+    }
+
+    #[test]
+    fn huge_labels_are_linear_and_panic_free() {
+        let big = "\u{43e}\u{440}a ".repeat(200_000);
+        let t = std::time::Instant::now();
+        let _ = (is_purchase(&big), is_mixed_script(&big));
+        assert!(t.elapsed() < std::time::Duration::from_secs(10));
     }
 
     /// DRIFT TEST. The firewall evaluates its lexicons on the joined label and policy keeps its

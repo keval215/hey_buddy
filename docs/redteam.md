@@ -44,10 +44,11 @@ must never appear somewhere.
 | e deny-listed app | `a_plan_that_names_a_deny_listed_app_is_refused` | `target_denied` -> Never at the gate |
 | e deny-listed app | `an_unavailable_deny_list_refuses_the_task` | fail closed when there is no deny list |
 | e deny-listed app | `the_foreground_filter_blanks_a_deny_listed_app_that_the_firewall_let_through` | supervisor foreground filter (mutation-checked; fixes deferred minor 1) |
-| f payment / banking, submit | `homoglyph_spellings_do_not_evade_the_destructive_and_purchase_lexicons` | KNOWN GAP F-1b (ignored) |
+| f payment / banking, submit | `homoglyph_spellings_do_not_evade_the_destructive_and_purchase_lexicons` | widened lexicons + width fold + confusable skeleton (F-1b closed, S2-22b; mutation-checked) |
+| f payment / banking, submit | `a_mixed_script_label_gets_its_own_approval` | policy: a word mixing Latin with Cyrillic/Greek lookalikes is at least a submit (own approval) |
 | f payment / banking, submit | `pay_buttons_are_never_clicked` | purchase lexicon -> Never |
 | f payment / banking, submit | `payment_and_banking_surfaces_are_refused_before_they_are_offered` | policy payment-surface rules -> Never at the dry run |
-| f payment / banking, submit | `purchase_words_outside_the_short_lexicon_are_not_clicked` | KNOWN GAP F-1 (ignored) |
+| f payment / banking, submit | `purchase_words_outside_the_short_lexicon_are_not_clicked` | widened purchase lexicon in policy AND firewall (F-1 closed, S2-22b; mutation-checked) |
 | f payment / banking, submit | `submit_stops_without_its_own_approval` | gate: submit is never batchable; own step approval (mutation-checked) |
 | f payment / banking, submit | `submit_with_an_approval_that_never_arrives_expires_and_does_not_click` | step approval expiry |
 | g stale refs / drift | `a_drifted_step_runs_only_if_the_user_approves_the_changed_question` | documents that the second question is the user's call |
@@ -56,7 +57,7 @@ must never appear somewhere.
 | g stale refs / drift | `a_session_that_locks_after_approval_stops_the_step` | firewall lock-screen pause |
 | g stale refs / drift | `a_target_swapped_between_plan_and_execute_is_not_typed_into` | fresh observation + bind per step |
 | g stale refs / drift | `an_ambiguous_target_is_never_guessed` | bind refuses ambiguous labels |
-| g stale refs / drift | `the_second_question_after_an_app_change_says_it_changed` | KNOWN GAP F-2 (ignored) |
+| g stale refs / drift | `the_second_question_after_an_app_change_says_it_changed` | `PendingStepApproval::changed()` = the gate's drift verdict feeds the approval (F-2 closed, S2-22b; mutation-checked) |
 | h hostile engine | `cannot_plan_with_a_made_up_code_and_a_wrong_task_id_are_protocol_errors` | listed `cannot_plan` codes only |
 | h hostile engine | `every_hostile_behaviour_fails_closed_and_the_engine_is_killed` | strict line protocol + kill on first violation + `policy::propose` |
 | h hostile engine | `forged_control_lines_are_protocol_violations` | strict decoding (`engine_protocol`) |
@@ -120,12 +121,18 @@ holds the source tripwire above, the real checks are the unit tests in
 `apps/desktop/src-tauri/src/commands.rs` (`approval_commands_are_only_in_the_approval_capability`,
 `label_is_main`). Windows UIA / real sandbox / real clocks are in `docs/manual-tests.md`.
 
-## Known gaps found by the suite (ignored repros, see the report to orch)
-| Id | Finding | Repro test (`--include-ignored`) | Fix belongs to |
-|---|---|---|---|
-| F-1 | The purchase lexicon is a short English whole-word list. Labels such as "Purchase", "Confirm purchase", "Complete purchase", "Make payment", "Place your order", "Order now" are not Never: a plain click is Consequential and batchable by the plan approval; a "confirm"/"submit" word makes it a submit with its own approval. The user's approval is the only barrier. | `purchase_words_outside_the_short_lexicon_are_not_clicked` | `policy::lexicon::PURCHASE` AND `firewall` `PURCHASE` (a drift test keeps them equal): firewall change, reviewer decision |
-| F-1b | Lexicons fold case, accents and invisible characters but not confusables or width: "D\u0435lete" (Cyrillic e), "Rem\u043eve", "P\u0430y now", fullwidth "\uff30ay now" evade the destructive and purchase lists (observed: clicked after approvals). | `homoglyph_spellings_do_not_evade_the_destructive_and_purchase_lexicons` | `policy::norm` + the firewall matcher (NFKC + a confusables skeleton); only ESCALATES, so safe to add |
-| F-2 | After a foreground-app change the second (drift) question is shown with `changed` derived from the tier, not from the gate's drift code, so the approval window does not warn "changed since you approved" (already a listed follow-up in `docs/supervisor.md`). The question IS asked (`a_foreground_change_before_the_first_step_...`). | `the_second_question_after_an_app_change_says_it_changed` | `PolicyGate::evaluate` should expose the drift code; supervisor passes it to `request_step` |
+## Known gaps found by the suite
+None open. The three gaps found by the first run were closed in S2-22b (stricter-only changes, D-008);
+their repro tests are now ordinary tests (no `#[ignore]` is left in the suite; `tools/check-redteam.sh`
+still enforces that any future ignore is a documented `known gap`).
+| Id | Finding | Fix |
+|---|---|---|
+| F-1 (closed) | The purchase lexicon was a short English list: "Purchase", "Complete purchase", "Make payment", "Place your order", "Order now" were not Never. | `PURCHASE` widened identically in `policy::lexicon` and `firewall::sensitive` (drift test): purchase, place your order, order now, complete/confirm/submit order, make/complete/confirm/submit/send/authorize/add payment. Test `purchase_words_outside_the_short_lexicon_are_not_clicked`. |
+| F-1b (closed) | Confusables and width evaded the lists ("D\u0435lete", "P\u0430y now", fullwidth "\uff30ay now"). | In-house fold (no new dependency) in `firewall::confusable`, used by BOTH matchers: `fold_width` (NFKC subset: fullwidth ASCII, mathematical alphanumerics, circled letters) before lowercasing; `skeleton` maps Cyrillic/Greek lookalikes to Latin only inside a word that mixes Latin with them or consists ONLY of lookalike letters (so "\u0440\u0430\u0443" reads `pay`, but ordinary Russian/Greek words with any non-lookalike letter are untouched); the matcher tries the plain form AND the skeleton, so it can only add matches. `policy` also treats a mixed-script word as submit-level (own approval, never batched) even when it matches no word. Linear time, no byte indexing into folded text. Test `homoglyph_spellings_do_not_evade_the_destructive_and_purchase_lexicons`. |
+| F-2 (closed) | The second question after an app change was not flagged `changed`. | `PendingStepApproval::changed()` (additive public API) returns the drift verdict the gate computed in `request_step_approval`; the supervisor passes it to `request_step`. No gate semantics changed. Test `the_second_question_after_an_app_change_says_it_changed`. |
+
+Known limitation: lexicons stay English; only the Latin lookalike letters listed in
+`crates/firewall/src/confusable.rs` are folded (no full UTS #39 table).
 
 ## Mutation self-check (scratch copy, one defence removed at a time, suite run, then reverted)
 Each row removes ONE defence in a scratch copy of the workspace; the listed tests (and only red-team
@@ -154,10 +161,15 @@ because it is Consequential in the new app, a scroll is not).
 | 13 | transcript size limit | KILLED by 2 |
 | 14 | drift: different foreground app (gate `drift`) | KILLED: `a_foreground_change_before_the_first_step_types_nothing_into_the_new_app` (after strengthening) |
 | 15 | prompt hardening (`harden_json` off) | KILLED: `forged_delimiters_in_the_transcript_stay_inert_escaped_data` |
+| 16 | S2-22b: new purchase words removed from `policy::lexicon::PURCHASE` AND the firewall list | KILLED: `purchase_words_outside_the_short_lexicon_are_not_clicked`, the lexicon unit tests |
+| 17 | S2-22b: confusable `skeleton` made the identity | KILLED: `homoglyph_spellings_do_not_evade_...`, `confusable_spellings_still_match`, firewall unit tests |
+| 18 | S2-22b: `fold_width` made the identity | KILLED: the fullwidth / math-letter cases of the same tests |
+| 19 | S2-22b: mixed-script submit escalation removed (`is_mixed_script`) | KILLED: `a_mixed_script_label_gets_its_own_approval` |
+| 20 | S2-22b: `request_step_approval` returns `changed: false` | KILLED: `the_second_question_after_an_app_change_says_it_changed`, `gate_tests` drift test |
 
 ## CI
 `Red-team suite` step in `.github/workflows/ci.yml` runs `tools/check-redteam.sh`: it lists the target and
-fails below 80 tests, requires at least one test per case module, requires every `#[ignore]` to carry a
+fails below 80 tests, requires at least one test per case module, requires every `#[ignore]` (none today) to carry a
 `known gap` reason and be named in this file, and runs the suite. The suite is an integration-test
 target of `buddy-core` (dev-dependencies only): `cargo tree -p desktop -e features | grep -E
 'fakes|test-support'` stays empty (the same CI step as before).

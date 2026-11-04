@@ -1418,7 +1418,7 @@ fn lexicon_bypass_table() {
         );
         assert!(!r.submit);
     }
-    // Other languages and homoglyphs fall to the role baseline (documented limitation).
+    // Other languages fall to the role baseline (documented limitation).
     for label in [
         "Löschen",
         "Supprimer",
@@ -1426,7 +1426,6 @@ fn lexicon_bypass_table() {
         "Kaufen",
         "Acheter",
         "\u{5220}\u{9664}",
-        "D\u{435}lete",
     ] {
         let r = cl(label);
         assert_eq!(
@@ -1435,6 +1434,19 @@ fn lexicon_bypass_table() {
             "{label:?}: {r:?}"
         );
     }
+    // Homoglyph / fullwidth spellings are caught since S2-22b (confusable skeleton, width fold).
+    for label in ["D\u{435}lete", "\u{ff24}elete", "Rem\u{43e}ve"] {
+        let r = cl(label);
+        assert_eq!(
+            (r.tier, r.reason),
+            (T::Never, R::DestructiveLabel),
+            "{label:?}: {r:?}"
+        );
+    }
+    // A mixed-script word that matches no lexicon word is a submit-level click (own approval).
+    let r = cl("H\u{435}llo");
+    assert_eq!((r.tier, r.reason), (T::Consequential, R::Submit), "{r:?}");
+    assert!(r.submit);
     // Lexicons do not apply to op kinds the table does not name (type label "Delete" is a field
     // name, not an action) except the row 14 words.
     let r = c(&typed(Provenance::FromRequest).label("Delete me"));

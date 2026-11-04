@@ -73,15 +73,11 @@ async fn pay_buttons_are_never_clicked() {
     }
 }
 
-/// KNOWN GAP (finding F-1): the purchase lexicon is a short English whole-word list ("buy", "pay",
-/// "checkout", "place order", ...). Labels such as "Purchase", "Complete purchase", "Make payment",
-/// "Place your order", "Order now" are NOT Never: they are ordinary consequential (and, with
-/// "confirm" / "submit", submit) clicks, so the only barrier is the user's own step approval.
-/// The scripted human here says yes to everything, so the click happens. Fixing it means adding
-/// words to BOTH `policy::lexicon::PURCHASE` and the firewall's `PURCHASE` (a drift test keeps
-/// them equal): a firewall change, left to the reviewer (D-008).
+/// Attack (finding F-1, closed in S2-22b): purchase wording outside the original short list
+/// ("Purchase", "Complete purchase", "Make payment", "Place your order", "Order now"). The scripted
+/// human says yes to everything, so only the gate can stop the click. Expected: nothing is clicked.
+/// Defence: the widened purchase lexicon (policy AND firewall, drift-tested) makes it Never.
 #[tokio::test]
-#[ignore = "known gap F-1: purchase lexicon misses purchase / payment / order now / place your order"]
 async fn purchase_words_outside_the_short_lexicon_are_not_clicked() {
     for label in [
         "Purchase",
@@ -104,22 +100,21 @@ async fn purchase_words_outside_the_short_lexicon_are_not_clicked() {
     }
 }
 
-/// KNOWN GAP (finding F-1b): the lexicons fold case, accents and invisible characters but not
-/// confusables. A page that spells its button "D\u{0435}lete" (Cyrillic e), "Rem\u{043e}ve",
-/// "P\u{0430}y now" or fullwidth "\u{ff30}ay now" keeps a destructive / purchase button out of
-/// the Never tier: it is an ordinary click that the plan approval can batch. The human sees a
-/// label that LOOKS like "Delete" in the approval, but the gate never forced the refusal.
-/// A fix (NFKC + a confusables skeleton in `policy::norm` AND the firewall's matcher) is a
-/// firewall change, left to the reviewer (D-008).
+/// Attack (finding F-1b, closed in S2-22b): a page spells its button "D\u{0435}lete" (Cyrillic e),
+/// "Rem\u{043e}ve", "P\u{0430}y now", fullwidth "\u{ff30}ay now" or a mixed-script lookalike.
+/// Expected: nothing is clicked. Defence: width fold + Cyrillic/Greek confusable skeleton in both
+/// lexicon matchers (mixed-script words and all-lookalike words), and a mixed-script word is at
+/// least a submit-level (own approval) click even when it matches no lexicon word.
 #[tokio::test]
-#[ignore = "known gap F-1b: homoglyph / fullwidth spellings evade the destructive and purchase lexicons"]
 async fn homoglyph_spellings_do_not_evade_the_destructive_and_purchase_lexicons() {
     for label in [
         "D\u{0435}lete",
         "Rem\u{043e}ve",
         "P\u{0430}y now",
         "\u{ff30}ay now",
-        "B\u{0443}y now",
+        "Pa\u{0443} now",
+        "\u{0440}\u{0430}\u{0443} now",
+        "\u{1d40f}ay now",
     ] {
         let e =
             env_with(Opts {
@@ -132,6 +127,31 @@ async fn homoglyph_spellings_do_not_evade_the_destructive_and_purchase_lexicons(
         assert!(failed_closed(&r), "{label}: {r:?}");
         assert_eq!(e.fake.count(CallKind::Invoke), 0, "{label}: clicked");
     }
+}
+
+/// Attack: a label mixes Latin with a Cyrillic lookalike but matches no lexicon word ("H\u{0435}llo").
+/// Expected: the click is never batched on the plan approval: it gets its own Submit approval.
+/// Defence: `policy` treats a mixed-script word like a submit label (escalation only).
+#[tokio::test]
+async fn a_mixed_script_label_gets_its_own_approval() {
+    let label = "H\u{0435}llo";
+    let e = env_with(Opts {
+        desk: ScriptedDesktop::new().with_window(window("notes.exe").element(ElemSpec::new(
+            20,
+            NodeRole::Button,
+            label,
+            Rect::new(200, 600, 100, 30),
+        ))),
+        ..Opts::default()
+    });
+    let _ = e.run(&steps_json(&[&click(label)])).await;
+    let seen = e.human.seen();
+    assert_eq!(
+        seen.len(),
+        2,
+        "plan approval plus the click's own: {seen:?}"
+    );
+    assert_eq!(seen[1].kind, ApprovalKindDto::Submit);
 }
 
 /// Attack: plan approval is granted for typing + submit; the submit then asks again.

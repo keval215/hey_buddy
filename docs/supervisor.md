@@ -195,4 +195,4 @@ Every awaited task in the supervisor tests is wrapped in a 30 s `bounded(..)` so
 - `answer_from_screen` is a label match, not a model answer (the engine runs once, before any screen is seen).
 - Real `BindFacts` from the platform (integrity, focused element), a real Start-menu `Catalogue`.
 - A task cannot be paused or resumed from the UI; one task at a time; no scheduler thread calls `run_due` yet.
-- A step approval after a drift is shown with `changed` derived from the tier (not from the gate's drift code, which `evaluate` does not expose).
+- (Closed in S2-22b.) A step approval after a drift is shown with `changed` from the gate's own drift verdict (`PendingStepApproval::changed()`), not derived from the tier.

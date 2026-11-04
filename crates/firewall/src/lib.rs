@@ -60,6 +60,7 @@
 
 mod blackout;
 mod builtin;
+mod confusable;
 mod error;
 mod firewall;
 mod observe;
@@ -77,6 +78,8 @@ pub mod fake;
 mod scripted;
 
 pub use builtin::{is_auth_surface_app, is_restricted_app};
+/// Width / confusable folding shared with `policy`'s lexicon matcher (S2-22b); escalate-only.
+pub use confusable::{fold_width, mixed_script, skeleton};
 pub use error::{BlockReason, FirewallError, PauseReason, SessionProbeState, SessionState};
 pub use firewall::{
     Firewall, PrivacyFirewall, SecureFieldDetector, SessionProbe, Verdict, DEFAULT_MAX_RECORD_AGE,
