@@ -334,3 +334,36 @@ Copied from `docs/agents/STATE.md` "User must verify locally"; T7 / T8 items.
 - [ ] T13: all of `firewall/platform/{macos_text,windows_text}.rs` (see "Text path (T13)")
 - [ ] T8: test on Safari, Chrome, Electron and native login dialogs
 - [ ] Desktop ticket must declare PerMonitorV2 DPI awareness in the Windows manifest (the Windows firewall detector blocks every check until it does)
+
+## Kokoro samples to listen to (S2-3, untested on the dev machine)
+
+Kokoro is the optional fallback voice (feature `tts-kokoro`; Phonon stays the default). Needs, in
+`<models dir>`: `kokoro-82m.onnx`, `kokoro-82m.config.json` (the model's `config.json`),
+`cmudict.dict` (CMU Pronouncing Dictionary, BSD-style licence), `kokoro-voices/<voice>.bin`
+(raw little-endian f32 style rows of 256 values; `KOKORO_VOICE`, default `af_heart`), plus
+`ORT_DYLIB_PATH`. A missing file gives a "model file missing: <path>" error naming it.
+`HEY_BUDDY_MODELS_DIR=<dir> ORT_DYLIB_PATH=<lib> cargo test -p voice --features tts-kokoro text_to_speech -- --nocapture`
+runs the synthesis test (it prints SKIP when something is absent). Listen for these:
+
+- [ ] "It costs $5.50 and the book is Rs. 250." (dollars and cents, then "two hundred fifty rupees")
+- [ ] "Send ₹1,00,000 by 15/08/2025." ("one hundred thousand rupees", "August fifteenth twenty twenty five")
+- [ ] "The meeting is on March 5th, 2024 at 3:45 pm." (ordinal, year as "twenty twenty four", "three forty five p m")
+- [ ] "Mr. Rao pays 12.5% tax; e.g. 1st of May." ("mister", "twelve point five percent", "for example")
+- [ ] "Open https://example.com/docs or mail me@example.com." (just "link" and "email address")
+- [ ] "It is 25°C, 5 km away, and a 500 MB download. 🎉" (units spelled, emoji silent)
+- [ ] A made-up word ("Zorblax") and an acronym ("NASA"): dictionary-free rules should be intelligible, not perfect.
+Note: no heteronym handling ("read", "lead") and stress is approximate; compare with Phonon.
+
+Known caveats / VERIFY items for Kokoro (also in the `phonemize_en` module docs):
+
+- Phoneme symbols missing from the model's vocab are silently dropped.
+- Over 510 phoneme tokens the tail is truncated at a word break and NOT spoken. The streaming path
+  only splits sentences at `.`, `!`, `?` or newline, so it does not protect against one very long
+  sentence without terminators.
+- Accented Latin letters are spoken as their base letter ("café" as "cafe"); other non-ASCII
+  letters (Cyrillic, CJK, ß ...) are skipped as word breaks.
+- The `voice` argument to `synth` is ignored; the voice is fixed at load (`KOKORO_VOICE`).
+- [ ] VERIFY voice layout: expects `kokoro-voices/<voice>.bin` = raw little-endian f32, `[510,1,256]`
+  (onnx-community `voices/<name>.bin` style). `.pt` voices and kokoro-onnx `voices-v1.0.bin`/npz do NOT load.
+- [ ] VERIFY the ARPAbet to misaki symbol mapping (listen for wrong vowels) and that the vocab file
+  is really named `kokoro-82m.config.json`.
