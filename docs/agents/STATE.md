@@ -69,7 +69,7 @@ Branches: step2a/hardening -> step2b/agent-harness -> step3/packaging -> step4/f
 | Ticket | Title | Status | Rounds | Notes |
 |---|---|---|---|---|
 | S3-1 | Windows installer build (unsigned) | TODO | 0 | after Step 2 |
-| S3-2 | [ARCH] Auto-update design -> ADR 0005 | TODO | 0 | provisional |
+| S3-2 | [ARCH] Auto-update design -> ADR 0005 | DONE | 0 | D-010 provisional |
 | S3-3 | Update manifest parser + signature verifier (no real keys) | TODO | 0 |  |
 | S3-4 | First-run wizard | TODO | 0 |  |
 | S3-5 | Registry data tooling (real urls/checksums) | TODO | 0 | filling values = BLOCKED-ON-USER |
