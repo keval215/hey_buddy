@@ -31,6 +31,9 @@ import type { Status } from "../ipc/Status";
 import type { TurnError } from "../ipc/TurnError";
 import type { TurnState } from "../ipc/TurnState";
 import type { UpdateStatusDto } from "../ipc/UpdateStatusDto";
+import type { MicProbeDto } from "../ipc/MicProbeDto";
+import type { WizardEvent } from "../ipc/WizardEvent";
+import type { WizardView } from "../ipc/WizardView";
 
 export const EVT = {
   turnState: "turn:state",
@@ -168,6 +171,16 @@ export const api = {
    */
   updateInstall: (expectedVersion: string, allowDowngrade: boolean) =>
     invoke<void>("update_install", { expectedVersion, allowDowngrade }),
+  /** Settings window only. First-run wizard progress; local read, runs no probe. */
+  wizardState: () => invoke<WizardView>("wizard_state"),
+  /** A wizard button (Next, Back, Skip, Retry, Finish, Rerun, or the hotkey result). Runs nothing. */
+  wizardEvent: (event: WizardEvent) => invoke<WizardView>("wizard_event", { event }),
+  /** Explicit click ONLY: read RAM and GPU (local, no network). */
+  wizardProbeMachine: () => invoke<WizardView>("wizard_probe_machine"),
+  /** Explicit click ONLY: listen up to 5 s and report a level; nothing is recorded. */
+  wizardProbeMic: () => invoke<MicProbeDto>("wizard_probe_mic"),
+  /** Explicit click ONLY: one GET of Ollama's model list on loopback. */
+  wizardProbeOllama: () => invoke<WizardView>("wizard_probe_ollama"),
   /** Dev builds only; the command does not exist in release. */
   debugPoint: (x: number, y: number, label: string) =>
     invoke<void>("debug_point", { x, y, label }),

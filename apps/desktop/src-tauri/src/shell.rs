@@ -173,6 +173,11 @@ pub fn setup(app: &AppHandle, buddy: &Arc<Buddy>) -> tauri::Result<()> {
         kill::register_initial(app, buddy, &ctl);
     }
     start_display_watcher(app, buddy);
+    // First run (or a wizard that was not finished): open the settings window, where the wizard
+    // is. Reads the saved wizard state only; no probe, no microphone, no network until a click.
+    if !buddy.wizard_view().state.completed {
+        show_settings(app);
+    }
     Ok(())
 }
 

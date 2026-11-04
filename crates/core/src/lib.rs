@@ -28,6 +28,7 @@ pub mod setup;
 pub mod spoken;
 pub mod turn;
 pub mod update;
+pub mod wizard;
 
 pub use buddy::Buddy;
 pub use buddy::SwapError;

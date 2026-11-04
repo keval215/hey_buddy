@@ -348,6 +348,7 @@ dependencies = [
  "ts-rs",
  "update",
  "voice",
+ "windows",
 ]
 
 [[package]]

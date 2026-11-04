@@ -907,3 +907,39 @@ Known caveats / VERIFY items for Kokoro (also in the `phonemize_en` module docs)
   (onnx-community `voices/<name>.bin` style). `.pt` voices and kokoro-onnx `voices-v1.0.bin`/npz do NOT load.
 - [ ] VERIFY the ARPAbet to misaki symbol mapping (listen for wrong vowels) and that the vocab file
   is really named `kokoro-82m.config.json`.
+
+## First-run wizard (S3-4) — Windows, UNTESTED
+
+Use a fresh user profile (or delete the `wizard` entry from `settings.json`). Build with
+`--features real-voice` for the microphone step. Leave a network monitor (Resource Monitor or
+`netstat -ano`) open to watch for connections.
+
+- [ ] First launch: the settings window opens by itself on the wizard (Welcome). Before any click:
+  no connection to anything, microphone indicator off, nothing in the models folder.
+- [ ] Welcome lists local-first, screen only on hotkey, cloud off / preview before send, agent off.
+- [ ] Next / Back / Skip through the steps without pressing any check button: still no network, no
+  microphone indicator.
+- [ ] Your computer: "Check my computer" shows RAM, GPU name and VRAM that match Task Manager.
+  A 4 GB GPU with 16 GB RAM recommends `default`; a machine with less (or an integrated GPU)
+  recommends `low-memory`. Pick the other profile with "Use this profile"; the Models step follows.
+- [ ] Microphone: "Test microphone" lights the mic indicator for at most 5 s, the meter moves
+  when you talk, and the indicator goes off afterwards. No audio file appears anywhere. With the
+  microphone muted or unplugged the text explains it.
+- [ ] Ollama (not installed or stopped): "Check" says nothing answered and shows install text
+  (no link opens). Network monitor shows only a connection to 127.0.0.1:11434.
+- [ ] Ollama running with one of the models: the model shows installed, the other shows the
+  `ollama pull` hint.
+- [ ] Models: only the active profile's models are listed; a "no download source yet" row is
+  explained and has no working Download; nothing downloads until you click.
+- [ ] Hotkey: an invalid chord (`Space`) is refused with a hint; a valid one is saved and reports
+  ready; a chord owned by another app reports it could not be used and the old one stays.
+- [ ] Safety: Skip is disabled with the explanation; the rows show local-only ON, observe ON,
+  agent OFF, vision auto, the deny-list count. Before running the wizard set local-only OFF in
+  Settings, run setup again: the row says it will be switched to the safe value, and "Keep these
+  safe settings" turns it ON. Nothing in the wizard can turn a protection off.
+- [ ] Finish, restart the app: the wizard does not open again. "Run setup again" in Settings
+  opens it at Welcome and changes no setting.
+- [ ] Close the app in the middle of the wizard and restart: it opens again (resumes where you
+  were, or at Welcome after edits to the file).
+- [ ] Edit `settings.json`, set `"wizard": {"step": "Nope"}` and turn local-only to false: on the
+  next start the wizard is back at Welcome and local-only is ON again.

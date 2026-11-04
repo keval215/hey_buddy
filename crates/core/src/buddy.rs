@@ -47,6 +47,11 @@ use crate::point::sanitize_label;
 use crate::settings::{builtin_registry, SettingsError, SettingsStore};
 use crate::setup::BANKING_NOTICE;
 use crate::turn::{self, EngineDeps, ProviderSource, TurnControl, TurnCtx};
+use crate::wizard::{
+    self, ollama_info, safe_defaults_patch, transition, LoopbackOllamaProbe, MachineProbe,
+    MicProbe, MicProbeDto, OllamaProbe, WizardError, WizardEvent, WizardStep, WizardView,
+    MIC_TIMEOUT,
+};
 
 /// Result of a settings update; the glue re-registers the hotkey when `hotkey_changed`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,6 +177,16 @@ pub struct Buddy {
     activity: Mutex<Option<Arc<dyn ActivityProbe>>>,
     /// Where `agent_mode` voice requests go (S2-23b); `None` = no agent runtime.
     agent_trigger: Mutex<Option<Arc<dyn AgentTrigger>>>,
+    /// The first-run wizard's probes (S3-4). Building them does no I/O; each runs only from its
+    /// `wizard_probe_*` method (a user click).
+    wizard_probes: Mutex<WizardProbes>,
+}
+
+struct WizardProbes {
+    machine: Arc<dyn MachineProbe>,
+    ollama: Arc<dyn OllamaProbe>,
+    /// `None`: use the turn engine's audio input when there is one.
+    mic: Option<Arc<dyn MicProbe>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -257,6 +272,11 @@ impl Buddy {
             kill_registration_reported: AtomicBool::new(false),
             activity: Mutex::new(None),
             agent_trigger: Mutex::new(None),
+            wizard_probes: Mutex::new(WizardProbes {
+                machine: wizard::platform_machine_probe(),
+                ollama: Arc::new(LoopbackOllamaProbe::new()),
+                mic: None,
+            }),
         }
     }
 
@@ -696,6 +716,137 @@ impl Buddy {
         decision: Decision,
     ) -> Result<(), ConsentError> {
         self.consent.decide(request_id, decision)
+    }
+
+    // ------------------------------------------------------------ first-run wizard (S3-4)
+
+    /// Replace the wizard's probes (tests; the shell keeps the defaults). `mic: None` keeps
+    /// using the turn engine's audio input.
+    pub fn set_wizard_probes(
+        &self,
+        machine: Arc<dyn MachineProbe>,
+        ollama: Arc<dyn OllamaProbe>,
+        mic: Option<Arc<dyn MicProbe>>,
+    ) {
+        *lock(&self.wizard_probes) = WizardProbes {
+            machine,
+            ollama,
+            mic,
+        };
+    }
+
+    fn wizard_view_of(&self, state: wizard::WizardState) -> WizardView {
+        let profile = lock(&self.settings).settings().profile;
+        let ollama_tags = crate::providers::ollama_models(&profile)
+            .map(|(t, v)| std::iter::once(t).chain(v).collect())
+            .unwrap_or_default();
+        WizardView {
+            model_ids: wizard::profile_model_ids(&profile),
+            state,
+            profile,
+            ollama_tags,
+        }
+    }
+
+    /// Tests only: put saved wizard progress back.
+    #[cfg(test)]
+    pub(crate) fn set_wizard_for_test(&self, st: wizard::WizardState) {
+        lock(&self.settings).set_wizard(st).unwrap();
+    }
+
+    /// `wizard_state` command: the saved progress. Reads settings only; probes nothing.
+    pub fn wizard_view(&self) -> WizardView {
+        let state = lock(&self.settings).wizard();
+        self.wizard_view_of(state)
+    }
+
+    /// Apply one event and save the result. The only settings change this can make is the
+    /// safe-defaults patch, and only when the user confirms the safety step.
+    fn wizard_apply(&self, ev: &WizardEvent) -> Result<WizardView, WizardError> {
+        let current = lock(&self.settings).wizard();
+        let t = transition(&current, ev);
+        if t.apply_safe_defaults {
+            self.update_settings(&safe_defaults_patch())
+                .map_err(|_| WizardError::Io)?;
+        }
+        if t.state != current {
+            lock(&self.settings)
+                .set_wizard(t.state.clone())
+                .map_err(|_| WizardError::Io)?;
+        }
+        Ok(self.wizard_view_of(t.state))
+    }
+
+    /// `wizard_event` command. Events that carry a probe result are refused here: only the
+    /// `wizard_probe_*` methods may produce them.
+    pub fn wizard_event(&self, ev: &WizardEvent) -> Result<WizardView, WizardError> {
+        if ev.is_probe_result() {
+            return Err(WizardError::ForbiddenEvent);
+        }
+        self.wizard_apply(ev)
+    }
+
+    fn require_step(&self, step: WizardStep) -> Result<(), WizardError> {
+        if lock(&self.settings).wizard().step == step {
+            Ok(())
+        } else {
+            Err(WizardError::WrongStep)
+        }
+    }
+
+    /// `wizard_probe_machine` command (a click on the machine step): read RAM and GPU.
+    pub fn wizard_probe_machine(&self) -> Result<WizardView, WizardError> {
+        self.require_step(WizardStep::MachineCheck)?;
+        let probe = lock(&self.wizard_probes).machine.clone();
+        self.wizard_apply(&WizardEvent::MachineResult(probe.probe()))
+    }
+
+    /// `wizard_probe_ollama` command (a click on "Check"): one loopback request.
+    pub async fn wizard_probe_ollama(&self) -> Result<WizardView, WizardError> {
+        self.require_step(WizardStep::Ollama)?;
+        let probe = lock(&self.wizard_probes).ollama.clone();
+        let wanted = self.wizard_view().ollama_tags;
+        let info = ollama_info(probe.tags().await, &wanted);
+        self.wizard_apply(&WizardEvent::OllamaResult(info))
+    }
+
+    /// `wizard_probe_mic` command (a click on "Test microphone"): listen briefly, report a
+    /// level. Refused while a voice turn runs (the microphone is in use).
+    pub async fn wizard_probe_mic(&self) -> Result<MicProbeDto, WizardError> {
+        self.require_step(WizardStep::Microphone)?;
+        if lock(&self.inner).phase != Phase::Idle {
+            return Err(WizardError::Busy);
+        }
+        let probe: Arc<dyn MicProbe> = match lock(&self.wizard_probes).mic.clone() {
+            Some(p) => p,
+            None => match self.engine_deps() {
+                Some(d) => Arc::new(wizard::AudioInputProbe::new(d.audio_in.clone())),
+                None => return self.mic_failed(WizardError::MicUnavailable),
+            },
+        };
+        let level = match tokio::time::timeout(MIC_TIMEOUT, probe.level()).await {
+            Ok(Ok(l)) => l,
+            Ok(Err(e)) => return self.mic_failed(e),
+            Err(_) => return self.mic_failed(WizardError::MicTimeout),
+        };
+        let view = self.wizard_apply(&WizardEvent::MicResult(level.heard()))?;
+        Ok(MicProbeDto {
+            peak: level.peak.clamp(0.0, 1.0),
+            rms: level.rms.clamp(0.0, 1.0),
+            error: None,
+            view,
+        })
+    }
+
+    /// A failed microphone check is a result (not heard), reported with its token.
+    fn mic_failed(&self, e: WizardError) -> Result<MicProbeDto, WizardError> {
+        let view = self.wizard_apply(&WizardEvent::MicResult(false))?;
+        Ok(MicProbeDto {
+            peak: 0.0,
+            rms: 0.0,
+            error: Some(e.code().to_string()),
+            view,
+        })
     }
 
     /// Cancel every pending preview (window closed, app quitting, turn cancelled).

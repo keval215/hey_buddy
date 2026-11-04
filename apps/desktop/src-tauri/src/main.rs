@@ -94,6 +94,11 @@ fn main() {
         commands::update_download,
         commands::update_cancel,
         commands::update_install,
+        commands::wizard_state,
+        commands::wizard_event,
+        commands::wizard_probe_machine,
+        commands::wizard_probe_mic,
+        commands::wizard_probe_ollama,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -129,6 +134,11 @@ fn main() {
         commands::update_download,
         commands::update_cancel,
         commands::update_install,
+        commands::wizard_state,
+        commands::wizard_event,
+        commands::wizard_probe_machine,
+        commands::wizard_probe_mic,
+        commands::wizard_probe_ollama,
     ]);
 
     builder

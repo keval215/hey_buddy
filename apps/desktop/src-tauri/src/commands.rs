@@ -13,6 +13,7 @@ use buddy_core::approval::{
 };
 use buddy_core::kill::{KillController, KillReason};
 use buddy_core::update::{UpdateManager, UpdateStatusDto};
+use buddy_core::wizard::{MicProbeDto, WizardEvent, WizardView};
 use buddy_core::Buddy;
 use tauri::{AppHandle, Manager, State};
 
@@ -373,6 +374,57 @@ pub async fn update_install(
     Ok(())
 }
 
+/// Settings window only: the first-run wizard's saved progress and the facts it shows (the
+/// active profile, its model ids and Ollama tags). Local only: reads the settings, runs no probe,
+/// opens no microphone, makes no network call.
+#[tauri::command]
+pub fn wizard_state(window: tauri::Window, b: B) -> Result<WizardView, String> {
+    only_main_window(&window)?;
+    Ok(b.wizard_view())
+}
+
+/// Settings window only: a button press in the wizard (Next, Back, Skip, Retry, Finish, Rerun, or
+/// the informational hotkey result). The event is a typed enum; probe results are refused
+/// (`forbidden_event`). Runs nothing: no probe, no download. Confirming the safety step can only
+/// turn protections ON.
+#[tauri::command]
+pub fn wizard_event(window: tauri::Window, b: B, event: WizardEvent) -> Result<WizardView, String> {
+    only_main_window(&window)?;
+    b.wizard_event(&event).map_err(|e| e.code().to_string())
+}
+
+/// Settings window only, explicit click ("Check my computer"): read RAM and GPU, recommend a
+/// profile. Read-only system query; no network.
+#[tauri::command]
+pub async fn wizard_probe_machine(window: tauri::Window, b: B<'_>) -> Result<WizardView, String> {
+    only_main_window(&window)?;
+    let b = Arc::clone(b.inner());
+    // DXGI can take a moment: off the main thread.
+    tauri::async_runtime::spawn_blocking(move || b.wizard_probe_machine())
+        .await
+        .map_err(|_| "probe_failed".to_string())?
+        .map_err(|e| e.code().to_string())
+}
+
+/// Settings window only, explicit click ("Test microphone"): listen for at most 5 s and report a
+/// level (peak and RMS), nothing else. No audio is kept or written. Errors come back inside the
+/// result as fixed tokens.
+#[tauri::command]
+pub async fn wizard_probe_mic(window: tauri::Window, b: B<'_>) -> Result<MicProbeDto, String> {
+    only_main_window(&window)?;
+    b.wizard_probe_mic().await.map_err(|e| e.code().to_string())
+}
+
+/// Settings window only, explicit click ("Check"): ONE GET of Ollama's tag list on loopback
+/// (`127.0.0.1:11434`). Installs and starts nothing. No URL or path parameter exists.
+#[tauri::command]
+pub async fn wizard_probe_ollama(window: tauri::Window, b: B<'_>) -> Result<WizardView, String> {
+    only_main_window(&window)?;
+    b.wizard_probe_ollama()
+        .await
+        .map_err(|e| e.code().to_string())
+}
+
 /// The settings window's label.
 const MAIN_WINDOW: &str = "main";
 
@@ -446,6 +498,11 @@ mod tests {
         "update_download",
         "update_cancel",
         "update_install",
+        "wizard_state",
+        "wizard_event",
+        "wizard_probe_machine",
+        "wizard_probe_mic",
+        "wizard_probe_ollama",
     ];
 
     /// Commands every window may call (they can only stop things).
@@ -672,6 +729,49 @@ mod tests {
             "update_status",
         ] {
             assert!(!approval.contains(&allow(cmd)), "{cmd} in approval.json");
+        }
+    }
+
+    #[test]
+    fn wizard_commands_check_the_label_take_no_path_or_url_and_probe_only_on_call() {
+        let src = include_str!("commands.rs");
+        let prod = src.split("#[cfg(test)]\nmod tests").next().unwrap();
+        for name in [
+            "wizard_state",
+            "wizard_event",
+            "wizard_probe_machine",
+            "wizard_probe_mic",
+            "wizard_probe_ollama",
+        ] {
+            let at = prod
+                .find(&format!("pub fn {name}("))
+                .or_else(|| prod.find(&format!("pub async fn {name}(")))
+                .expect("command");
+            let body = &prod[at..at + 400];
+            assert!(
+                body.contains("only_main_window(&window)?"),
+                "{name} must check the window label"
+            );
+            let sig = &body[..body.find(") ->").expect("signature")];
+            for banned in ["path", "url", "Path", "String", "args"] {
+                assert!(!sig.contains(banned), "{name} takes {banned}: {sig}");
+            }
+        }
+        // The probes are reached from their commands only; nothing at startup calls them.
+        let main = include_str!("main.rs");
+        for banned in [".wizard_probe", ".wizard_event(", ".wizard_view"] {
+            assert!(!main.contains(banned), "main.rs calls {banned}");
+        }
+        assert_eq!(prod.matches(".wizard_probe_mic()").count(), 1);
+        assert_eq!(prod.matches(".wizard_probe_ollama()").count(), 1);
+        assert_eq!(prod.matches(".wizard_probe_machine()").count(), 1);
+        // The wizard is for the settings window only.
+        for cap in [
+            include_str!("../capabilities/approval.json"),
+            include_str!("../capabilities/overlay.json"),
+            include_str!("../capabilities/preview.json"),
+        ] {
+            assert!(!cap.contains("wizard"));
         }
     }
 

@@ -12,6 +12,8 @@ import { RequestFields } from "./request/RequestView";
 import { AuditLogPanel } from "./settings/AuditLogPanel";
 import { DenyListPanel } from "./settings/DenyListPanel";
 import { UpdatePanel } from "./updates/UpdatePanel";
+import { Wizard } from "./wizard/Wizard";
+import { shouldAutoShow } from "./wizard/logic";
 import type { Status } from "./ipc/Status";
 import {
   AGENT_ENABLED_NOTE,
@@ -71,6 +73,15 @@ export default function App() {
   const [lastTask, setLastTask] = useState<AgentTaskDto | null>(null);
   const [taskText, setTaskText] = useState("");
   const [taskError, setTaskError] = useState<string | null>(null);
+  // The first-run wizard: opens by itself until it has been finished once (a local read only).
+  const [wizardOpen, setWizardOpen] = useState(false);
+
+  useEffect(() => {
+    void api
+      .wizardState()
+      .then((v) => setWizardOpen(shouldAutoShow(v.state)))
+      .catch(() => setWizardOpen(false));
+  }, []);
 
   useEffect(() => {
     void api.getSettings().then((s) => {
@@ -131,6 +142,19 @@ export default function App() {
   }, [current, draft]);
 
   if (!draft || !current) return <main className="p-4">Loading…</main>;
+  if (wizardOpen) {
+    return (
+      <Wizard
+        settings={current}
+        onSettings={(r) => {
+          setCurrent(r.settings);
+          setDraft(r.settings);
+          setModelsRefresh((n) => n + 1);
+        }}
+        onClose={() => setWizardOpen(false)}
+      />
+    );
+  }
   const dirty = !isEmptyPatch(buildPatch(current, draft));
   const hkProblem = draft.hotkey.trim() === current.hotkey ? null : hotkeyProblem(draft.hotkey);
   const killProblem =
@@ -243,6 +267,25 @@ export default function App() {
           onClick={() => void api.killAgent()}
         >
           Stop agent
+        </button>
+      </Section>
+
+      <Section title="Setup">
+        <div className="text-neutral-500">
+          The setup guide checks your computer, microphone and Ollama, and helps you pick models
+          and a hotkey. It never turns a protection off.
+        </div>
+        <button
+          type="button"
+          className="rounded border px-3 py-1"
+          onClick={() =>
+            void api
+              .wizardEvent("Rerun")
+              .then(() => setWizardOpen(true))
+              .catch((e) => setError(errorText(e)))
+          }
+        >
+          Run setup again
         </button>
       </Section>
 

@@ -37,6 +37,11 @@ const COMMANDS: &[&str] = &[
     "update_download",
     "update_cancel",
     "update_install",
+    "wizard_state",
+    "wizard_event",
+    "wizard_probe_machine",
+    "wizard_probe_mic",
+    "wizard_probe_ollama",
 ];
 
 fn main() {
