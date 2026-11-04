@@ -151,7 +151,14 @@ export default function App() {
           setDraft(r.settings);
           setModelsRefresh((n) => n + 1);
         }}
-        onClose={() => setWizardOpen(false)}
+        onClose={() => {
+          setWizardOpen(false);
+          // The safety confirm may have changed settings: show the real ones.
+          void api.getSettings().then((s) => {
+            setCurrent(s);
+            setDraft(s);
+          });
+        }}
       />
     );
   }

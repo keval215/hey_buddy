@@ -215,6 +215,22 @@ describe("safety rows", () => {
   });
 });
 
+describe("safety rows: vision", () => {
+  const vis = (v: "Off" | "Auto" | "Always") => {
+    const rows = safetyRows({ ...safe, profile: "default", vision_mode: v } as Settings);
+    return rows.find((r) => r.label === "Screen vision")!;
+  };
+  it("Off is shown as off and is already safe", () => {
+    expect(vis("Off").now).toBe("off");
+    expect(vis("Off").safe).toBe(true);
+  });
+  it("Auto is safe; Always will be switched to auto", () => {
+    expect(vis("Auto").safe).toBe(true);
+    expect(vis("Always").safe).toBe(false);
+    expect(vis("Always").now).toContain("switched to auto");
+  });
+});
+
 describe("step list typing", () => {
   it("covers every WizardStep value", () => {
     const all: WizardStep[] = STEPS.map((s) => s.step);

@@ -6,6 +6,10 @@ _Owner: orch. Newest first. Max 60 entries; archive older ones to
 Format:
 
 ```
+## H-S3-4 2026-11-04 S3-4 -> coder x2 (+resume after container restart), reviewer
+Asked: first-run wizard.
+Result: round 1 CHANGES REQUESTED (MAJOR vision Off->Auto loosened), round 2 accepted (exhaustive monotonic property test).
+
 ## H-S3-3 2026-11-04 S3-3 -> coder x2, reviewer
 Asked: update crate + manager + commands + UI.
 Result: round 1 CHANGES REQUESTED (MAJOR untested downgrade guard), round 2 accepted (25 mutants killed in review).

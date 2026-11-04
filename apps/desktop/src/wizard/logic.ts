@@ -34,7 +34,7 @@ export function stepTitle(step: WizardStep): string {
 export const PRIVACY_POINTS: string[] = [
   "Local first: speech recognition, the spoken reply, the privacy checks and the logs all run on this computer.",
   "The buddy only looks at your screen when you press the hotkey, and never at password fields or apps on the deny list.",
-  "Cloud models are off. If you ever switch one on, nothing is sent until you have seen exactly what would be sent and clicked Send.",
+  "Cloud models are off by default. If you ever switch one on, nothing is sent until you have seen exactly what would be sent and clicked Send.",
   "The agent that can operate apps is off, and every action it wants to take needs your approval.",
   "Nothing in this setup downloads anything, listens to the microphone or contacts anything until you click that step's button.",
 ];
@@ -174,6 +174,18 @@ export function hotkeyAccepted(res: SettingsResult, status: Status): boolean {
 
 export type SafetyRow = { label: string; now: string; safe: boolean };
 
+function visionNow(s: Settings): string {
+  if (s.profile === "low-memory") return "off (this profile has no vision model)";
+  switch (s.vision_mode) {
+    case "Off":
+      return "off";
+    case "Auto":
+      return "auto (only when a question needs the screen)";
+    default:
+      return "always (will be switched to auto)";
+  }
+}
+
 /** What the safety step shows, from the real current settings. `safe` = already the safe value. */
 export function safetyRows(s: Settings): SafetyRow[] {
   const row = (label: string, on: boolean, wantOn: boolean, onText = "on", offText = "off") => ({
@@ -188,8 +200,8 @@ export function safetyRows(s: Settings): SafetyRow[] {
     row("Agent mode for voice requests", s.agent_mode, false),
     {
       label: "Screen vision",
-      now: s.profile === "low-memory" ? "off (this profile has no vision model)" : "auto (only when a question needs the screen)",
-      safe: s.profile === "low-memory" || s.vision_mode === "Auto",
+      now: visionNow(s),
+      safe: s.profile === "low-memory" || s.vision_mode !== "Always",
     },
   ];
 }

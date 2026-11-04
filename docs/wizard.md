@@ -23,8 +23,9 @@ Safety -> Done.
 ## Guarantees
 
 - **Safety can only go up.** The only settings change the wizard can make is
-  `safe_defaults_patch()`: local-only ON, observe mode ON, vision Auto (still forced Off by the
-  `low-memory` profile), agent OFF, agent mode OFF. It is applied only when the user clicks
+  `safe_defaults_patch(current)`: local-only ON, observe mode ON, agent OFF, agent mode OFF, and
+  vision Always -> Auto. Vision that is already Off or Auto is left alone, so Off (including Off
+  forced by the `low-memory` profile) is never loosened. It is applied only when the user clicks
   "Keep these safe settings". Skip, Back, Retry, Rerun, Finish and closing the window change no
   setting. The deny list is shown, never edited. (D-008)
 - **Skip is allowed on every step except the safety confirm and Done.** Skipping records the step
@@ -46,7 +47,8 @@ of the file; a settings save keeps it). It is validated on load: unknown step, u
 wrong type, `completed` off the Done step, a duplicated or forbidden skipped step, a recommendation
 that does not match the stored machine, an invalid Ollama entry, all mean the same thing: the
 wizard restarts at Welcome with `completed = false` AND the protections in the file are put back
-to their safe values (local-only ON, observe ON, vision Auto, agent and agent mode OFF). A file
+to their safe values (local-only ON, observe ON, agent and agent mode OFF, vision Always -> Auto; Off stays Off). The
+reset is reported as a `file`/`corrupt` load issue. A file
 without a `wizard` entry (an older install) is simply a fresh wizard.
 
 `completed` becomes true only on Finish, which is only accepted on the Done step, which is only
