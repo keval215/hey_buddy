@@ -51,6 +51,11 @@ jobs:
           if cargo tree -p llm --all-features | grep -E '(^|[^a-z_-])(capture|voice) '; then
             echo "llm depends on capture or voice"; exit 1
           fi
+      - name: ADR 0004 - firewall must not depend on driver, llm, capture or voice
+        run: |
+          if cargo tree -p firewall -e normal | grep -E '(^|[^a-z_-])(driver|llm|capture|voice) v'; then
+            echo "firewall depends on driver, llm, capture or voice"; exit 1
+          fi
       - name: ADR 0002 - CloudOptIn::for_request only in core/src/consent.rs and crates/llm
         run: |
           # Tripwire (real control is review): match the bare identifier, and ban aliasing CloudOptIn.

@@ -11,6 +11,8 @@ fakes = []
 
 [dependencies]
 frame = { path = "../frame" }
+getrandom = "0.3"
+sha2 = "0.10"
 thiserror = "1"
 
 # Platform deps are target-gated so Linux builds never see them (L-009).

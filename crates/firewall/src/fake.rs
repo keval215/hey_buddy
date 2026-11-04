@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use frame::Rect;
 
+pub use crate::scripted::{DesktopCalls, ElemSpec, ScriptedDesktop, WindowSpec};
 use crate::{
     FirewallError, RawWindowTree, ScreenTextSource, SecureFieldDetector, SessionProbe,
     SessionProbeState,

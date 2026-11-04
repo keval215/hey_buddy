@@ -26,7 +26,8 @@ use std::time::{Duration, Instant};
 
 use frame::Rect;
 
-use crate::text::drops_subtree;
+use crate::target::{hash_label, NodeIdentity};
+use crate::text::{drops_subtree, has_body, MAX_EMITTED_NODES};
 use crate::{FirewallError, NodeRole, RawTextNode, RawWindowTree};
 
 pub(crate) const MAX_NODES: usize = 20_000;
@@ -71,19 +72,52 @@ pub(crate) trait TreeCursor {
     /// Text of a static text / heading. Never called for editable or secure nodes.
     fn text_value(&mut self, n: &Self::Node) -> Result<Option<String>, FirewallError>;
     fn children(&mut self, n: &Self::Node) -> Result<Vec<Self::Node>, FirewallError>;
+    /// Identity facts for `observe` (runtime id, control type, automation id hash). Called ONLY
+    /// after `is_secure` returned false, and only for nodes that will be emitted (never for
+    /// secure, dropped or title-ish nodes). It must not read the name: the walker hashes the
+    /// label it has already read. Default: fail closed (the platform adapter implements it in
+    /// S2-14d; until then `observe` is unsupported).
+    #[allow(dead_code)]
+    fn identity(&mut self, _n: &Self::Node) -> Result<NodeIdentity, FirewallError> {
+        Err(FirewallError::Unsupported)
+    }
 }
 
 fn fail() -> FirewallError {
     FirewallError::Detection
 }
 
-/// Walk the subtree of `root` (the focused window). Output is DFS pre-order.
+/// Walk the subtree of `root` (the focused window). Output is DFS pre-order. Never asks for
+/// identity.
 pub(crate) fn walk_tree<C: TreeCursor>(
     c: &mut C,
     root: C::Node,
     app_id: String,
     limits: &Limits,
 ) -> Result<RawWindowTree, FirewallError> {
+    walk_inner(c, root, app_id, limits, false).map(|(t, _)| t)
+}
+
+/// Like [`walk_tree`], plus identity for emitted non-secure nodes (parallel to `nodes`).
+#[allow(dead_code)] // used by the Windows adapter in S2-14d
+pub(crate) fn walk_tree_identified<C: TreeCursor>(
+    c: &mut C,
+    root: C::Node,
+    app_id: String,
+    limits: &Limits,
+) -> Result<(RawWindowTree, Vec<Option<NodeIdentity>>), FirewallError> {
+    walk_inner(c, root, app_id, limits, true)
+}
+
+fn walk_inner<C: TreeCursor>(
+    c: &mut C,
+    root: C::Node,
+    app_id: String,
+    limits: &Limits,
+    want_identity: bool,
+) -> Result<(RawWindowTree, Vec<Option<NodeIdentity>>), FirewallError> {
+    let mut identities: Vec<Option<NodeIdentity>> = Vec::new();
+    let mut identity_reads = 0usize;
     let mut nodes: Vec<RawTextNode> = Vec::new();
     let mut window_rect: Option<Rect> = None;
     // (node, depth, below a dropped browser-chrome node)
@@ -118,6 +152,7 @@ pub(crate) fn walk_tree<C: TreeCursor>(
                 has_value: false,
                 rect: Some(rect),
             });
+            identities.push(None);
             continue; // never descend into a secure node
         }
 
@@ -189,6 +224,24 @@ pub(crate) fn walk_tree<C: TreeCursor>(
             node.has_value = v.as_deref().is_some_and(|s| !s.trim().is_empty());
             node.value = v;
         }
+        // Identity: only now (is_secure was false, not dropped, not title-ish), only for nodes
+        // that will have a line, with a rect, and bounded by the emission cap. A failure makes
+        // the node unaddressable, never the read fail.
+        let ident = if want_identity
+            && depth > 0
+            && node.rect.is_some()
+            && identity_reads < MAX_EMITTED_NODES
+            && has_body(&node)
+        {
+            identity_reads += 1;
+            c.identity(&n).ok().map(|mut i| {
+                i.label_hash = hash_label(node.label.as_deref());
+                i
+            })
+        } else {
+            None
+        };
+        identities.push(ident);
         nodes.push(node);
 
         let kids = c.children(&n)?;
@@ -202,11 +255,14 @@ pub(crate) fn walk_tree<C: TreeCursor>(
         }
     }
 
-    Ok(RawWindowTree {
-        app_id,
-        window_rect: window_rect.ok_or_else(fail)?,
-        nodes,
-    })
+    Ok((
+        RawWindowTree {
+            app_id,
+            window_rect: window_rect.ok_or_else(fail)?,
+            nodes,
+        },
+        identities,
+    ))
 }
 
 #[cfg(test)]
@@ -287,6 +343,15 @@ mod tests {
         fn children(&mut self, n: &usize) -> Result<Vec<usize>, FirewallError> {
             self.log.push((*n, "children"));
             Ok(self.nodes[*n].kids.clone())
+        }
+        fn identity(&mut self, n: &usize) -> Result<NodeIdentity, FirewallError> {
+            self.log.push((*n, "identity"));
+            Ok(NodeIdentity {
+                runtime_id: vec![*n as i32],
+                control_type: 7,
+                automation_id_hash: [1; 32],
+                label_hash: [0; 32],
+            })
         }
     }
 
@@ -636,5 +701,117 @@ mod tests {
         assert_eq!(t.nodes.len(), 2);
         assert!(t.nodes[1].secure && t.nodes[1].label.is_none());
         assert!(!f.touched(3), "child of a secure node must not be visited");
+    }
+
+    // ---- S2-14a: identity ----
+
+    fn first_of(f: &Fake, n: usize) -> &'static str {
+        f.log.iter().find(|e| e.0 == n).unwrap().1
+    }
+
+    #[test]
+    fn identity_is_never_asked_by_the_plain_walk() {
+        let mut f = sample();
+        walk_tree(&mut f, 0, "a".into(), &limits()).unwrap();
+        assert!(!f.log.iter().any(|e| e.1 == "identity"));
+    }
+
+    #[test]
+    fn identity_only_after_is_secure_false_and_only_for_emitted_nodes() {
+        let mut f = sample();
+        let (t, ids) = walk_tree_identified(&mut f, 0, "a".into(), &limits()).unwrap();
+        assert_eq!(ids.len(), t.nodes.len());
+        for i in 0..=4usize {
+            assert_eq!(first_of(&f, i), "secure", "is_secure first for {i}");
+        }
+        // Secure node 3 and the child behind it: never any identity.
+        assert!(!f.read(3, "identity") && !f.touched(6));
+        // The window root and the title-ish top-level group have no line; text and button do.
+        assert!(!f.read(0, "identity") && !f.read(1, "identity"));
+        for i in [2usize, 4] {
+            let pos_secure = f.log.iter().position(|e| *e == (i, "secure")).unwrap();
+            let pos_ident = f.log.iter().position(|e| *e == (i, "identity")).unwrap();
+            assert!(pos_secure < pos_ident);
+        }
+        assert!(
+            ids[0].is_none() && ids[3].is_none(),
+            "root and secure: no identity"
+        );
+        let id = ids[2].as_ref().unwrap();
+        assert_eq!(id.runtime_id, vec![2]);
+        assert_eq!(
+            id.label_hash,
+            hash_label(Some("l")),
+            "walker hashes the label it read"
+        );
+    }
+
+    #[test]
+    fn identity_never_for_title_ish_or_dropped_nodes_and_labels_stay_unread() {
+        // 0 window -> [1 webarea, 2 tab -> [3 button], 4 group(depth1), 5 nested window -> [6 text],
+        //              7 edit "Address and search bar", 8 button]
+        let mut addr = node(NodeRole::TextField, vec![]);
+        addr.editable = true;
+        addr.label = Some("Address and search bar");
+        let mut f = Fake {
+            nodes: vec![
+                node(NodeRole::Window, vec![1, 2, 4, 5, 7, 8]),
+                node(NodeRole::WebArea, vec![]),
+                node(NodeRole::Tab, vec![3]),
+                node(NodeRole::Button, vec![]),
+                node(NodeRole::Group, vec![]),
+                node(NodeRole::Window, vec![6]),
+                node(NodeRole::StaticText, vec![]),
+                addr,
+                node(NodeRole::Button, vec![]),
+            ],
+            ..Default::default()
+        };
+        let (_t, ids) = walk_tree_identified(&mut f, 0, "a".into(), &limits()).unwrap();
+        for i in [0usize, 1, 2, 3, 4, 5, 6, 7] {
+            assert!(!f.read(i, "identity"), "identity read for node {i}");
+        }
+        assert!(f.read(8, "identity"));
+        for i in [0usize, 1, 2, 4, 5] {
+            assert!(!f.read(i, "label"), "label read for title-ish node {i}");
+        }
+        assert_eq!(ids.iter().flatten().count(), 1);
+    }
+
+    #[test]
+    fn identity_failure_makes_the_node_unaddressable_not_the_read_fail() {
+        struct NoIdent(Fake);
+        impl TreeCursor for NoIdent {
+            type Node = usize;
+            fn is_secure(&mut self, n: &usize) -> Result<bool, FirewallError> {
+                self.0.is_secure(n)
+            }
+            fn rect(&mut self, n: &usize) -> Result<Option<Rect>, FirewallError> {
+                self.0.rect(n)
+            }
+            fn role(&mut self, n: &usize) -> Result<NodeRole, FirewallError> {
+                self.0.role(n)
+            }
+            fn is_editable(&mut self, n: &usize) -> Result<bool, FirewallError> {
+                self.0.is_editable(n)
+            }
+            fn has_value(&mut self, n: &usize) -> Result<bool, FirewallError> {
+                self.0.has_value(n)
+            }
+            fn label(&mut self, n: &usize) -> Result<Option<String>, FirewallError> {
+                self.0.label(n)
+            }
+            fn text_value(&mut self, n: &usize) -> Result<Option<String>, FirewallError> {
+                self.0.text_value(n)
+            }
+            fn children(&mut self, n: &usize) -> Result<Vec<usize>, FirewallError> {
+                self.0.children(n)
+            }
+            // identity: trait default = Err(Unsupported)
+        }
+        let mut c = NoIdent(sample());
+        let (t, ids) = walk_tree_identified(&mut c, 0, "a".into(), &limits()).unwrap();
+        assert_eq!(ids.len(), t.nodes.len());
+        assert!(ids.iter().all(Option::is_none));
     }
 }

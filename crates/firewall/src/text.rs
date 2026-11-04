@@ -30,6 +30,7 @@ use crate::scrub::{
     is_address_bar_label, is_browser_chrome_label, is_tab_strip_label, mark_count, scrub_links,
     toolbar_starts_with_tab,
 };
+use crate::sensitive::{payment_suspected, sensitive_label};
 
 /// Maximum emitted (numbered) nodes.
 pub const MAX_EMITTED_NODES: usize = 400;
@@ -74,7 +75,7 @@ pub enum NodeRole {
 }
 
 impl NodeRole {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             NodeRole::Window => "window",
             NodeRole::Button => "button",
@@ -251,7 +252,7 @@ pub enum TextVerdict {
 /// (no unicode tables): controls (Cc), line/paragraph separators, all common format characters
 /// (Cf), Unicode tag characters, variation selectors, invisible fillers/joiners, private-use
 /// areas and noncharacters. Unassigned code points are NOT covered (no table without a new dep).
-fn is_hostile_char(c: char) -> bool {
+pub(crate) fn is_hostile_char(c: char) -> bool {
     c.is_control()
         || matches!(
             c,
@@ -349,12 +350,60 @@ fn normalised(mut v: Vec<Rect>) -> Vec<Rect> {
     v
 }
 
+/// What `observe` additionally learns from the same pass: which tree node each `#n` is, and a
+/// few facts about it. Empty unless the verdict is `Clear`.
+#[derive(Default)]
+pub(crate) struct Indexed {
+    /// `emitted[n - 1]` describes line `#n`.
+    pub(crate) emitted: Vec<Emitted>,
+    pub(crate) payment_suspected: bool,
+}
+
+pub(crate) struct Emitted {
+    /// Index into `RawWindowTree::nodes`.
+    pub(crate) idx: usize,
+    pub(crate) role: NodeRole,
+    pub(crate) secure: bool,
+    pub(crate) editable: bool,
+    /// The cleaned label exactly as the screen text shows it.
+    pub(crate) label: Option<String>,
+    pub(crate) rect: Option<Rect>,
+    pub(crate) sensitive_label: bool,
+}
+
 /// Steps 4-11 of ADR 0002 A2 (pure). `record_rects` are the secure-field rects of the preflight
 /// record. Never returns anything derived from a secure node's content.
 pub(crate) fn redact_tree(
     tree: RawWindowTree,
     record_rects: &[Rect],
     deny: &dyn AppDenyPolicy,
+) -> TextVerdict {
+    redact_core(tree, record_rects, deny, None, &mut Indexed::default())
+}
+
+/// The SAME pass as [`redact_tree`] (`observe` must see exactly what `check_text` would), plus
+/// the emitted-node index map. `apps_line` (`"apps: a, b\n"`) is inserted after the `app:` header
+/// and counts against the character budget.
+pub(crate) fn redact_tree_indexed(
+    tree: RawWindowTree,
+    record_rects: &[Rect],
+    deny: &dyn AppDenyPolicy,
+    apps_line: Option<&str>,
+) -> (TextVerdict, Indexed) {
+    let mut idx = Indexed::default();
+    let v = redact_core(tree, record_rects, deny, apps_line, &mut idx);
+    if !matches!(v, TextVerdict::Clear(_)) {
+        idx = Indexed::default();
+    }
+    (v, idx)
+}
+
+fn redact_core(
+    tree: RawWindowTree,
+    record_rects: &[Rect],
+    deny: &dyn AppDenyPolicy,
+    apps_line: Option<&str>,
+    index: &mut Indexed,
 ) -> TextVerdict {
     let RawWindowTree {
         app_id,
@@ -498,9 +547,13 @@ pub(crate) fn redact_tree(
     }
     let opaque_area_permille = (opaque_area.saturating_mul(1000) / window_area).min(1000) as u16;
     let visible_nodes = kept.len() as u32;
+    index.payment_suspected = kept.iter().any(|kn| {
+        let n = &nodes[kn.idx];
+        !n.secure && node_texts(n).any(payment_suspected)
+    });
 
     // 8-10. Per-node redaction, sanitisation, caps.
-    let header = format!("app: {app}\n");
+    let header = format!("app: {app}\n{}", apps_line.unwrap_or(""));
     let budget = MAX_TEXT_CHARS - TRUNCATED_MARKER.chars().count() - 1;
     let mut text = header;
     let mut used = text.chars().count();
@@ -517,6 +570,15 @@ pub(crate) fn redact_tree(
             break;
         }
         rects.push(kn.clipped);
+        index.emitted.push(Emitted {
+            idx: kn.idx,
+            role: n.role,
+            secure: n.secure,
+            editable: n.editable || n.role == NodeRole::TextField,
+            label: (!n.secure).then(|| emitted_label(n)).flatten(),
+            rect: n.rect,
+            sensitive_label: !n.secure && node_texts(n).any(sensitive_label),
+        });
         text.push_str(&format!("#{} {}\n", rects.len(), body));
         used += line_len;
     }
@@ -539,6 +601,56 @@ pub(crate) fn redact_tree(
         coverage,
         secure_hidden,
     ))
+}
+
+/// The raw label / static value of a non-secure node, bounded, for the lexicons. Title roles
+/// carry no label (never read), so none is considered.
+fn node_texts(n: &RawTextNode) -> impl Iterator<Item = &str> {
+    let label = (!n.role.label_is_title())
+        .then_some(n.label.as_deref())
+        .flatten();
+    let value = matches!(n.role, NodeRole::StaticText | NodeRole::Heading)
+        .then_some(n.value.as_deref())
+        .flatten();
+    [label, value].into_iter().flatten().map(|t| {
+        // Bound the work; the lexicons are word lists, 2 KiB is plenty.
+        match t.char_indices().nth(MAX_SCRUB_INPUT_CHARS) {
+            Some((i, _)) => &t[..i],
+            None => t,
+        }
+    })
+}
+
+/// The cleaned label a target descriptor shows: exactly what the screen text shows for the node.
+fn emitted_label(n: &RawTextNode) -> Option<String> {
+    if n.role.label_is_title() {
+        return None;
+    }
+    let label = n
+        .label
+        .as_deref()
+        .map(|l| clean_scrubbed(l, MAX_LABEL_CHARS))
+        .unwrap_or_default();
+    let t = if matches!(n.role, NodeRole::StaticText | NodeRole::Heading) {
+        n.value
+            .as_deref()
+            .map(|v| clean_scrubbed(v, MAX_VALUE_CHARS))
+            .filter(|v| !v.is_empty())
+            .unwrap_or(label)
+    } else {
+        label
+    };
+    (!t.is_empty()).then_some(t)
+}
+
+/// True if the node will have a numbered line (ignoring geometry and caps). Used by the tree
+/// walker to decide whether identity is worth reading.
+#[cfg_attr(
+    not(any(test, target_os = "macos", target_os = "windows")),
+    allow(dead_code)
+)]
+pub(crate) fn has_body(n: &RawTextNode) -> bool {
+    node_body(n).is_some()
 }
 
 /// App ids are bundle ids / executable names, resolved by the platform source (basename of the
