@@ -18,6 +18,10 @@ const COMMANDS: &[&str] = &[
     "list_models",
     "start_download",
     "cancel_download",
+    "get_deny_list",
+    "add_deny_entry",
+    "remove_deny_entry",
+    "reset_deny_list_to_defaults",
 ];
 
 fn main() {

@@ -11,16 +11,18 @@ use buddy_core::Buddy;
 use tauri::AppHandle;
 
 pub fn start(app: &AppHandle, buddy: &Arc<Buddy>, config_dir: &Path) {
-    let deny = buddy_core::load_deny_list(config_dir);
-    for n in &deny.notices {
-        buddy.add_notice(n.clone());
-    }
+    // The deny list is owned by the core's editor from here on: it reports problems in the
+    // status notices itself and hands every turn the current list.
+    buddy.set_config_dir(config_dir.to_path_buf());
+    let deny = buddy
+        .current_deny()
+        .unwrap_or_else(|| Arc::new(buddy_core::DenyList::defaults()));
     // One keychain read, off the runtime workers, so the first turn does not block on it.
     let b = buddy.clone();
     drop(tauri::async_runtime::spawn_blocking(move || {
         b.prime_api_key_cache();
     }));
-    start_voice(app, buddy, deny.list);
+    start_voice(app, buddy, deny);
 }
 
 #[cfg(not(feature = "real-voice"))]
@@ -34,15 +36,15 @@ fn start_voice(_app: &AppHandle, buddy: &Arc<Buddy>, _deny: Arc<buddy_core::Deny
 fn start_voice(app: &AppHandle, buddy: &Arc<Buddy>, deny: Arc<buddy_core::DenyList>) {
     use buddy_core::api::SwapTarget;
     use buddy_core::real_voice;
-    use tauri::Manager;
-
-    let Ok(data_dir) = app.path().app_data_dir() else {
+    let _ = app;
+    if buddy.models_dir().is_none() {
         let msg = "Voice engines not started: the app data folder is unknown.";
         buddy.add_notice(msg.into());
         buddy.set_engine_unavailable("voice_unavailable", msg);
         return;
-    };
-    let dir = real_voice::models_dir(&data_dir);
+    }
+    // Follows the models-folder setting: a change reaches the next load and the next turn.
+    let dir = buddy.models_dir_cell();
     buddy.set_engine_unavailable("voice_loading", "Voice engines are still loading.");
     let providers = buddy.default_providers();
     let runtime = tauri::async_runtime::handle().inner().clone();
@@ -52,10 +54,10 @@ fn start_voice(app: &AppHandle, buddy: &Arc<Buddy>, deny: Arc<buddy_core::DenyLi
     // so startup is just the first swap (a missing model file arrives as an `engine_swap_failed`
     // event and a status notice naming the file; nothing is downloaded).
     std::thread::spawn(move || {
-        match real_voice::base_deps(&dir, deny, providers, runtime) {
+        match real_voice::base_deps(dir.clone(), deny, providers, runtime) {
             Ok(deps) => {
                 buddy.attach_engine(deps);
-                buddy.set_engine_loader(Arc::new(real_voice::RealLoader::new(dir)));
+                buddy.set_engine_loader(Arc::new(real_voice::RealLoader::shared(dir)));
                 if let Err(e) = buddy.request_engine_swap(SwapTarget::All) {
                     let msg = format!("Voice engines could not start ({e}).");
                     buddy.add_notice(msg.clone());

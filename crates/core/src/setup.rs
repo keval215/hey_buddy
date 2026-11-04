@@ -20,7 +20,7 @@ pub struct DenyListSetup {
 }
 
 /// Always shown: bank bundle ids / exe names are regional, so none are on the default list.
-pub const BANKING_NOTICE: &str = "Banking apps are not on the default deny list. Add yours by hand in deny_list.json in the config folder (\"add\": [\"app id\"]).";
+pub const BANKING_NOTICE: &str = "Banking apps are not on the default deny list. Add yours under \"Apps the buddy never looks at\" in Settings (the bundle id on macOS, the exe name on Windows).";
 
 /// Load `<config_dir>/deny_list.json` (defaults when missing). Problems are never silent: an
 /// unreadable or invalid file falls back to the defaults and says so, and defaults the user

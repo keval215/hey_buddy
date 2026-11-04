@@ -228,6 +228,11 @@ pub struct Settings {
     pub has_api_key: bool,
     /// Anthropic model id. Empty = cloud unavailable (no default on purpose).
     pub anthropic_model: String,
+    /// Custom models directory. Empty = the built-in default ([`Settings::default_models_dir`]).
+    pub models_dir: String,
+    /// The default models directory, for display (filled by `Buddy`; empty before the shell
+    /// has set it). Never persisted.
+    pub default_models_dir: String,
 }
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+Space";
@@ -243,6 +248,8 @@ impl Default for Settings {
             hotkey: DEFAULT_HOTKEY.into(),
             has_api_key: false,
             anthropic_model: String::new(),
+            models_dir: String::new(),
+            default_models_dir: String::new(),
         }
     }
 }
@@ -271,6 +278,97 @@ pub struct SettingsPatch {
     pub hotkey: Option<String>,
     #[ts(optional)]
     pub anthropic_model: Option<String>,
+    /// Custom models directory; an empty string goes back to the default.
+    #[ts(optional)]
+    pub models_dir: Option<String>,
+}
+
+/// Which setting an issue is about (`File` = the settings file itself).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SettingsField {
+    File,
+    Profile,
+    Hotkey,
+    AnthropicModel,
+    ModelsDir,
+}
+
+/// Why a value was not accepted. Fixed tokens; they never contain the rejected text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum IssueCode {
+    /// Not one of the known choices.
+    Unknown,
+    /// Hotkey without Ctrl, Alt or Super.
+    NeedsModifier,
+    /// Wrong shape (hotkey grammar, model id characters, forbidden path characters).
+    InvalidFormat,
+    TooLong,
+    /// Control, bidirectional-override or zero-width characters.
+    ControlChars,
+    NotAbsolute,
+    /// A `..` path component.
+    Traversal,
+    /// UNC, `\\?\` or `\\.\` paths.
+    NetworkPath,
+    /// A Windows device name such as `CON`.
+    DeviceName,
+    /// A drive root or a system directory.
+    SystemDir,
+    NotADirectory,
+    NotCreatable,
+    /// The path itself is a symbolic link.
+    Symlink,
+    /// The OS refused the shortcut (taken by another app).
+    Unavailable,
+    /// The settings file could not be read; defaults are in use.
+    Corrupt,
+}
+
+/// One rejected or replaced setting. The UI turns it into text; the value is not echoed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SettingsIssue {
+    pub field: SettingsField,
+    pub code: IssueCode,
+}
+
+/// Result of `update_settings`: what is stored now plus every value that was not accepted
+/// (those fell back to the safest value).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SettingsResult {
+    pub settings: Settings,
+    pub issues: Vec<SettingsIssue>,
+    /// The models directory changed: refresh the models table and request an engine swap.
+    pub models_dir_changed: bool,
+}
+
+/// One effective deny-list entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DenyEntryDto {
+    pub id: String,
+    /// On the built-in list (removing it needs a confirm); otherwise added by the user.
+    pub builtin: bool,
+}
+
+/// The deny-list editor's view (`get_deny_list` and the result of every edit).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DenyListDto {
+    /// Everything that is denied, sorted.
+    pub entries: Vec<DenyEntryDto>,
+    /// Built-in entries the user removed (they can be added back).
+    pub removed_defaults: Vec<String>,
+    /// Always shown: banking apps are not on the default list.
+    pub banking_notice: String,
+    /// Fixed token when `deny_list.json` was unreadable, invalid or would have left the list
+    /// empty (`unreadable`, `invalid`, `would_be_empty`); the built-in list is in use.
+    pub load_issue: Option<String>,
 }
 
 /// Where a request goes.
@@ -346,6 +444,8 @@ pub struct Status {
     pub hotkey_registered: bool,
     /// Fixed token when the settings file was unreadable and defaults are in use.
     pub settings_error: Option<String>,
+    /// Stored values replaced at startup (e.g. a models folder that is gone).
+    pub settings_issues: Vec<SettingsIssue>,
     /// Fixed, display-only notes: voice engines not built, a missing model file (id and the
     /// expected path), deny-list problems, apps removed from the default deny list. Never
     /// transcripts, replies or screen text.

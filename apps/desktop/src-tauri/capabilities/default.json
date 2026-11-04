@@ -18,6 +18,10 @@
     "allow-clear-api-key",
     "allow-list-models",
     "allow-start-download",
-    "allow-cancel-download"
+    "allow-cancel-download",
+    "allow-get-deny-list",
+    "allow-add-deny-entry",
+    "allow-remove-deny-entry",
+    "allow-reset-deny-list-to-defaults"
   ]
 }

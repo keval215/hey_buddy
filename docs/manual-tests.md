@@ -382,6 +382,35 @@ title, a bookmark named `MARKER_BOOKMARK_55`, and download a file named `MARKER_
 - [ ] Screenshots (VisionMode Auto / Always): the title bar, tabs and address bar are visible in the
       image until S4-4; check that cloud requests show the image in the preview panel first.
 
+## Settings (S2-7) - UNTESTED on this machine (Windows, real app)
+
+Logic is unit-tested in core (validation tables, fallbacks, deny-list editor, capability files)
+and in vitest; nothing below has been run in the real window. Open Settings from the tray.
+
+Settings and fallbacks (after each Save the page shows what was NOT saved, in plain words):
+- [ ] Profile: switch `default` <-> `low-memory`. On low-memory the Vision select is disabled, shows Off and says why; switching back restores your earlier choice. The voice engines reload (status lines).
+- [ ] Vision: Off / Auto / Always change and persist after a restart (default profile).
+- [ ] Hotkey: change to `Ctrl+Shift+K`; it works at once and after a restart. Then try each of `Space`, `Shift+A`, `Ctrl`, `Ctrl+Ctrl+A`, `Ctrl+F25`: while typing a hint appears; after Save: "Your hotkey '...' was not saved: needs Ctrl/Alt/Super" (or the format hint) and the DEFAULT `Ctrl+Alt+Space` is in the box and works.
+- [ ] Hotkey taken by another app (for example a shortcut another tool already registered): Save reports "another app is already using that shortcut" and the previous hotkey keeps working.
+- [ ] Models folder: empty shows the default path as placeholder and in the text below. Set `D:\hey-models` (create it or let it be creatable): the Models table re-reads (rows now Missing, or Ready if you copied models there) and the engines reload from it (engine status lines; a missing file names the new path). Set it back to empty: default again.
+- [ ] Models folder, invalid: each of `models`, `C:models`, `C:\a\..\b`, `\\host\share`, `C:\CON`, `C:\`, `C:\Windows\x`, a path to a file, a path with a hidden control or right-to-left character: Save says "was not saved" with the reason and the folder is the default. Nothing is created by just saving.
+- [ ] Local only: turn OFF shows the amber explanation that every cloud request still shows a preview and needs your Send; turn ON again hides it. Provider/model id/key: the line under the model id lists what cloud still needs (Anthropic, Local only off, model id, key).
+- [ ] Model id with a space or `/`: not saved, cloud stays unavailable, message names the reason.
+- [ ] Key set/clear and the last-request viewer still work (unchanged).
+- [ ] Corrupt `settings.json` (put `{not json` in it, restart): defaults, Local only on, a red "settings file could not be read" line; the next Save heals it.
+- [ ] `settings.json` never contains an API key (open it and look).
+
+Deny-list editor ("Apps the buddy never looks at"):
+- [ ] Defaults are listed with a `built-in` tag; the banking notice is shown.
+- [ ] Add `Chrome.EXE` (shows as `chrome.exe`, under "Added by you"). Next push-to-talk with Chrome in front: nothing from the screen is read/sent and the spoken explanation says the app is protected. Remove it: the next request reads Chrome again.
+- [ ] Invalid ids (`my app`, `a/b`, 129 characters, empty) cannot be added (button disabled, reason shown).
+- [ ] Removing a built-in (for example `cmd.exe`) asks "Stop protecting this app?" first; "Keep it" changes nothing; "Yes, remove it" removes it, the notice "You removed 1 built-in app" appears and the Status notices list it.
+- [ ] Remove built-ins one by one down to the last entry: the last one cannot be removed ("The list can never be empty") unless you added your own app first.
+- [ ] "Restore built-in apps" asks for a confirm, then brings all removed built-ins back; your own additions stay.
+- [ ] With a cloud preview panel open (Anthropic, Local only off), change the deny list in Settings: the preview closes and nothing is sent.
+- [ ] `deny_list.json` in the config folder is `{"add": [...], "remove": [...]}`; corrupt it by hand and restart: built-in list in use and a red line says so; the first edit rewrites it.
+- [ ] The preview and overlay windows cannot call the deny-list commands (devtools: `invoke("get_deny_list")` from the preview window is refused).
+
 ## Step 2 packaging note
 
 - [ ] macOS bundled builds (not `tauri dev`) need an `Info.plist` with

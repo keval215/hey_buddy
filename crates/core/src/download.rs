@@ -45,6 +45,10 @@ pub fn models_dir(app_data_dir: &Path) -> PathBuf {
     }
 }
 
+/// The models directory as the engine loaders see it: shared, so a change in the settings
+/// reaches the next load without rebuilding the loaders.
+pub type SharedDir = Arc<Mutex<PathBuf>>;
+
 /// Bytes the server may send beyond the declared `size_bytes`.
 pub const SIZE_SLACK: u64 = 1 << 20;
 /// Ceiling when the registry declares no size.

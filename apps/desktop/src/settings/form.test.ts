@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { Settings } from "../ipc/Settings";
+import type { SettingsIssue } from "../ipc/SettingsIssue";
 import {
+  DEFAULT_HOTKEY,
+  LOCAL_ONLY_OFF_NOTE,
   applySwap,
   buildPatch,
+  cloudMissing,
+  hotkeyHint,
+  hotkeyProblem,
+  issueText,
+  shownValue,
+  visionNote,
   errorText,
   isEmptyPatch,
   keyErrorText,
@@ -22,6 +31,8 @@ const base: Settings = {
   has_api_key: false,
   provider: "Ollama",
   anthropic_model: "",
+  models_dir: "",
+  default_models_dir: "C:\\Users\\me\\AppData\\models",
 };
 
 describe("buildPatch", () => {
@@ -112,5 +123,103 @@ describe("engine swap status", () => {
     expect(swapErrorText("loader_unavailable")).toContain("not built");
     expect(swapErrorText("invalid_model")).toContain("no valid");
     expect(swapErrorText("zzz")).toBe("zzz");
+  });
+});
+
+describe("models folder in the patch", () => {
+  it("sends a trimmed folder only when changed, and empty to reset", () => {
+    expect(buildPatch(base, { ...base, models_dir: " D:\\models " })).toEqual({
+      models_dir: "D:\\models",
+    });
+    const cur = { ...base, models_dir: "D:\\models" };
+    expect(buildPatch(cur, { ...cur, models_dir: "" })).toEqual({ models_dir: "" });
+    expect(isEmptyPatch(buildPatch(cur, { ...cur }))).toBe(true);
+    expect(isEmptyPatch(buildPatch(base, { ...base, default_models_dir: "elsewhere" }))).toBe(true);
+  });
+  it("a changed folder (from the core's answer) needs an engine swap", () => {
+    expect(needsEngineSwap({ models_dir: "D:\\m" }, true)).toBe(true);
+    expect(needsEngineSwap({ models_dir: "D:\\m" }, false)).toBe(false);
+    expect(needsEngineSwap({ profile: "low-memory" }, false)).toBe(true);
+  });
+});
+
+describe("hotkeyProblem", () => {
+  it("accepts chords with Ctrl, Alt or Super", () => {
+    for (const ok of ["Ctrl+Alt+Space", "alt+k", "Super+1", "cmd+shift+f12", " Ctrl + A "]) {
+      expect(hotkeyProblem(ok), ok).toBeNull();
+    }
+  });
+  it("explains why a chord is invalid", () => {
+    expect(hotkeyProblem("Space")).toBe("needs_modifier");
+    expect(hotkeyProblem("Shift+A")).toBe("needs_modifier");
+    expect(hotkeyProblem("Ctrl")).toBe("invalid_format");
+    expect(hotkeyProblem("")).toBe("invalid_format");
+    expect(hotkeyProblem("Ctrl+Ctrl+A")).toBe("invalid_format");
+    expect(hotkeyProblem("Ctrl+F25")).toBe("invalid_format");
+    expect(hotkeyProblem("Ctrl+A+B")).toBe("invalid_format");
+    expect(hotkeyProblem("Ctrl+\u202eA")).toBe("control_chars");
+    expect(hotkeyProblem("Ctrl+A\u0000")).toBe("control_chars");
+    expect(hotkeyProblem(`Ctrl+${"a".repeat(10_240)}`)).toBe("too_long");
+    expect(hotkeyHint("needs_modifier")).toMatch(/Ctrl\/Alt\/Super/);
+    expect(hotkeyHint("invalid_format")).toMatch(/for example Ctrl\+Alt\+Space/);
+  });
+});
+
+describe("issue rendering", () => {
+  const issue = (field: SettingsIssue["field"], code: SettingsIssue["code"]): SettingsIssue => ({
+    field,
+    code,
+  });
+  it("says what was not saved and why, with the user's own text", () => {
+    expect(issueText(issue("hotkey", "needs_modifier"), { hotkey: "Space" })).toBe(
+      `Your hotkey 'Space' was not saved: needs Ctrl/Alt/Super. Using the default (${DEFAULT_HOTKEY}).`,
+    );
+    const m = issueText(issue("models_dir", "traversal"), { models_dir: "C:\\a\\..\\b" });
+    expect(m).toContain("C:\\a\\..\\b");
+    expect(m).toContain("must not contain '..'");
+    expect(m).toContain("default folder");
+    expect(issueText(issue("anthropic_model", "invalid_format"), { anthropic_model: "a b" })).toMatch(
+      /Cloud stays unavailable/,
+    );
+    expect(issueText(issue("profile", "unknown"))).toMatch(/default profile/);
+    expect(issueText(issue("file", "corrupt"))).toMatch(/default settings/);
+  });
+  it("does not invent text when the attempted value is unknown", () => {
+    expect(issueText(issue("hotkey", "unavailable"))).toMatch(/^The saved hotkey was not saved/);
+    expect(issueText(issue("models_dir", "not_a_directory"))).not.toContain("'");
+  });
+  it("shows hostile input safely", () => {
+    expect(shownValue("a\u202eb\u0000c\nd")).toBe("abcd");
+    expect(shownValue("x".repeat(10_240))).toHaveLength(41);
+    const t = issueText(issue("hotkey", "control_chars"), { hotkey: "\u202egnp" });
+    expect(t).not.toContain("\u202e");
+  });
+});
+
+describe("explanations", () => {
+  it("local-only off still promises the preview", () => {
+    expect(LOCAL_ONLY_OFF_NOTE).toMatch(/preview|shows you exactly/);
+    expect(LOCAL_ONLY_OFF_NOTE).toMatch(/Send/);
+  });
+  it("vision note only for low-memory", () => {
+    expect(visionNote("low-memory")).toMatch(/Off/);
+    expect(visionNote("default")).toBeNull();
+  });
+  it("lists what cloud still needs", () => {
+    expect(cloudMissing(base)).toEqual([
+      "choose Anthropic as the language model",
+      "turn off Local only",
+      "set a model id",
+      "store an API key",
+    ]);
+    expect(
+      cloudMissing({
+        ...base,
+        provider: "Anthropic",
+        local_only: false,
+        anthropic_model: "m",
+        has_api_key: true,
+      }),
+    ).toEqual([]);
   });
 });

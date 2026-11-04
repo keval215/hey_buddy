@@ -23,6 +23,16 @@ architecture decisions.
 4. Swappable parts behind small traits.
 5. Clean licensing (Apache-2.0 project; permissive dependencies only).
 
+## Settings
+
+Everything is set in the Settings window (tray icon): profile, vision, push-to-talk hotkey, the
+models folder, Local only, the language model and an Anthropic key (kept in the OS keychain,
+never in a file), and a list of apps the buddy never looks at. No file editing is needed. Every
+value is checked by the core; a value that is not acceptable is not saved, the safest value is
+used instead (Local only, the default hotkey and models folder) and the window says why. Turning
+Local only off never skips the preview: each cloud request still needs your Send. There is no
+setting that turns off the privacy firewall, redaction, the preview or push-to-talk.
+
 ## Development
 
 ```

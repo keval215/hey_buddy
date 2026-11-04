@@ -25,7 +25,14 @@ import { swapErrorText } from "../settings/form";
  * Models table. Nothing downloads without a click on a button here; a model whose checksum is
  * unknown needs a second, separate confirm. All transfers happen in the Rust core.
  */
-export function ModelsPanel({ profile }: { profile: string }) {
+export function ModelsPanel({
+  profile,
+  refreshKey = 0,
+}: {
+  profile: string;
+  /** Bump to re-read the table (the models folder changed). */
+  refreshKey?: number;
+}) {
   const [rows, setRows] = useState<ModelRow[]>([]);
   const [view, setView] = useState<DownloadView>(emptyView);
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -36,8 +43,8 @@ export function ModelsPanel({ profile }: { profile: string }) {
     [],
   );
 
-  // The profile decides which rows offer "Load now": reload when it changes.
-  useEffect(refresh, [refresh, profile]);
+  // The profile decides which rows offer "Load now"; a new models folder changes every row.
+  useEffect(refresh, [refresh, profile, refreshKey]);
 
   useEffect(() => {
     const un = [

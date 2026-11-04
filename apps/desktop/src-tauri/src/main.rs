@@ -58,6 +58,10 @@ fn main() {
         commands::list_models,
         commands::start_download,
         commands::cancel_download,
+        commands::get_deny_list,
+        commands::add_deny_entry,
+        commands::remove_deny_entry,
+        commands::reset_deny_list_to_defaults,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -75,6 +79,10 @@ fn main() {
         commands::list_models,
         commands::start_download,
         commands::cancel_download,
+        commands::get_deny_list,
+        commands::add_deny_entry,
+        commands::remove_deny_entry,
+        commands::reset_deny_list_to_defaults,
     ]);
 
     builder

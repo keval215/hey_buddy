@@ -3,11 +3,13 @@
 pub mod api;
 pub mod buddy;
 pub mod consent;
+pub mod deny_edit;
 pub mod download;
 pub mod engine_slot;
 pub mod error;
 pub mod events;
 pub mod leakguard;
+pub mod models_path;
 pub mod point;
 pub mod prompt;
 pub mod providers;

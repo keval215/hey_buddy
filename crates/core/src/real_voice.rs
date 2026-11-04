@@ -26,7 +26,7 @@ use crate::engine_slot::{EngineLoader, SwapFailure, TOKEN_LOAD_FAILED};
 use crate::settings::builtin_registry;
 use crate::turn::VadFactory;
 
-pub use crate::download::{models_dir, MODELS_DIR_ENV};
+pub use crate::download::{models_dir, SharedDir, MODELS_DIR_ENV};
 
 /// One expected model that is not on disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,12 +85,21 @@ pub fn missing_models(profile: &str, dir: &Path) -> Vec<MissingModel> {
 /// Builds the swappable engines from the models directory (`request_engine_swap`, ticket
 /// S2-2). Startup load is just the first swap. Slow: runs on the swap thread.
 pub struct RealLoader {
-    dir: PathBuf,
+    dir: SharedDir,
 }
 
 impl RealLoader {
     pub fn new(dir: PathBuf) -> Self {
+        Self::shared(Arc::new(std::sync::Mutex::new(dir)))
+    }
+
+    /// A loader that follows the models directory setting (S2-7).
+    pub fn shared(dir: SharedDir) -> Self {
         Self { dir }
+    }
+
+    fn dir(&self) -> PathBuf {
+        self.dir.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
 }
 
@@ -104,7 +113,7 @@ fn failure(e: &VoiceError) -> SwapFailure {
 
 impl EngineLoader for RealLoader {
     fn load_stt(&self, model_id: &str) -> Result<Arc<dyn SttProvider>, SwapFailure> {
-        let stt = WhisperStt::from_registry(builtin_registry(), model_id, &self.dir)
+        let stt = WhisperStt::from_registry(builtin_registry(), model_id, &self.dir())
             .map_err(|e| failure(&e))?;
         Ok(Arc::new(stt))
     }
@@ -115,7 +124,7 @@ impl EngineLoader for RealLoader {
             return Err(SwapFailure::new(TOKEN_LOAD_FAILED));
         }
         let tts =
-            tts_phonon::from_registry(builtin_registry(), &self.dir).map_err(|e| failure(&e))?;
+            tts_phonon::from_registry(builtin_registry(), &self.dir()).map_err(|e| failure(&e))?;
         Ok(Arc::new(tts))
     }
 }
@@ -125,7 +134,7 @@ impl EngineLoader for RealLoader {
 /// are loaded into the slots with `Buddy::request_engine_swap`. Slow (loads the VAD): call off
 /// the UI thread.
 pub fn base_deps(
-    dir: &Path,
+    dir: SharedDir,
     deny: Arc<capture::DenyList>,
     providers: Arc<dyn crate::turn::ProviderSource>,
     runtime: tokio::runtime::Handle,
@@ -134,13 +143,14 @@ pub fn base_deps(
     let vad_model = vad_id(reg);
     // Load once now so a missing file or onnxruntime library is reported at startup; each
     // turn gets a fresh detector (it keeps per-utterance state).
-    drop(SileroVad::from_registry(reg, &vad_model, dir)?);
-    let dir = dir.to_path_buf();
+    let current = || dir.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    drop(SileroVad::from_registry(reg, &vad_model, &current())?);
     let vad: VadFactory = Arc::new(move || {
+        let now = dir.lock().unwrap_or_else(|p| p.into_inner()).clone();
         Ok(Box::new(SileroVad::from_registry(
             builtin_registry(),
             &vad_model,
-            &dir,
+            &now,
         )?) as Box<dyn Vad>)
     });
     Ok(crate::turn::EngineDeps {

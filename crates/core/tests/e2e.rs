@@ -1073,6 +1073,32 @@ async fn windows_deny_list_fallback_captures_the_foreground_window_and_still_goe
     assert_eq!((pts[0].x, pts[0].y), (300, 150));
 }
 
+#[tokio::test]
+async fn a_deny_list_edit_applies_to_the_next_turn_only() {
+    // S2-7: the editor's list replaces the engine's own at the start of each turn.
+    let r = rig(Opts::default());
+    r.buddy.set_config_dir(r._dir.path().join("cfg"));
+    r.turn().await;
+    let first = String::from_utf8_lossy(&r.ollama.calls()[0].body).to_string();
+    assert!(first.contains("Sign in"), "the app is not denied yet");
+
+    r.buddy.add_deny_entry("Com.Example.Browser").unwrap();
+    r.turn().await;
+    let calls = r.ollama.calls();
+    assert_eq!(calls.len(), 2);
+    let second = String::from_utf8_lossy(&calls[1].body).to_string();
+    assert!(!second.contains("Sign in"), "denied app: no screen text");
+    assert!(r.tts_text().contains(r.explanation(NotShared::DeniedApp)));
+
+    // Removing the user entry brings the screen back for the turn after that.
+    r.buddy
+        .remove_deny_entry("com.example.browser", false)
+        .unwrap();
+    r.turn().await;
+    let third = String::from_utf8_lossy(&r.ollama.calls()[2].body).to_string();
+    assert!(third.contains("Sign in"));
+}
+
 // ================================================================== voice only
 
 #[tokio::test]

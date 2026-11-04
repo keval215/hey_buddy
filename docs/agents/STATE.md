@@ -44,7 +44,7 @@ Gate G1 before any 2B coding: [ ] Step 1 PR CI green (Linux+Windows; macOS defer
 | S2-4 | Model download screen | DONE | 2 | round 1 MAJOR: unverified marker written after rename (fail-open) fixed; follow-ups: registry has NO real urls/sha256/size_bytes/files lists yet (user to supply verified values; phonon-31m + kokoro need `files` lists); real_voice notice could point to Models table |
 | S2-5 | Title and URL leak hardening | DONE | 2 | code approved round 1; round 2 doc/test-only fixes accepted by orch (coder ran e2e x5); follow-up: S4-4 blacks out chrome + caption band in images; English-only lexicons documented |
 | S2-6 | Real hardware bench and CI | BLOCKED | 0 | needs user's bench JSON; CI = Linux+Windows (D-005) |
-| S2-7 | Settings polish | IN PROGRESS | 0 |  |
+| S2-7 | Settings polish | DONE | 1 | follow-ups -> S4-8: core-side confirm gap when hand-edited deny file has built-in in both add+remove; rate-limit/OS confirm for built-in removals (compromised settings webview); invalid hotkey resets to default even if a good custom one existed; `mnt`/`media` in HOME_PARENTS; stale download events after models-dir switch; document models_dir > HEY_BUDDY_MODELS_DIR precedence |
 | S2-8 | [ARCH] Agent engine and approval model -> ADR 0003 | ARCH-PENDING | 0 | ADR 0003 DRAFT written (PROPOSED, docs/adr/0003-agent-engine-and-approvals.md); waiting on user approval + 5 open questions; tier table needs separate sign-off |
 | S2-9 | [ARCH] Desktop driver and observation -> ADR 0004 | ARCH-PENDING | 0 | ADR 0004 DRAFT written (PROPOSED, docs/adr/0004-desktop-driver.md); waiting on user approval + 5 open questions (§18) |
 | S2-10 | Harness server crate | TODO | 0 | after G1 |
@@ -87,6 +87,9 @@ Branches: step2a/hardening -> step2b/agent-harness -> step3/packaging -> step4/f
 | S4-9 | Deterministic fuzz suite in CI | TODO | 0 |  |
 | S4-10 | Step 4 exit test + checklist | TODO | 0 |  |
 
+## 2B execution order (dependency-driven, branch step2b/agent-harness)
+S2-14b action crate -> S2-14a firewall observe/revalidate -> S2-11 policy gate -> S2-12 audit -> S2-13 kill switch -> S2-14c driver+fake -> S2-14d WinActuator (cfg) -> S2-10 protocol/sandbox -> S2-15 engine adapter -> S2-16 approval UI -> S2-17 plan/injection -> S2-18 -> S2-19 -> S2-20 -> S2-21 -> S2-22 red-team -> S2-23 e2e wiring. Gate G1 items are satisfied provisionally by D-006/D-007/D-008 (user absent).
+
 ## Provisional decisions (pending user review)
 D-006 ADR 0003 (agent engine/tiers/approvals), D-007 ADR 0004 (desktop driver), ADR 0005/0006 when drafted. Tier defaults per D-006.
 
@@ -97,7 +100,7 @@ S2-1 Windows findings; S2-6 bench JSON; registry urls/sha256/files (S3-5); Windo
 1. Step 1 exit test (`docs/manual-tests.md` Exit test) 2. 2A: engine swap, Kokoro samples, model download (needs real registry values), title/URL leak checks 3. 2B: observe mode, approvals, kill switch, red-team 4. Step 3: install, wizard, update check (fake) 5. Step 4: OCR/PII image checks, lock/auth signals. Then read provisional ADRs 0003-0006, open the draft PRs.
 
 ## In progress
-S2-7 (coder, branch step2a/hardening); ADR 0003 + 0004 drafted, waiting on user
+2B starting: S2-14b (branch step2b/agent-harness); ADR 0003 + 0004 drafted, waiting on user
 
 ## Blockers / waiting on user
 - ADR 0003 (S2-8) + ADR 0004 (S2-9): read, answer their open questions (5 each), approve; plus tier table sign-off (ADR 0003 §5) = Gate G1 items

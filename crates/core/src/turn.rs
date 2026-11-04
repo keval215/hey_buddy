@@ -79,6 +79,7 @@ pub trait ProviderSource: Send + Sync {
 ///
 /// STT and TTS are NOT in here: they live in swappable [`crate::engine_slot::EngineSlot`]s on
 /// `Buddy`, and each turn takes its engines from them at its start.
+#[derive(Clone)]
 pub struct EngineDeps {
     pub firewall: Arc<dyn Firewall>,
     pub deny: Arc<DenyList>,

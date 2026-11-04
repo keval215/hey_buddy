@@ -15,7 +15,9 @@ import type { SwapTarget } from "../ipc/SwapTarget";
 import type { DisplayDto } from "../ipc/DisplayDto";
 import type { FirewallStatus } from "../ipc/FirewallStatus";
 import type { PointEvent } from "../ipc/PointEvent";
+import type { DenyListDto } from "../ipc/DenyListDto";
 import type { Settings } from "../ipc/Settings";
+import type { SettingsResult } from "../ipc/SettingsResult";
 import type { SettingsPatch } from "../ipc/SettingsPatch";
 import type { Status } from "../ipc/Status";
 import type { TurnError } from "../ipc/TurnError";
@@ -72,7 +74,16 @@ export function onThisWindow<K extends keyof EventMap>(
 export const api = {
   getStatus: () => invoke<Status>("get_status"),
   getSettings: () => invoke<Settings>("get_settings"),
-  updateSettings: (patch: SettingsPatch) => invoke<Settings>("update_settings", { patch }),
+  /** Invalid values fall back to the safest value and come back as `issues`. */
+  updateSettings: (patch: SettingsPatch) => invoke<SettingsResult>("update_settings", { patch }),
+  /** Settings window only. Deny-list editor; every change applies from the next turn. */
+  getDenyList: () => invoke<DenyListDto>("get_deny_list"),
+  addDenyEntry: (id: string) => invoke<DenyListDto>("add_deny_entry", { id }),
+  /** A built-in entry is only removed with `confirmRemoveDefault` (after the UI's second step). */
+  removeDenyEntry: (id: string, confirmRemoveDefault = false) =>
+    invoke<DenyListDto>("remove_deny_entry", { id, confirmRemoveDefault }),
+  resetDenyListToDefaults: (confirm: boolean) =>
+    invoke<DenyListDto>("reset_deny_list_to_defaults", { confirm }),
   /** Settings window only. Loads the current profile's voice engines in the background; progress arrives as engine_swap_* events. */
   requestEngineSwap: (slot: SwapTarget = "all") => invoke<void>("request_engine_swap", { slot }),
   /** Settings window only. The models table; reads the local filesystem, never the network. */
