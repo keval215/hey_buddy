@@ -24,3 +24,4 @@ Format: `- L-000 <area>: <lesson> (from T<n>)`
 - L-017 deps: crates.io `agent-desktop` (0.1.3, MIT, owner crowecawcaw) is NOT vercel-labs/agent-desktop (Apache-2.0, git-only, MSRV 1.89). Check owner + repository before adding any crate with a well-known name. (S2-9)
 - L-018 arch: capabilities (ApprovedAction, LiveTarget, Observation) are sealed types with pub(crate) constructors; anything holding a live OS handle is !Send and borrows from the observation that produced it. (S2-9)
 - L-019 git: never `git add -A` while a coder is running in the same worktree; commit specific paths. (S2-2)
+- L-021 (repeat of L-014) python: do NOT write open(f,'w').write(...open(f).read()...) in any form, including inside conditional expressions; read to a variable first. HANDOFFS.md was truncated a second time and restored from git. (orch)
