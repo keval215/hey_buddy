@@ -86,6 +86,18 @@ struct Inner {
     hotkey_registered: bool,
     /// The kill-switch shortcut (or another kill trigger) is registered with the OS.
     kill_hotkey_registered: bool,
+    /// The wizard's microphone check holds the microphone. A hotkey press during it is refused
+    /// (set and checked under the same lock as `phase`, so the two cannot interleave).
+    mic_probing: bool,
+}
+
+/// Clears `Inner::mic_probing` when the wizard's microphone check ends, however it ends.
+struct MicProbeGuard<'a>(&'a Mutex<Inner>);
+
+impl Drop for MicProbeGuard<'_> {
+    fn drop(&mut self) {
+        lock(self.0).mic_probing = false;
+    }
 }
 
 /// Why `request_engine_swap` refused. Fixed tokens (the `Display` text), no content.
@@ -247,6 +259,7 @@ impl Buddy {
                 firewall: FirewallStatus::default(),
                 hotkey_registered: false,
                 kill_hotkey_registered: false,
+                mic_probing: false,
             }),
             capture: Arc::from(capture),
             store,
@@ -766,7 +779,8 @@ impl Buddy {
         let current = lock(&self.settings).wizard();
         let t = transition(&current, ev);
         if t.apply_safe_defaults {
-            self.update_settings(&safe_defaults_patch())
+            let now = self.get_settings();
+            self.update_settings(&safe_defaults_patch(&now))
                 .map_err(|_| WizardError::Io)?;
         }
         if t.state != current {
@@ -814,9 +828,16 @@ impl Buddy {
     /// level. Refused while a voice turn runs (the microphone is in use).
     pub async fn wizard_probe_mic(&self) -> Result<MicProbeDto, WizardError> {
         self.require_step(WizardStep::Microphone)?;
-        if lock(&self.inner).phase != Phase::Idle {
-            return Err(WizardError::Busy);
-        }
+        // Claim the microphone atomically with the idle check; a push-to-talk press while the
+        // check runs is refused (see `on_hotkey_pressed`).
+        let _guard = {
+            let mut i = lock(&self.inner);
+            if i.phase != Phase::Idle || i.mic_probing {
+                return Err(WizardError::Busy);
+            }
+            i.mic_probing = true;
+            MicProbeGuard(&self.inner)
+        };
         let probe: Arc<dyn MicProbe> = match lock(&self.wizard_probes).mic.clone() {
             Some(p) => p,
             None => match self.engine_deps() {
@@ -1005,6 +1026,14 @@ impl Buddy {
             if i.phase == Phase::Listening {
                 return;
             }
+            if i.mic_probing {
+                drop(i);
+                sink.error(simple_turn_error(
+                    "busy",
+                    "The microphone is being tested. Try again in a moment.",
+                ));
+                return;
+            }
         }
         if let Some(old) = self.cancel_current() {
             sink.turn_state(old);
@@ -1025,6 +1054,16 @@ impl Buddy {
         self.consent.cancel_all();
         let ev = {
             let mut i = lock(&self.inner);
+            if i.mic_probing {
+                // The microphone check started after the test above.
+                drop(i);
+                self.engines_idle();
+                sink.error(simple_turn_error(
+                    "busy",
+                    "The microphone is being tested. Try again in a moment.",
+                ));
+                return;
+            }
             i.turn_id = i.turn_id.wrapping_add(1);
             i.phase = Phase::Listening;
             let turn_id = i.turn_id;

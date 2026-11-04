@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::api::{SettingsPatch, VisionMode};
+use crate::api::{Settings, SettingsPatch, VisionMode};
 use crate::settings::model_id_issue;
 
 /// The wizard's steps, in order.
@@ -212,11 +212,13 @@ impl WizardState {
     pub fn is_valid(&self) -> bool {
         let mut seen = Vec::new();
         for s in &self.skipped_steps {
-            if !s.can_skip() || seen.contains(s) {
+            // Only steps already passed can have been skipped.
+            if !s.can_skip() || seen.contains(s) || s.index() >= self.step.index() {
                 return false;
             }
             seen.push(*s);
         }
+        // Done with `completed: false` is legitimate (the final screen before Finish is clicked).
         if self.completed && self.step != WizardStep::Done {
             return false;
         }
@@ -299,14 +301,16 @@ pub struct Transition {
     pub apply_safe_defaults: bool,
 }
 
-/// The only settings change the wizard can make. It contains safe values only: local-only ON,
-/// observe mode ON, vision Auto (still forced Off on `low-memory`), agent and agent mode OFF.
+/// The only settings change the wizard can make, and it only ever tightens (D-008): local-only
+/// ON, observe mode ON, agent and agent mode OFF, vision Always -> Auto. Vision that is already
+/// Off or Auto is left alone (the patch says nothing about it), so a user's stricter choice (Off,
+/// or Off forced by `low-memory`) is never loosened. `current` is the effective settings.
 /// The deny list is shown, never edited, by the wizard.
-pub fn safe_defaults_patch() -> SettingsPatch {
+pub fn safe_defaults_patch(current: &Settings) -> SettingsPatch {
     SettingsPatch {
         local_only: Some(true),
         observe_mode: Some(true),
-        vision_mode: Some(VisionMode::Auto),
+        vision_mode: (current.vision_mode == VisionMode::Always).then_some(VisionMode::Auto),
         agent_enabled: Some(false),
         agent_mode: Some(false),
         ..Default::default()
@@ -348,7 +352,12 @@ pub fn transition(state: &WizardState, ev: &WizardEvent) -> Transition {
             }
         },
         WizardEvent::Back => match (state.step.prev(), state.completed) {
-            (Some(p), false) => moved(state.clone().with_step(p)),
+            (Some(p), false) => {
+                // Steps from here on are not "passed" any more: their skip marks go.
+                let mut st = state.clone().with_step(p);
+                st.skipped_steps.retain(|x| x.index() < p.index());
+                moved(st)
+            }
             _ => stay(state),
         },
         WizardEvent::Skip => {

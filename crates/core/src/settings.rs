@@ -325,12 +325,17 @@ impl SettingsStore {
                         let (mut clean, issues) = s.sanitize(None);
                         // A wizard entry we do not understand means the file was edited or
                         // damaged: the wizard starts over AND the protections go back to their
-                        // safe values (fail closed; never the other way round).
-                        if wizard_entry_invalid(&bytes) {
+                        // safe values (fail closed). Tighten only: vision Always becomes Auto,
+                        // but Off stays Off. A `File`/`Corrupt` load issue tells the UI.
+                        let mut issues = issues;
+                        let reset = wizard_entry_invalid(&bytes);
+                        if reset {
                             let d = Stored::default();
                             clean.local_only = d.local_only;
                             clean.observe_mode = d.observe_mode;
-                            clean.vision_mode = d.vision_mode;
+                            if clean.vision_mode == VisionMode::Always {
+                                clean.vision_mode = VisionMode::Auto;
+                            }
                             clean.agent_enabled = d.agent_enabled;
                             clean.agent_mode = d.agent_mode;
                         }
@@ -338,6 +343,9 @@ impl SettingsStore {
                             store.load_error = Some(ERR_SETTINGS_CORRUPT);
                         } else {
                             store.stored = clean;
+                            if reset {
+                                issues.push(issue(SettingsField::File, IssueCode::Corrupt));
+                            }
                             store.load_issues = issues;
                         }
                     }

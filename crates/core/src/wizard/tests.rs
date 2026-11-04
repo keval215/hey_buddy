@@ -104,6 +104,13 @@ fn back_goes_up_stops_at_welcome_and_is_inert_after_finish() {
 }
 
 #[test]
+fn back_after_skip_keeps_the_state_valid() {
+    let st = run(&at(S::Models), &[WizardEvent::Skip, WizardEvent::Back]);
+    assert_eq!(st.step, S::Models);
+    assert!(st.skipped_steps.is_empty() && st.is_valid());
+}
+
+#[test]
 fn skip_records_the_step_and_is_refused_at_safety_and_done() {
     for s in WizardStep::ALL {
         let t = transition(&at(s), &WizardEvent::Skip);
@@ -245,6 +252,16 @@ fn stored_values_that_are_not_valid_fail_closed_to_welcome() {
         },
         {
             let mut v = ok.clone();
+            v["skipped_steps"] = json!(["Hotkey"]); // ahead of the current step
+            v
+        },
+        {
+            let mut v = ok.clone();
+            v["skipped_steps"] = json!(["Models"]); // the current step itself
+            v
+        },
+        {
+            let mut v = ok.clone();
             v["recommended_profile"] = json!("default"); // without a machine
             v
         },
@@ -326,11 +343,51 @@ fn alphabet() -> Vec<WizardEvent> {
     ]
 }
 
-/// A setting the wizard's patch is allowed to write: only the safe value.
+fn strictness(v: VisionMode) -> u8 {
+    match v {
+        VisionMode::Off => 2,
+        VisionMode::Auto => 1,
+        VisionMode::Always => 0,
+    }
+}
+
+fn settings_with(
+    local_only: bool,
+    observe_mode: bool,
+    agent_enabled: bool,
+    agent_mode: bool,
+    vision_mode: VisionMode,
+) -> crate::api::Settings {
+    let d = SettingsStore::load("/nonexistent/hey_buddy_test.json").settings();
+    crate::api::Settings {
+        local_only,
+        observe_mode,
+        agent_enabled,
+        agent_mode,
+        vision_mode,
+        ..d
+    }
+}
+
+/// Apply a patch the way the store does (None = unchanged).
+fn applied(
+    s: &crate::api::Settings,
+    p: &crate::api::SettingsPatch,
+) -> (bool, bool, bool, bool, VisionMode) {
+    (
+        p.local_only.unwrap_or(s.local_only),
+        p.observe_mode.unwrap_or(s.observe_mode),
+        p.agent_enabled.unwrap_or(s.agent_enabled),
+        p.agent_mode.unwrap_or(s.agent_mode),
+        p.vision_mode.unwrap_or(s.vision_mode),
+    )
+}
+
+/// The patch only writes safe values and touches no other field.
 fn patch_is_safe(p: &crate::api::SettingsPatch) -> bool {
     p.local_only == Some(true)
         && p.observe_mode == Some(true)
-        && p.vision_mode == Some(VisionMode::Auto)
+        && matches!(p.vision_mode, None | Some(VisionMode::Auto))
         && p.agent_enabled == Some(false)
         && p.agent_mode == Some(false)
         && p.profile.is_none()
@@ -356,7 +413,13 @@ fn explore(state: &WizardState, depth: usize, alpha: &[WizardEvent], edges: &mut
         assert!(t.state.is_valid(), "{state:?} --{ev:?}--> {:?}", t.state);
         if t.apply_safe_defaults {
             assert!(state.step == S::SafetyDefaults && matches!(ev, WizardEvent::Next));
-            assert!(patch_is_safe(&safe_defaults_patch()));
+            assert!(patch_is_safe(&safe_defaults_patch(&settings_with(
+                false,
+                false,
+                true,
+                true,
+                VisionMode::Always,
+            ))));
         }
         if t.state.step == S::Done && state.step != S::Done {
             assert!(t.apply_safe_defaults, "{state:?} --{ev:?}--> Done");
@@ -389,9 +452,36 @@ fn no_event_sequence_can_weaken_safety_or_skip_the_confirm() {
     assert!(edges > 1_000_000, "{edges}");
 }
 
+/// Every starting combination: the result is never less strict than the start, and never less
+/// strict than the safe default (local-only, observe ON, agent OFF, vision Auto or stricter).
 #[test]
-fn the_safe_patch_is_exactly_the_safe_values() {
-    assert!(patch_is_safe(&safe_defaults_patch()));
+fn the_safe_patch_only_ever_tightens() {
+    let visions = [VisionMode::Off, VisionMode::Auto, VisionMode::Always];
+    for bits in 0..16u8 {
+        for v in visions {
+            let (lo, ob, ae, am) = (bits & 1 != 0, bits & 2 != 0, bits & 4 != 0, bits & 8 != 0);
+            let start = settings_with(lo, ob, ae, am, v);
+            let p = safe_defaults_patch(&start);
+            assert!(patch_is_safe(&p), "{start:?}");
+            let (rlo, rob, rae, ram, rv) = applied(&start, &p);
+            // Never less strict than the start.
+            assert!(
+                rlo >= lo && rob >= ob && !rae | !ae && !ram | !am,
+                "{start:?}"
+            );
+            assert!(strictness(rv) >= strictness(v), "{start:?}");
+            // Never less strict than the safe default.
+            assert!(rlo && rob && !rae && !ram, "{start:?}");
+            assert!(strictness(rv) >= strictness(VisionMode::Auto), "{start:?}");
+            // Vision: Always -> Auto; Off and Auto untouched.
+            let want = if v == VisionMode::Always {
+                VisionMode::Auto
+            } else {
+                v
+            };
+            assert_eq!(rv, want);
+        }
+    }
 }
 
 // ---------------------------------------------------------------- persistence
@@ -435,9 +525,30 @@ fn invalid_wizard_entry_restarts_the_wizard_and_restores_the_safe_settings() {
         let c = s.settings();
         assert!(c.local_only && c.observe_mode, "{bad}");
         assert!(!c.agent_enabled && !c.agent_mode);
-        assert_eq!(c.vision_mode, VisionMode::Auto);
+        assert_eq!(
+            c.vision_mode,
+            VisionMode::Auto,
+            "Always is tightened to Auto"
+        );
+        assert!(s.load_issues().contains(&crate::api::SettingsIssue {
+            field: crate::api::SettingsField::File,
+            code: crate::api::IssueCode::Corrupt,
+        }));
+        assert_eq!(s.load_error(), None);
         assert_eq!(c.hotkey, "Ctrl+Alt+F5", "unrelated settings are kept");
     }
+}
+
+#[test]
+fn invalid_wizard_entry_never_loosens_vision_off() {
+    let d = tempfile::tempdir().unwrap();
+    let p = write(
+        d.path(),
+        &json!({"vision_mode": "Off", "wizard": {"step": "Teleport"}}),
+    );
+    let s = SettingsStore::load(&p);
+    assert_eq!(s.settings().vision_mode, VisionMode::Off);
+    assert!(s.settings().local_only);
 }
 
 #[test]
@@ -721,6 +832,37 @@ async fn a_microphone_check_that_never_answers_times_out_after_five_seconds() {
     assert_eq!(MIC_TIMEOUT.as_secs(), 5);
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_second_microphone_check_during_the_first_is_refused_and_the_claim_is_released() {
+    let dir = tempfile::tempdir().unwrap();
+    let buddy = Buddy::with_credentials(
+        dir.path().join("s.json"),
+        Box::new(capture::UnsupportedCapture),
+        Arc::new(llm::fakes::FakeCredentialStore::new()),
+    );
+    let mut hang = FakeMicProbe::new(Err(WizardError::MicFailed));
+    hang.hang = true;
+    buddy.set_wizard_probes(
+        Arc::new(FakeMachineProbe::new(MachineInfo::UNKNOWN)),
+        Arc::new(FakeOllamaProbe::new(Err(WizardError::ProbeFailed))),
+        Some(Arc::new(hang)),
+    );
+    while buddy.wizard_view().state.step != S::Microphone {
+        buddy.wizard_event(&WizardEvent::Next).unwrap();
+    }
+    let (first, second) = tokio::join!(buddy.wizard_probe_mic(), async {
+        tokio::task::yield_now().await;
+        buddy.wizard_probe_mic().await
+    });
+    assert_eq!(first.unwrap().error.as_deref(), Some("mic_timeout"));
+    assert_eq!(second.unwrap_err(), WizardError::Busy);
+    // Released after the first ended.
+    assert_eq!(
+        buddy.wizard_probe_mic().await.unwrap().error.as_deref(),
+        Some("mic_timeout")
+    );
+}
+
 #[tokio::test]
 async fn without_an_engine_and_without_a_probe_the_mic_check_says_unavailable() {
     let dir = tempfile::tempdir().unwrap();
@@ -762,7 +904,7 @@ async fn confirming_safety_turns_protections_on_and_changes_nothing_else() {
     let after = r.buddy.get_settings();
     assert!(after.local_only && after.observe_mode);
     assert!(!after.agent_enabled && !after.agent_mode);
-    assert_eq!(after.vision_mode, VisionMode::Auto);
+    assert_eq!(after.vision_mode, VisionMode::Off, "Off is never loosened");
     assert_eq!(after.hotkey, "Ctrl+Alt+F5");
     assert_eq!(after.profile, before.profile);
     assert!(r.go(WizardEvent::Finish).state.completed);
