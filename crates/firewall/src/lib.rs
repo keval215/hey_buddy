@@ -89,10 +89,16 @@ pub use observe::{
 pub use platform::{platform_firewall, UnsupportedDetector, UnsupportedSessionProbe};
 pub use redacted::RedactedFrame;
 pub use redacted_text::RedactedScreenText;
+/// The firewall's label lexicons, read-only. `policy` keeps its own copies as defence in depth;
+/// a drift test there pins the relationship between the two.
+pub use sensitive::{
+    DESTRUCTIVE as DESTRUCTIVE_LEXICON, PAYMENT as PAYMENT_LEXICON, PURCHASE as PURCHASE_LEXICON,
+    SECRET as SECRET_LEXICON, SUBMIT as SUBMIT_LEXICON,
+};
 pub use target::{
-    hash_automation_id, hash_label, FocusState, ForegroundFacts, LiveTarget, NodeIdentity,
-    ObservationSource, ObservedWindow, ResolveRequest, ResolvedFields, ResolvedTarget,
-    TargetRefusal, TargetResolver, TargetSel, UnsupportedObservationSource,
+    hash_automation_id, hash_label, ElementHandle, FocusState, ForegroundFacts, LiveTarget,
+    NodeIdentity, ObservationSource, ObservedWindow, ResolveRequest, ResolvedFields,
+    ResolvedTarget, TargetRefusal, TargetResolver, TargetSel, UnsupportedObservationSource,
     UnsupportedTargetResolver, VisibleApp, WindowFacts,
 };
 pub use text::{

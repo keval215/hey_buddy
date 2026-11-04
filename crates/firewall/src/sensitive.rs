@@ -14,7 +14,7 @@
 //! its own copy of the lists as defence in depth and ORs both (stricter only).
 
 /// Card and bank-account data. A screen showing any of these labels is `payment_suspected`.
-const PAYMENT: &[&str] = &[
+pub const PAYMENT: &[&str] = &[
     "card number",
     "cardnumber",
     "credit card",
@@ -50,7 +50,7 @@ const PAYMENT: &[&str] = &[
 ];
 
 /// Secrets and one-time codes. A text target with such a label is `sensitive_label`.
-const SECRET: &[&str] = &[
+pub const SECRET: &[&str] = &[
     "password",
     "passwd",
     "pwd",
@@ -100,7 +100,7 @@ const SECRET: &[&str] = &[
 ];
 
 /// Destructive verbs (a click on such a label is refused by policy; S2-14e).
-const DESTRUCTIVE: &[&str] = &[
+pub const DESTRUCTIVE: &[&str] = &[
     "delete",
     "remove",
     "erase",
@@ -114,7 +114,7 @@ const DESTRUCTIVE: &[&str] = &[
 ];
 
 /// Purchase / money-moving verbs.
-const PURCHASE: &[&str] = &[
+pub const PURCHASE: &[&str] = &[
     "buy",
     "pay",
     "checkout",
@@ -128,7 +128,7 @@ const PURCHASE: &[&str] = &[
 ];
 
 /// Submit-like verbs (escalate a click to at least Consequential).
-const SUBMIT: &[&str] = &[
+pub const SUBMIT: &[&str] = &[
     "submit", "send", "post", "publish", "reply", "save", "sign in", "signin", "confirm", "ok",
     "continue", "next", "apply",
 ];

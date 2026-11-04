@@ -65,8 +65,9 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::System::Variant::{VARENUM, VARIANT, VT_ARRAY, VT_I4};
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomationCondition, IUIAutomationElement, TreeScope_Children,
-    TreeScope_Descendants, UIA_RuntimeIdPropertyId,
+    CUIAutomation, IUIAutomation, IUIAutomationCondition, IUIAutomationElement,
+    IUIAutomationScrollPattern, IUIAutomationTreeWalker, TreeScope_Children, TreeScope_Descendants,
+    UIA_IsScrollPatternAvailablePropertyId, UIA_RuntimeIdPropertyId, UIA_ScrollPatternId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
@@ -74,16 +75,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use super::walk::{walk_tree_identified, Limits, TreeCursor, MAX_DEPTH, MAX_NODES};
 use super::win_pure::{
-    app_id_from_exe_path, classify_focused, filetime_ticks, find_ancestor, include_in_apps,
-    is_user_desktop_name, node_identity, read_int32_array, read_resolved, rect_from_edges,
-    runtime_ids_equal, same_process, AncestorOutcome, ElementReads, FocusedReads, Int32Array,
-    IntegrityLevel, MAX_ANCESTOR_STEPS,
+    app_id_from_exe_path, filetime_ticks, include_in_apps, is_user_desktop_name, node_identity,
+    place_focus, read_int32_array, read_resolved, rect_from_edges, runtime_ids_equal, same_process,
+    ElementReads, FocusCursor, Int32Array, IntegrityLevel, MAX_RUNTIME_ID_LEN,
 };
 use super::windows::{ensure_per_monitor_dpi, is_password};
 use super::windows_text::UiaCursor;
 use crate::target::{
-    FocusState, ForegroundFacts, NodeIdentity, ObservationSource, ObservedWindow, ResolveRequest,
-    ResolvedTarget, TargetResolver, VisibleApp, WindowFacts,
+    ElementHandle, FocusState, ForegroundFacts, NodeIdentity, ObservationSource, ObservedWindow,
+    ResolveRequest, ResolvedTarget, TargetResolver, VisibleApp, WindowFacts,
 };
 use crate::{FirewallError, NodeRole, RawWindowTree};
 
@@ -404,16 +404,23 @@ fn runtime_id(el: &IUIAutomationElement) -> Result<Vec<i32>, FirewallError> {
 /// `VT_ARRAY | VT_I4` variant holding `rid` (for the `UIA_RuntimeIdPropertyId` condition). The
 /// array is owned by the variant (`VariantClear` destroys it on drop).
 fn runtime_id_variant(rid: &[i32]) -> Option<VARIANT> {
+    // Check the length UP FRONT so no conversion can fail after the array exists (a `?` between
+    // creation and the variant would leak the SAFEARRAY).
+    if rid.is_empty() || rid.len() > MAX_RUNTIME_ID_LEN {
+        return None;
+    }
+    let len = u32::try_from(rid.len()).ok()?;
     // SAFETY: the array is created, filled and then moved into the variant; on any failure it is
     // destroyed here. Writing the union fields of a freshly built VT_I4 variant is sound because
     // it owns no resources.
     unsafe {
-        let psa = SafeArrayCreateVector(VT_I4, 0, u32::try_from(rid.len()).ok()?);
+        let psa = SafeArrayCreateVector(VT_I4, 0, len);
         if psa.is_null() {
             return None;
         }
         for (i, v) in rid.iter().enumerate() {
-            let idx = i32::try_from(i).ok()?;
+            // `i < rid.len() <= MAX_RUNTIME_ID_LEN`: always fits.
+            let idx = i as i32;
             if SafeArrayPutElement(psa, &idx, (v as *const i32).cast::<c_void>()).is_err() {
                 let _ = SafeArrayDestroy(psa);
                 return None;
@@ -572,21 +579,6 @@ impl ElementReads for UiaReads<'_> {
     }
 }
 
-impl FocusedReads for UiaReads<'_> {
-    fn is_password(&mut self) -> Result<bool, FirewallError> {
-        is_password(self.0)
-    }
-    fn control_type(&mut self) -> Result<i32, FirewallError> {
-        control_type(self.0)
-    }
-    fn name(&mut self) -> Result<String, FirewallError> {
-        // SAFETY: COM call on a valid element; only the lexicon check sees the string.
-        unsafe { self.0.CurrentName() }
-            .map(|b| b.to_string())
-            .map_err(fail)
-    }
-}
-
 /// Outcome of locating the observed element again.
 enum Located {
     Gone,
@@ -695,59 +687,113 @@ impl TargetResolver for WinTargetResolver {
         match locate(&auto, req.hwnd, &req.runtime_id)? {
             Located::Gone => Ok(ResolvedTarget::Gone),
             Located::Secure => Ok(ResolvedTarget::Secure),
-            // `IsPassword` first, then control type, AutomationId hash, Name hash, rect.
-            Located::Found(el) => read_resolved(&mut UiaReads(&el)),
+            // `IsPassword` first, then control type, AutomationId hash, Name hash, rect. The
+            // element that was read is the one handed to the `LiveTarget`.
+            Located::Found(el) => match read_resolved(&mut UiaReads(&el))? {
+                ResolvedTarget::Found(mut f) => {
+                    f.handle = ElementHandle::from_uia(&el);
+                    Ok(ResolvedTarget::Found(f))
+                }
+                other => Ok(other),
+            },
         }
     }
 
+    /// Focus state. NO tree search (`locate`) per call: `GetFocusedElement`, then the pure
+    /// `place_focus` (IsPassword first, text-like name check, runtime-id comparison, bounded
+    /// parent walk, window root last).
     fn focus_state(&self, hwnd: u64, runtime_id: &[i32]) -> Result<FocusState, FirewallError> {
         let auto = automation()?;
         // SAFETY: COM call. No focused element (or a failed query) is "nothing focused".
         let Ok(focused) = (unsafe { auto.GetFocusedElement() }) else {
             return Ok(FocusState::None);
         };
-        // The focused element alone can decide: IsPassword first, then (text-like controls only)
-        // the secret lexicon on the name just read.
-        if let Some(state) = classify_focused(&mut UiaReads(&focused))? {
-            return Ok(state);
-        }
-        // The target: the observed element, or the window element for the window targets.
-        let target = if runtime_id.is_empty() {
-            // SAFETY: COM call.
-            unsafe { auto.ElementFromHandle(hwnd_from_u64(hwnd)) }.map_err(fail)?
-        } else {
-            match locate(&auto, hwnd, runtime_id)? {
-                Located::Found(el) => el,
-                Located::Secure => return Ok(FocusState::Secure),
-                Located::Gone => return Ok(FocusState::Other),
-            }
-        };
-        let same =
-            |a: &IUIAutomationElement, b: &IUIAutomationElement| -> Result<bool, FirewallError> {
-                // SAFETY: COM call on two valid elements.
-                unsafe { auto.CompareElements(a, b) }
-                    .map(|r| r.as_bool())
-                    .map_err(fail)
-            };
-        if same(&focused, &target)? {
-            return Ok(FocusState::Target);
-        }
         // SAFETY: COM call.
         let walker = unsafe { auto.RawViewWalker() }.map_err(fail)?;
-        let outcome = find_ancestor(
-            &focused,
-            MAX_ANCESTOR_STEPS,
-            // The end of the chain (and an unreadable parent) is `None`: not inside the target.
-            |n| {
-                // SAFETY: COM call on a valid element.
-                Ok::<_, FirewallError>(unsafe { walker.GetParentElement(n) }.ok())
-            },
-            |n| same(n, &target),
-        )?;
-        Ok(match outcome {
-            AncestorOutcome::Found => FocusState::Descendant,
-            // A chain longer than the bound is treated as "somewhere else" (fail closed).
-            AncestorOutcome::NotFound | AncestorOutcome::BoundExceeded => FocusState::Other,
-        })
+        let mut cursor = UiaFocus {
+            auto: &auto,
+            walker,
+            hwnd,
+        };
+        let placement = place_focus(&mut cursor, &focused, runtime_id)?;
+        Ok(placement.into_state(runtime_id.is_empty()))
+    }
+
+    fn resolve_window(&self, hwnd: u64, scroll_root: bool) -> Result<ElementHandle, FirewallError> {
+        ensure_per_monitor_dpi()?;
+        let auto = automation()?;
+        // SAFETY: COM call; an invalid hwnd fails and is mapped to a fixed error.
+        let root = unsafe { auto.ElementFromHandle(hwnd_from_u64(hwnd)) }.map_err(fail)?;
+        if !scroll_root {
+            return Ok(ElementHandle::from_uia(&root));
+        }
+        Ok(scroll_container(&auto, &root)
+            .map_or_else(ElementHandle::default, |e| ElementHandle::from_uia(&e)))
+    }
+}
+
+/// The element that scrolls the window: the window element if it has a ScrollPattern, else the
+/// first descendant whose `IsScrollPatternAvailable` is true (a property CONDITION, no content is
+/// read). A password field is never returned. `None` when nothing scrolls.
+fn scroll_container(
+    auto: &IUIAutomation,
+    root: &IUIAutomationElement,
+) -> Option<IUIAutomationElement> {
+    // SAFETY: COM call on a valid element; failure means "no such pattern".
+    if unsafe { root.GetCurrentPatternAs::<IUIAutomationScrollPattern>(UIA_ScrollPatternId) }
+        .is_ok()
+    {
+        return Some(root.clone());
+    }
+    let var = VARIANT::from(true);
+    // SAFETY: COM calls; the variant outlives the call (the condition copies it).
+    let cond =
+        unsafe { auto.CreatePropertyCondition(UIA_IsScrollPatternAvailablePropertyId, &var) }
+            .ok()?;
+    // SAFETY: COM call on a valid element and condition; "not found" is an error or null.
+    let el = unsafe { root.FindFirst(TreeScope_Descendants, &cond) }.ok()?;
+    match is_password(&el) {
+        Ok(false) => Some(el),
+        _ => None,
+    }
+}
+
+/// `FocusCursor` over UIA: cheap property reads and the raw-view parent walk.
+struct UiaFocus<'a> {
+    auto: &'a IUIAutomation,
+    walker: IUIAutomationTreeWalker,
+    hwnd: u64,
+}
+
+impl FocusCursor for UiaFocus<'_> {
+    type Node = IUIAutomationElement;
+
+    fn is_password(&mut self, n: &IUIAutomationElement) -> Result<bool, FirewallError> {
+        is_password(n)
+    }
+    fn control_type(&mut self, n: &IUIAutomationElement) -> Result<i32, FirewallError> {
+        control_type(n)
+    }
+    fn name(&mut self, n: &IUIAutomationElement) -> Result<String, FirewallError> {
+        // SAFETY: COM call on a valid element; only the lexicon check sees the string.
+        unsafe { n.CurrentName() }
+            .map(|b| b.to_string())
+            .map_err(fail)
+    }
+    fn runtime_id(&mut self, n: &IUIAutomationElement) -> Result<Vec<i32>, FirewallError> {
+        runtime_id(n)
+    }
+    fn parent(
+        &mut self,
+        n: &IUIAutomationElement,
+    ) -> Result<Option<IUIAutomationElement>, FirewallError> {
+        // SAFETY: COM call on a valid element. The end of the chain (and an unreadable parent) is
+        // `None`: not inside anything further (fail closed).
+        Ok(unsafe { self.walker.GetParentElement(n) }.ok())
+    }
+    fn window_runtime_id(&mut self) -> Result<Vec<i32>, FirewallError> {
+        // SAFETY: COM call; an invalid hwnd fails and is mapped to a fixed error.
+        let w = unsafe { self.auto.ElementFromHandle(hwnd_from_u64(self.hwnd)) }.map_err(fail)?;
+        runtime_id(&w)
     }
 }

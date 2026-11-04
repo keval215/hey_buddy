@@ -29,6 +29,7 @@
 mod actuator;
 mod driver;
 mod error;
+mod input_plan;
 mod limits;
 mod platform;
 mod screen;
@@ -43,6 +44,10 @@ pub use limits::{
     LaunchAllowlist, CALL_DEADLINE, MAX_EXECS_PER_MINUTE, MIN_EXEC_GAP, OBSERVATION_MAX_AGE,
 };
 pub use screen::ObservedScreen;
+
+/// The only way to get a Windows driver: the actuator type itself is `pub(crate)`.
+#[cfg(target_os = "windows")]
+pub use platform::windows::windows_driver;
 
 #[cfg(test)]
 mod tests;

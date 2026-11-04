@@ -1,8 +1,8 @@
 # Desktop driver (S2-14c)
 
 Implements ADR 0004 (PROVISIONAL, D-007) sections 3, 4, 6-10, 12, 13 as the `driver` crate, with a
-Linux-testable `FakeActuator`. No Windows code yet: the Windows actuator is S2-14d and lives behind
-`#[cfg(target_os = "windows")] mod platform::windows` (an empty stub now). STRICTER WINS: where the
+Linux-testable `FakeActuator`. The Windows actuator (S2-14d2, compile-checked only) lives behind
+`#[cfg(target_os = "windows")] mod platform::windows`. STRICTER WINS: where the
 ADR text and the firewall/gate differ, the stricter reading is implemented (noted below).
 
 The driver is the ONLY crate that acts. It accepts only a sealed `policy::ApprovedAction` and acts
@@ -176,8 +176,42 @@ helpers); `tools/check-doctest-codes.sh`.
 
 Checklist: **d1 DONE** (firewall side, Windows UIA `ObservationSource` / `TargetResolver` / `TreeCursor::identity`,
 `crates/firewall/src/platform/windows_agent.rs` + pure `win_pure.rs`, wired in `platform_firewall()`; compile-checked,
-UNTESTED at runtime; see `docs/observation.md`). **d2 PENDING** (`WinActuator` in `crates/driver`, everything below
-except the firewall readers).
+UNTESTED at runtime; see `docs/observation.md`). **d2 DONE (compile-only, UNTESTED at runtime)**: `WinActuator` in
+`crates/driver/src/platform/windows.rs` (`pub(crate)`; the crate exports only
+`windows_driver(firewall, launch, clock) -> Result<Box<dyn DesktopDriver>, DriverError>` behind `cfg(windows)`, which
+refuses to start when hey_buddy is elevated), pure planning in `crates/driver/src/input_plan.rs` (key table, UTF-16
+batches, pressed-key set, scroll plan, launch path rules, error mapping; Linux-tested), `Actuator::init_thread`
+(COM on the worker), `LiveTarget::uia_element()` (cfg(windows); handed over by the resolver as an agile reference, used
+only by the Windows actuator; CI greps enforce it) and the `focus_state` redesign. Remaining: the VERIFY list below and
+`docs/manual-tests.md` "Windows actuator (S2-14d2)".
+
+Decisions taken in d2 (all stricter or equal to the checklist):
+- No mouse: no mouse event type, no cursor positioning, no window messages, no shell API anywhere in `crates/driver/src`;
+  the keyboard batch API and its struct type appear only in `platform/windows.rs` (CI greps).
+- `send_chars`: ONE batch per chunk with a down+up event per UTF-16 unit (`KEYEVENTF_UNICODE`), so a surrogate pair is
+  never split; the returned count is compared with the request and a mismatch is `ActError::Platform` (whatever is still
+  down is released at once). Control characters in a chunk are refused. `send_key` / `send_copy`: one batch per chord
+  (modifiers down in order, key, then up in reverse); VK + set-1 scan code + extended flag from a closed table.
+- Stuck keys: every key-down is recorded in a `PressedSet` before the batch goes out. After a partial batch the
+  release is tried and retried once inside the same call; if it still fails the keys stay in the set and the error is
+  `input failed; keys may be held`. Every later `init_thread` / primitive drains the set (key-ups only) before any new
+  input (the driver runs one worker at a time). Logic and tests: `input_plan::send_batch_with`.
+- ADR note (accepted trade-off): `LiveTarget::uia_element()` is `pub` (cfg(windows)); only the CI greps confine it to
+  `platform/windows.rs`. Future hardening: `#[doc(hidden)]` or a sealed capability argument.
+- `ExpandCollapse` always calls `Expand()` (reading the state would need a `Current*` property, which the read-ban
+  forbids). `Select`/`Toggle`/`Invoke` read nothing.
+- The window / scroll-container element for the window targets comes from the FIREWALL (`TargetResolver::resolve_window`),
+  because `ElementFromHandle` / `FindFirst` are read-ban tokens in the driver.
+- `focus_app` uses `SetForegroundWindow` on the top-z visible, un-cloaked, un-minimised, unowned window of that exe
+  (UIA `SetFocus` on a foreign top-level window would need `ElementFromHandle` in the driver) and then polls
+  `GetForegroundWindow` for 250 ms; a refusal by the foreground lock is `Platform("focus refused" / "focus not taken")`,
+  never worked around. DEVIATION from the checklist wording above; VERIFY whether it works after an approval click.
+- `launch`: path re-validated (absolute local drive path, no UNC / device path / `..` / quotes / `%`), must be an existing
+  file (else `Platform("launch target missing")`), `CreateProcessW(app, "\"path\"", inherit=FALSE, flags=0)`, handles closed
+  at once, `ERROR_ELEVATION_REQUIRED` => `Platform("launch needs elevation")`. The default allowlist builds
+  `notepad` from `%SystemRoot%` only when it is a valid absolute local directory (else the list is EMPTY).
+- `release_all`: tracks what it pressed (including a call in flight); take-all then release, never holding the lock across
+  the OS call; a failed release puts the keys back for the next call.
 
 `crates/driver/src/platform/windows.rs` (`#[cfg(target_os = "windows")]`), plus the firewall's Windows
 `ObservationSource` / `TargetResolver` (done in d1; S2-14a left them `Unsupported`). `windows` crate features

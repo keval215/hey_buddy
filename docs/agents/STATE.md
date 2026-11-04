@@ -105,6 +105,9 @@ Branches: step2a/hardening -> step2b/agent-harness -> step3/packaging -> step4/f
 
 - S2-14d1 DONE (round 1): Windows ObservationSource/TargetResolver/cursor.identity (compile-checked only), firewall lexicon follow-ups (Cf strip, joined-label destructive/purchase/submit flags, FocusState::Sensitive, foreground re-read, parse_visible). Follow-ups for S2-14d2: focus_state must NOT locate per chunk — compare focused element runtime id/ancestors instead (reviewer ruling); drift test between firewall::sensitive and policy::lexicon lists; document Document/Custom OTP gap in docs/observation.md; fix psa leak path in runtime_id_variant; NFKC-lite/homoglyph folding in firewall lexicon (optional); UWP coarse deny granularity (applicationframehost); elevation mapping may lock out some hardened apps (E_ACCESSDENIED => Protected).
 
+- S2-14d2 DONE (round 2, accepted by orch: round-2 fixes map 1:1 to tests): WinActuator (UIA patterns, SendInput keyboard-only, CreateProcessW fixed paths, release_all with in-call retry + stale drain), focus_state redesign (runtime-id/ancestor compare), drift test firewall<->policy lexicons, CI input tripwires. Reviewer rulings: focus_app via SetForegroundWindow OK; first-scrollable scroll root OK; Expand-only OK. All Windows runtime UNTESTED.
+- Remaining 2B plan (merged tickets to save overhead): [S2-10+S2-15] agent crate: protocol + EngineSandbox (Windows AppContainer/Job cfg) + MinimalEngine + Process/Fake/Hostile engines + gate-hook adapter; [S2-16] approval UI; [S2-17+18+19+20+21+23] core agent supervisor/runner (plan-then-execute wiring, injection defences, read-only task, dry-run/live, form demo, background limits, e2e on fakes, reuse controller.gate(), audit sink, kill controller); [S2-22] red-team suite.
+
 ## 2B execution order (dependency-driven, branch step2b/agent-harness)
 S2-14b action crate -> S2-14a firewall observe/revalidate -> S2-11 policy gate -> S2-12 audit -> S2-13 kill switch -> S2-14c driver+fake -> S2-14d WinActuator (cfg) -> S2-10 protocol/sandbox -> S2-15 engine adapter -> S2-16 approval UI -> S2-17 plan/injection -> S2-18 -> S2-19 -> S2-20 -> S2-21 -> S2-22 red-team -> S2-23 e2e wiring. Gate G1 items are satisfied provisionally by D-006/D-007/D-008 (user absent).
 
@@ -118,7 +121,7 @@ S2-1 Windows findings; S2-6 bench JSON; registry urls/sha256/files (S3-5); Windo
 1. Step 1 exit test (`docs/manual-tests.md` Exit test) 2. 2A: engine swap, Kokoro samples, model download (needs real registry values), title/URL leak checks 3. 2B: observe mode, approvals, kill switch, red-team 4. Step 3: install, wizard, update check (fake) 5. Step 4: OCR/PII image checks, lock/auth signals. Then read provisional ADRs 0003-0006, open the draft PRs.
 
 ## In progress
-S2-14d2 WinActuator (branch step2b/agent-harness); ADR 0003 + 0004 drafted, waiting on user
+S2-10+15 agent crate/protocol/sandbox (branch step2b/agent-harness); ADR 0003 + 0004 drafted, waiting on user
 
 ## Blockers / waiting on user
 - ADR 0003 (S2-8) + ADR 0004 (S2-9): read, answer their open questions (5 each), approve; plus tier table sign-off (ADR 0003 §5) = Gate G1 items

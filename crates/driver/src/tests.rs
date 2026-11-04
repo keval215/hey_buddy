@@ -543,3 +543,95 @@ fn check_descriptor_refuses_a_foreign_observation_and_a_missing_node() {
         Err(DriverError::DescriptorMismatch)
     );
 }
+
+// ---------- encapsulation of the Windows actuator (S2-14d2) ----------
+// The actuator is Windows-only, so these are source-level checks that run on Linux CI too (the CI
+// greps enforce the same rules over the whole tree).
+
+#[test]
+fn win_actuator_is_crate_private_and_not_reexported() {
+    let win = include_str!("platform/windows.rs");
+    assert!(win.contains("pub(crate) struct WinActuator"));
+    assert!(!win.contains("pub struct WinActuator"));
+    // The only `pub` item of the Windows module is the constructor.
+    let pubs: Vec<&str> = win
+        .lines()
+        .map(str::trim_start)
+        .filter(|l| l.starts_with("pub ") && !l.starts_with("pub(crate)"))
+        .collect();
+    assert_eq!(pubs.len(), 1, "{pubs:?}");
+    assert!(pubs[0].starts_with("pub fn windows_driver("), "{pubs:?}");
+    // The crate root exports no actuator type of the Windows module.
+    let lib = include_str!("lib.rs");
+    for stmt in lib
+        .split(';')
+        .map(str::trim)
+        .filter(|s| s.contains("pub use"))
+    {
+        assert!(!stmt.contains("WinActuator"), "{stmt}");
+        if stmt.contains("platform") {
+            assert!(
+                stmt.ends_with("platform::windows::windows_driver"),
+                "{stmt}"
+            );
+        }
+    }
+    assert!(lib.contains("\nmod platform;"));
+    assert!(!lib.contains("pub mod platform"));
+    // It is built behind cfg(windows) only.
+    assert!(include_str!("platform/mod.rs").contains("#[cfg(target_os = \"windows\")]"));
+}
+
+#[test]
+fn keyboard_and_mouse_apis_stay_in_the_windows_module() {
+    let send_input = concat!("Send", "Input");
+    let kb = concat!("INPUT_", "KEYBOARD");
+    let banned = [
+        concat!("MOUSE", "EVENTF"),
+        concat!("mouse", "_event"),
+        concat!("SetCursor", "Pos"),
+        concat!("INPUT_", "MOUSE"),
+        concat!("MOUSE", "INPUT"),
+        concat!("Send", "Message"),
+        concat!("Post", "Message"),
+        concat!("keybd", "_event"),
+        concat!("Shell", "Execute"),
+    ];
+    let others = [
+        ("actuator.rs", include_str!("actuator.rs")),
+        ("driver.rs", include_str!("driver.rs")),
+        ("error.rs", include_str!("error.rs")),
+        ("fake.rs", include_str!("fake.rs")),
+        ("input_plan.rs", include_str!("input_plan.rs")),
+        ("lib.rs", include_str!("lib.rs")),
+        ("limits.rs", include_str!("limits.rs")),
+        ("screen.rs", include_str!("screen.rs")),
+    ];
+    for (name, src) in others {
+        assert!(!src.contains(send_input), "{name}");
+        assert!(!src.contains(kb), "{name}");
+        for b in banned {
+            assert!(!src.contains(b), "{name}: {b}");
+        }
+    }
+    let win = include_str!("platform/windows.rs");
+    assert!(win.contains(send_input) && win.contains(kb));
+    // (windows.rs may MENTION the shell API in a comment saying it is never used.)
+    for b in banned.iter().filter(|b| !b.starts_with("Shell")) {
+        assert!(!win.contains(b), "windows.rs: {b}");
+    }
+    for line in win.lines().filter(|l| l.contains(banned[8])) {
+        assert!(line.trim_start().starts_with("//"), "{line}");
+    }
+}
+
+#[test]
+fn tests_module_is_declared_cfg_test_in_lib_so_it_never_ships() {
+    // CI exempts tests.rs from the keyboard-API grep only because it is test-only.
+    let lib = include_str!("lib.rs");
+    assert!(
+        lib.contains("\n#[cfg(test)]\nmod tests;"),
+        "lib.rs must declare `#[cfg(test)] mod tests;`"
+    );
+    assert!(!lib.contains("\nmod tests;") || lib.contains("\n#[cfg(test)]\nmod tests;"));
+}

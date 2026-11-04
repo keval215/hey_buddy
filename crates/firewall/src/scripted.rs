@@ -14,9 +14,9 @@ use std::time::Duration;
 use frame::Rect;
 
 use crate::target::{
-    hash_automation_id, hash_label, FocusState, ForegroundFacts, NodeIdentity, ObservationSource,
-    ObservedWindow, ResolveRequest, ResolvedFields, ResolvedTarget, TargetResolver, VisibleApp,
-    WindowFacts,
+    hash_automation_id, hash_label, ElementHandle, FocusState, ForegroundFacts, NodeIdentity,
+    ObservationSource, ObservedWindow, ResolveRequest, ResolvedFields, ResolvedTarget,
+    TargetResolver, VisibleApp, WindowFacts,
 };
 use crate::{
     FirewallError, NodeRole, RawTextNode, RawWindowTree, ScreenTextSource, SecureFieldDetector,
@@ -431,6 +431,7 @@ impl ScriptedDesktop {
             automation_id_hash: hash_automation_id(&e.automation_id),
             label_hash: hash_label(e.label.as_deref()),
             rect: e.rect,
+            handle: ElementHandle::default(),
         })
     }
 }

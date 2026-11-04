@@ -488,7 +488,11 @@ impl<A: Actuator + 'static> Driver<A> {
         let spawned = std::thread::Builder::new()
             .name("driver-worker".into())
             .spawn(move || {
-                let raw = catch_unwind(AssertUnwindSafe(|| job.run())).unwrap_or_else(|_| {
+                let raw = catch_unwind(AssertUnwindSafe(|| {
+                    job.actuator.init_thread();
+                    job.run()
+                }))
+                .unwrap_or_else(|_| {
                     // An input call died half way: let go of whatever it pressed.
                     let _ = catch_unwind(AssertUnwindSafe(|| job.actuator.release_all()));
                     job.stop(DriverError::Platform("worker panicked"))

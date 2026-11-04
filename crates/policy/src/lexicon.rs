@@ -137,3 +137,117 @@ fn luhn(digits: &[u8]) -> bool {
     }
     sum.is_multiple_of(10)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sorted(l: &[&str]) -> Vec<String> {
+        let mut v: Vec<String> = l.iter().map(|s| (*s).to_string()).collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    fn only_in(a: &[&str], b: &[&str]) -> Vec<String> {
+        sorted(a)
+            .into_iter()
+            .filter(|w| !b.contains(&w.as_str()))
+            .collect()
+    }
+
+    /// DRIFT TEST. The firewall evaluates its lexicons on the joined label and policy keeps its
+    /// own copy as defence in depth (both are ORed). The submit / destructive / purchase lists
+    /// must stay IDENTICAL: a word added to only one side silently weakens the other layer.
+    #[test]
+    fn submit_destructive_purchase_lists_match_the_firewall() {
+        for (name, policy, fw) in [
+            ("submit", SUBMIT, firewall::SUBMIT_LEXICON),
+            ("destructive", DESTRUCTIVE, firewall::DESTRUCTIVE_LEXICON),
+            ("purchase", PURCHASE, firewall::PURCHASE_LEXICON),
+        ] {
+            assert_eq!(
+                only_in(policy, fw),
+                Vec::<String>::new(),
+                "{name}: words only in policy (add them to firewall/src/sensitive.rs)"
+            );
+            assert_eq!(
+                only_in(fw, policy),
+                Vec::<String>::new(),
+                "{name}: words only in the firewall (add them to policy/src/lexicon.rs)"
+            );
+        }
+    }
+
+    /// The secret lists legitimately differ: the firewall's `SECRET` is the broad one (it marks a
+    /// TEXT TARGET `sensitive_label`: tokens, keys, recovery phrases, 2FA wording, German and
+    /// short forms), while policy's `SECRET` is the row-14 tier escalation and adds only the
+    /// payment words that the firewall keeps in its separate `PAYMENT` list (which flags the
+    /// SCREEN). Both are ORed, so each side only ever adds refusals. The exact differences are
+    /// PINNED here: changing either list fails this test until the difference is reviewed and
+    /// updated on purpose.
+    #[test]
+    fn secret_lists_differ_only_in_the_pinned_words() {
+        assert_eq!(
+            only_in(SECRET, firewall::SECRET_LEXICON),
+            ["card number", "cvc2", "cvv2", "iban"]
+        );
+        assert_eq!(
+            only_in(firewall::SECRET_LEXICON, SECRET),
+            [
+                "2 step",
+                "2fa",
+                "access key",
+                "access token",
+                "api key",
+                "apikey",
+                "auth code",
+                "auth token",
+                "authentication code",
+                "authenticator code",
+                "backup code",
+                "bearer",
+                "card num",
+                "ccv",
+                "mfa",
+                "mnemonic",
+                "one time code",
+                "one time passcode",
+                "one time password",
+                "pass code",
+                "passphrase",
+                "passwort",
+                "pin code",
+                "pin number",
+                "private key",
+                "pwd",
+                "recovery code",
+                "recovery phrase",
+                "secret",
+                "secret key",
+                "secret phrase",
+                "seed phrase",
+                "social security",
+                "ssn",
+                "token",
+                "two factor",
+                "two step",
+                "verification code"
+            ]
+        );
+        // What policy's extra words cover on the firewall side: payment words flag the screen.
+        for w in ["card number", "cvv2", "cvc2", "iban"] {
+            assert!(
+                firewall::PAYMENT_LEXICON.contains(&w),
+                "{w} must stay in the firewall PAYMENT list"
+            );
+        }
+        // Shared core secrets are in both.
+        for w in ["password", "passwd", "passcode", "cvv", "cvc"] {
+            assert!(
+                SECRET.contains(&w) && firewall::SECRET_LEXICON.contains(&w),
+                "{w}"
+            );
+        }
+    }
+}

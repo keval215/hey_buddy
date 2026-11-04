@@ -145,6 +145,43 @@ pub struct ResolveRequest {
     pub runtime_id: Vec<i32>,
 }
 
+/// The platform element a resolver re-resolved, handed to the [`LiveTarget`] so the driver acts
+/// on exactly the element the firewall checked (no second search). Empty on every platform but
+/// Windows, where it is an agile COM reference (safe to move between the resolver's deadline
+/// worker and the driver's worker). Opaque: `Debug` prints a fixed token, equality ignores it.
+#[derive(Clone, Default)]
+pub struct ElementHandle {
+    #[cfg(target_os = "windows")]
+    agile: Option<
+        windows::core::AgileReference<windows::Win32::UI::Accessibility::IUIAutomationElement>,
+    >,
+}
+
+impl ElementHandle {
+    /// An agile reference to `el`; empty when COM refuses (the target then has no element and the
+    /// actuator fails closed).
+    #[cfg(target_os = "windows")]
+    pub(crate) fn from_uia(el: &windows::Win32::UI::Accessibility::IUIAutomationElement) -> Self {
+        Self {
+            agile: windows::core::AgileReference::new(el).ok(),
+        }
+    }
+}
+
+impl PartialEq for ElementHandle {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for ElementHandle {}
+
+impl fmt::Debug for ElementHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ElementHandle")
+    }
+}
+
 /// Identity of a re-resolved element.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ResolvedFields {
@@ -152,6 +189,8 @@ pub struct ResolvedFields {
     pub automation_id_hash: [u8; 32],
     pub label_hash: [u8; 32],
     pub rect: Rect,
+    /// The element itself (Windows), for [`LiveTarget`]. Not part of the identity comparison.
+    pub handle: ElementHandle,
 }
 
 /// Result of re-resolving an element. `Secure` carries nothing else: when `is_password` is
@@ -191,6 +230,17 @@ pub trait TargetResolver: Send + Sync {
     fn resolve(&self, req: &ResolveRequest) -> Result<ResolvedTarget, FirewallError>;
     /// Focus state relative to the element `runtime_id` inside `hwnd` (empty id = the window).
     fn focus_state(&self, hwnd: u64, runtime_id: &[i32]) -> Result<FocusState, FirewallError>;
+    /// The element of the observed window itself, for the window targets (Windows only; the
+    /// firewall calls this only there). With `scroll_root` the element is the window's scroll
+    /// container (the window element if it scrolls, else its first scrollable descendant);
+    /// an empty handle when there is none. Default: empty.
+    fn resolve_window(
+        &self,
+        _hwnd: u64,
+        _scroll_root: bool,
+    ) -> Result<ElementHandle, FirewallError> {
+        Ok(ElementHandle::default())
+    }
 }
 
 /// Resolver for platforms without an implementation: every call is `Err(Unsupported)`.
@@ -302,7 +352,7 @@ pub(crate) enum TargetKind {
 /// ```compile_fail,E0624
 /// // The constructor is `pub(crate)`.
 /// fn forge<'o>(o: &'o firewall::Observation) -> firewall::LiveTarget<'o> {
-///     firewall::LiveTarget::new(o, todo!(), todo!(), todo!(), todo!(), todo!())
+///     firewall::LiveTarget::new(o, todo!(), todo!(), todo!(), todo!(), todo!(), todo!())
 /// }
 /// ```
 ///
@@ -321,6 +371,9 @@ pub struct LiveTarget<'o> {
     window: WindowFacts,
     runtime_id: Vec<i32>,
     guard: Arc<dyn FocusGuard>,
+    /// The element the resolver re-resolved (Windows). Used only by the driver's Windows actuator.
+    #[cfg(target_os = "windows")]
+    uia: Option<windows::Win32::UI::Accessibility::IUIAutomationElement>,
     _not_send: PhantomData<*const ()>,
 }
 
@@ -332,7 +385,10 @@ impl<'o> LiveTarget<'o> {
         window: WindowFacts,
         runtime_id: Vec<i32>,
         guard: Arc<dyn FocusGuard>,
+        handle: ElementHandle,
     ) -> Self {
+        #[cfg(not(target_os = "windows"))]
+        let _ = handle;
         Self {
             observation,
             element,
@@ -340,8 +396,20 @@ impl<'o> LiveTarget<'o> {
             window,
             runtime_id,
             guard,
+            // Resolved HERE, on the thread that owns this target (the driver's worker).
+            #[cfg(target_os = "windows")]
+            uia: handle.agile.as_ref().and_then(|a| a.resolve().ok()),
             _not_send: PhantomData,
         }
+    }
+
+    /// The UIA element the firewall re-resolved and checked for this target (the window / scroll
+    /// container element for the window targets). `None` when there is none: the actuator then
+    /// fails closed. ADR 0004 section 6: used ONLY by `crates/driver/src/platform/windows.rs`
+    /// (a CI grep enforces it); never to read anything.
+    #[cfg(target_os = "windows")]
+    pub fn uia_element(&self) -> Option<&windows::Win32::UI::Accessibility::IUIAutomationElement> {
+        self.uia.as_ref()
     }
 
     pub fn observation(&self) -> &'o Observation {

@@ -11,7 +11,9 @@
 use frame::Rect;
 
 use crate::observe::AppId;
-use crate::target::{hash_automation_id, hash_label, NodeIdentity, ResolvedFields, ResolvedTarget};
+use crate::target::{
+    hash_automation_id, hash_label, ElementHandle, NodeIdentity, ResolvedFields, ResolvedTarget,
+};
 use crate::FirewallError;
 
 // ---------- runtime ids ----------
@@ -155,42 +157,138 @@ pub(crate) fn rects_equal(a: &Rect, b: &Rect) -> bool {
 // ---------- focus ----------
 
 /// Bound of the parent walk used to decide "the focused element is inside the target".
-#[allow(dead_code)] // used by the Windows resolver
 pub(crate) const MAX_ANCESTOR_STEPS: usize = 64;
 
+/// Where focus is, as far as the parent walk can tell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AncestorOutcome {
-    /// Some proper ancestor of the start is the target.
-    Found,
-    /// The chain ended (root reached) without meeting the target.
-    NotFound,
-    /// More than `max_steps` ancestors: treated as "not inside" by callers (fail closed).
-    BoundExceeded,
+pub(crate) enum Placement {
+    /// The focused element is a password field.
+    Secure,
+    /// A text-like focused element whose name is a secret / one-time-code label.
+    Sensitive,
+    /// The focused element is the target.
+    Target,
+    /// The target is an ancestor of the focused element.
+    Descendant,
+    /// Inside the observed window, but not inside the target.
+    InsideWindow,
+    /// Elsewhere (another window, a chain longer than the bound, an unreadable chain).
+    Other,
 }
 
-/// Walk the parents of `start` (not `start` itself) looking for the target, at most `max_steps`
-/// steps. Errors from the platform abort the walk.
-pub(crate) fn find_ancestor<N, E>(
-    start: &N,
-    max_steps: usize,
-    mut parent: impl FnMut(&N) -> Result<Option<N>, E>,
-    mut is_target: impl FnMut(&N) -> Result<bool, E>,
-) -> Result<AncestorOutcome, E> {
-    // The first parent is computed from `start`; later ones from the previous parent.
-    let mut cur = match parent(start)? {
-        Some(p) => p,
-        None => return Ok(AncestorOutcome::NotFound),
-    };
-    for _ in 0..max_steps {
-        if is_target(&cur)? {
-            return Ok(AncestorOutcome::Found);
+impl Placement {
+    /// The `FocusState` the firewall understands. For the window targets (`window_target`: the
+    /// empty runtime id) "anywhere inside the window" is `Descendant`; for an element target it
+    /// is NOT inside the target, so `Other`.
+    pub(crate) fn into_state(self, window_target: bool) -> crate::target::FocusState {
+        use crate::target::FocusState;
+        match self {
+            Placement::Secure => FocusState::Secure,
+            Placement::Sensitive => FocusState::Sensitive,
+            Placement::Target => FocusState::Target,
+            Placement::Descendant => FocusState::Descendant,
+            Placement::InsideWindow if window_target => FocusState::Descendant,
+            Placement::InsideWindow | Placement::Other => FocusState::Other,
         }
-        cur = match parent(&cur)? {
+    }
+}
+
+/// The reads the focus decision needs, per node. The Windows implementation wraps UIA elements;
+/// the tests use a tree of plain structs, so the ORDER of reads is checked on Linux.
+pub(crate) trait FocusCursor {
+    type Node;
+    fn is_password(&mut self, n: &Self::Node) -> Result<bool, FirewallError>;
+    fn control_type(&mut self, n: &Self::Node) -> Result<i32, FirewallError>;
+    /// Only called for text-like controls (see [`focus_label_check_needed`]).
+    fn name(&mut self, n: &Self::Node) -> Result<String, FirewallError>;
+    fn runtime_id(&mut self, n: &Self::Node) -> Result<Vec<i32>, FirewallError>;
+    /// `None` at the end of the chain (or when the parent cannot be read).
+    fn parent(&mut self, n: &Self::Node) -> Result<Option<Self::Node>, FirewallError>;
+    /// Runtime id of the observed window's element. Called at most once, and only when the target
+    /// was not found.
+    fn window_runtime_id(&mut self) -> Result<Vec<i32>, FirewallError>;
+}
+
+struct At<'a, C: FocusCursor> {
+    c: &'a mut C,
+    n: &'a C::Node,
+}
+
+impl<C: FocusCursor> FocusedReads for At<'_, C> {
+    fn is_password(&mut self) -> Result<bool, FirewallError> {
+        self.c.is_password(self.n)
+    }
+    fn control_type(&mut self) -> Result<i32, FirewallError> {
+        self.c.control_type(self.n)
+    }
+    fn name(&mut self) -> Result<String, FirewallError> {
+        self.c.name(self.n)
+    }
+}
+
+/// Decide where `focused` is relative to the target. Read order, cheapest decision first:
+/// 1. `IsPassword` of the focused element (secure => `Secure`, nothing else read);
+/// 2. text-like controls only: the Name against the secret lexicon (`Sensitive`);
+/// 3. the focused element's runtime id against the target's (`Target`) - no tree search;
+/// 4. the focused element's ancestors (at most [`MAX_ANCESTOR_STEPS`]) against the target's
+///    runtime id (`Descendant`);
+/// 5. only when the target was not found: the window element's runtime id against the focused
+///    element and its ancestors (`InsideWindow`), else `Other`.
+///
+/// `target_rid` empty means the window target (steps 3 and 4 are skipped). Empty or unusable
+/// runtime ids never match anything. A chain longer than the bound is `Other` (fail closed), and
+/// the bound makes a cyclic parent chain harmless.
+pub(crate) fn place_focus<C: FocusCursor>(
+    c: &mut C,
+    focused: &C::Node,
+    target_rid: &[i32],
+) -> Result<Placement, FirewallError> {
+    use crate::target::FocusState;
+    if let Some(state) = classify_focused(&mut At {
+        c: &mut *c,
+        n: focused,
+    })? {
+        return Ok(match state {
+            FocusState::Secure => Placement::Secure,
+            _ => Placement::Sensitive,
+        });
+    }
+    let element_target = !target_rid.is_empty();
+    let own = c.runtime_id(focused)?;
+    if element_target && runtime_ids_equal(&own, target_rid) {
+        return Ok(Placement::Target);
+    }
+    // The focused element first, then its ancestors, oldest last.
+    let mut chain: Vec<Vec<i32>> = vec![own];
+    let mut cur = match c.parent(focused)? {
+        Some(p) => p,
+        None => return window_check(c, chain),
+    };
+    for _ in 0..MAX_ANCESTOR_STEPS {
+        let rid = c.runtime_id(&cur)?;
+        if element_target && runtime_ids_equal(&rid, target_rid) {
+            return Ok(Placement::Descendant);
+        }
+        chain.push(rid);
+        cur = match c.parent(&cur)? {
             Some(p) => p,
-            None => return Ok(AncestorOutcome::NotFound),
+            None => return window_check(c, chain),
         };
     }
-    Ok(AncestorOutcome::BoundExceeded)
+    Ok(Placement::Other)
+}
+
+/// The chain ended without meeting the target: is the window element on it?
+fn window_check<C: FocusCursor>(
+    c: &mut C,
+    chain: Vec<Vec<i32>>,
+) -> Result<Placement, FirewallError> {
+    let win = c.window_runtime_id()?;
+    Ok(if chain.iter().any(|r| runtime_ids_equal(r, &win)) {
+        Placement::InsideWindow
+    } else {
+        Placement::Other
+    })
 }
 
 /// Controls whose `Name` the resolver may read for the focus-sensitivity check: only text-like
@@ -247,6 +345,7 @@ pub(crate) fn read_resolved<E: ElementReads>(e: &mut E) -> Result<ResolvedTarget
         automation_id_hash,
         label_hash,
         rect,
+        handle: ElementHandle::default(),
     }))
 }
 
@@ -484,55 +583,258 @@ mod tests {
         assert!(!rects_equal(&a, &Rect::new(2, 2, 3, 4)));
     }
 
-    /// Chain 0 <- 1 <- 2 <- ... (parent of n is n+1) ending at `top`.
-    fn chain(top: u32) -> impl FnMut(&u32) -> Result<Option<u32>, ()> {
-        move |n| Ok((*n < top).then_some(*n + 1))
+    // ---- focus placement over a Windows-cursor-shaped fake ----
+
+    /// A node of the fake tree. `parent` indexes `Tree::nodes`.
+    struct FNode {
+        parent: Option<usize>,
+        rid: Vec<i32>,
+        password: bool,
+        ct: i32,
+        name: &'static str,
+    }
+
+    struct Tree {
+        nodes: Vec<FNode>,
+        window_rid: Vec<i32>,
+        log: Vec<String>,
+    }
+
+    impl Tree {
+        fn n(parent: Option<usize>, rid: &[i32], ct: i32) -> FNode {
+            FNode {
+                parent,
+                rid: rid.to_vec(),
+                password: false,
+                ct,
+                name: "",
+            }
+        }
+        fn count(&self, what: &str) -> usize {
+            self.log.iter().filter(|l| l.starts_with(what)).count()
+        }
+    }
+
+    impl FocusCursor for Tree {
+        type Node = usize;
+        fn is_password(&mut self, n: &usize) -> Result<bool, FirewallError> {
+            self.log.push(format!("is_password {n}"));
+            Ok(self.nodes[*n].password)
+        }
+        fn control_type(&mut self, n: &usize) -> Result<i32, FirewallError> {
+            self.log.push(format!("control_type {n}"));
+            Ok(self.nodes[*n].ct)
+        }
+        fn name(&mut self, n: &usize) -> Result<String, FirewallError> {
+            self.log.push(format!("name {n}"));
+            Ok(self.nodes[*n].name.into())
+        }
+        fn runtime_id(&mut self, n: &usize) -> Result<Vec<i32>, FirewallError> {
+            self.log.push(format!("rid {n}"));
+            Ok(self.nodes[*n].rid.clone())
+        }
+        fn parent(&mut self, n: &usize) -> Result<Option<usize>, FirewallError> {
+            self.log.push(format!("parent {n}"));
+            Ok(self.nodes[*n].parent)
+        }
+        fn window_runtime_id(&mut self) -> Result<Vec<i32>, FirewallError> {
+            self.log.push("window_rid".into());
+            Ok(self.window_rid.clone())
+        }
+    }
+
+    const EDIT: i32 = 50004;
+    const DOC: i32 = 50030;
+    const PANE: i32 = 50033;
+    const WINDOW: i32 = 50032;
+
+    /// window(0) <- pane(1) <- group(2) <- edit(3); window rid [9].
+    fn app_tree() -> Tree {
+        Tree {
+            nodes: vec![
+                Tree::n(None, &[9], WINDOW),
+                Tree::n(Some(0), &[1, 1], PANE),
+                Tree::n(Some(1), &[1, 2], 50026),
+                Tree::n(Some(2), &[1, 3], EDIT),
+            ],
+            window_rid: vec![9],
+            log: vec![],
+        }
     }
 
     #[test]
-    fn ancestor_walk_is_bounded() {
-        let is = |t: u32| move |n: &u32| Ok::<bool, ()>(*n == t);
+    fn focus_reads_is_password_first_and_never_searches() {
+        let mut t = app_tree();
+        t.nodes[3].password = true;
+        t.nodes[3].name = "Enter OTP";
+        assert_eq!(place_focus(&mut t, &3, &[1, 3]), Ok(Placement::Secure));
+        assert_eq!(t.log, vec!["is_password 3"], "nothing else is read");
+    }
+
+    #[test]
+    fn focus_name_is_read_for_text_controls_only() {
+        let mut t = app_tree();
+        t.nodes[3].name = "Enter your one time code";
+        assert_eq!(place_focus(&mut t, &3, &[1, 3]), Ok(Placement::Sensitive));
+        assert_eq!(t.log, vec!["is_password 3", "control_type 3", "name 3"]);
+        // A Document / Pane / Group / Button never has its Name read (titles, D-003).
+        for ct in [DOC, PANE, 50026, 50000] {
+            let mut t = app_tree();
+            t.nodes[3].ct = ct;
+            t.nodes[3].name = "My OTP token page";
+            assert_eq!(
+                place_focus(&mut t, &3, &[1, 3]),
+                Ok(Placement::Target),
+                "{ct}"
+            );
+            assert_eq!(t.count("name"), 0, "{ct}");
+        }
+    }
+
+    #[test]
+    fn focused_target_is_decided_by_its_own_runtime_id_alone() {
+        let mut t = app_tree();
+        assert_eq!(place_focus(&mut t, &3, &[1, 3]), Ok(Placement::Target));
         assert_eq!(
-            find_ancestor(&0, 64, chain(10), is(3)),
-            Ok(AncestorOutcome::Found)
+            t.log,
+            vec!["is_password 3", "control_type 3", "name 3", "rid 3"],
         );
-        // The start itself is not an ancestor.
+        assert_eq!(t.count("parent"), 0, "no walk");
+        assert_eq!(t.count("window_rid"), 0);
+    }
+
+    #[test]
+    fn focused_descendant_is_found_by_the_parent_walk() {
+        let mut t = app_tree();
+        // Target is the group (1,2); focus is its child.
+        assert_eq!(place_focus(&mut t, &3, &[1, 2]), Ok(Placement::Descendant));
+        assert_eq!(t.count("parent"), 1);
         assert_eq!(
-            find_ancestor(&3, 64, chain(10), is(3)),
-            Ok(AncestorOutcome::NotFound)
+            t.count("window_rid"),
+            0,
+            "window id only when the target was not found"
         );
-        // Immediate parent.
+        // Target is the pane two levels up.
+        let mut t = app_tree();
+        assert_eq!(place_focus(&mut t, &3, &[1, 1]), Ok(Placement::Descendant));
+        assert_eq!(t.count("parent"), 2);
+    }
+
+    #[test]
+    fn focus_inside_the_window_but_outside_the_target() {
+        let mut t = app_tree();
+        // Target is some other element (1,99); focus is inside the window.
+        let p = place_focus(&mut t, &3, &[1, 99]).unwrap();
+        assert_eq!(p, Placement::InsideWindow);
+        assert_eq!(t.count("window_rid"), 1);
+        assert_eq!(p.into_state(false), FocusState::Other);
+        assert_eq!(p.into_state(true), FocusState::Descendant);
+        // The focused element IS the window element.
+        let mut t = app_tree();
         assert_eq!(
-            find_ancestor(&2, 1, chain(10), is(3)),
-            Ok(AncestorOutcome::Found)
+            place_focus(&mut t, &0, &[1, 99]),
+            Ok(Placement::InsideWindow)
         );
-        // Root reached without meeting the target.
+    }
+
+    #[test]
+    fn window_target_uses_the_window_walk_only() {
+        // Empty target id: no target comparison at all.
+        let mut t = app_tree();
+        let p = place_focus(&mut t, &3, &[]).unwrap();
+        assert_eq!(p, Placement::InsideWindow);
+        assert_eq!(p.into_state(true), FocusState::Descendant);
+        // Focus in another window: Other.
+        let mut t = app_tree();
+        t.window_rid = vec![77];
+        let p = place_focus(&mut t, &3, &[]).unwrap();
+        assert_eq!(p, Placement::Other);
+        assert_eq!(p.into_state(true), FocusState::Other);
+    }
+
+    #[test]
+    fn empty_runtime_ids_never_match() {
+        // Target given, but every node has an empty runtime id: nothing matches.
+        let mut t = app_tree();
+        for n in &mut t.nodes {
+            n.rid = vec![];
+        }
+        t.window_rid = vec![];
+        assert_eq!(place_focus(&mut t, &3, &[1, 3]), Ok(Placement::Other));
+        // Empty target AND empty window id: not "inside the window".
+        let mut t = app_tree();
+        for n in &mut t.nodes {
+            n.rid = vec![];
+        }
+        t.window_rid = vec![];
+        assert_eq!(place_focus(&mut t, &3, &[]), Ok(Placement::Other));
+        // An empty focused id cannot be the target.
+        let mut t = app_tree();
+        t.nodes[3].rid = vec![];
         assert_eq!(
-            find_ancestor(&0, 64, chain(10), is(99)),
-            Ok(AncestorOutcome::NotFound)
+            place_focus(&mut t, &3, &[1, 3]),
+            Ok(Placement::InsideWindow)
         );
+    }
+
+    #[test]
+    fn an_overlong_or_cyclic_chain_is_other() {
+        // A chain of 100 ancestors: the target sits beyond the bound.
+        let mut nodes = vec![Tree::n(None, &[5000], WINDOW)];
+        for i in 1..=100 {
+            nodes.push(Tree::n(Some(i - 1), &[i as i32], PANE));
+        }
+        let mut t = Tree {
+            nodes,
+            window_rid: vec![5000],
+            log: vec![],
+        };
+        // Focus the deepest; the target (rid [1]) is 99 steps up: beyond MAX_ANCESTOR_STEPS.
+        assert_eq!(place_focus(&mut t, &100, &[1]), Ok(Placement::Other));
         assert_eq!(
-            find_ancestor(&10, 64, chain(10), is(99)),
-            Ok(AncestorOutcome::NotFound)
+            t.count("window_rid"),
+            0,
+            "bound exceeded: no window claim either"
         );
-        // Exactly at the bound is found; one beyond is BoundExceeded (and never "found").
+        assert!(t.count("parent") <= MAX_ANCESTOR_STEPS + 1);
+        // Exactly at the bound is found.
+        let mut nodes = vec![Tree::n(None, &[5000], WINDOW)];
+        for i in 1..=100 {
+            nodes.push(Tree::n(Some(i - 1), &[i as i32], PANE));
+        }
+        let mut t = Tree {
+            nodes,
+            window_rid: vec![5000],
+            log: vec![],
+        };
+        let target_at_bound = [(100 - MAX_ANCESTOR_STEPS) as i32];
         assert_eq!(
-            find_ancestor(&0, 5, chain(100), is(5)),
-            Ok(AncestorOutcome::Found)
-        );
-        assert_eq!(
-            find_ancestor(&0, 5, chain(100), is(6)),
-            Ok(AncestorOutcome::BoundExceeded)
+            place_focus(&mut t, &100, &target_at_bound),
+            Ok(Placement::Descendant)
         );
         // A cycle cannot hang the walk.
-        let cyc = |n: &u32| Ok::<Option<u32>, ()>(Some((*n + 1) % 3));
-        assert_eq!(
-            find_ancestor(&0, 64, cyc, is(99)),
-            Ok(AncestorOutcome::BoundExceeded)
-        );
-        // Errors abort.
-        let err = |_: &u32| Err::<Option<u32>, &str>("boom");
-        assert_eq!(find_ancestor(&0, 8, err, |_| Ok(false)), Err("boom"));
+        let mut t = Tree {
+            nodes: vec![Tree::n(Some(1), &[1], PANE), Tree::n(Some(0), &[2], PANE)],
+            window_rid: vec![9],
+            log: vec![],
+        };
+        assert_eq!(place_focus(&mut t, &0, &[99]), Ok(Placement::Other));
+    }
+
+    #[test]
+    fn placement_maps_to_focus_states() {
+        use Placement::*;
+        for (p, win, want) in [
+            (Secure, false, FocusState::Secure),
+            (Sensitive, true, FocusState::Sensitive),
+            (Target, false, FocusState::Target),
+            (Descendant, false, FocusState::Descendant),
+            (InsideWindow, false, FocusState::Other),
+            (InsideWindow, true, FocusState::Descendant),
+            (Other, true, FocusState::Other),
+        ] {
+            assert_eq!(p.into_state(win), want, "{p:?} {win}");
+        }
     }
 
     #[test]

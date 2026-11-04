@@ -99,6 +99,47 @@ jobs:
             echo "driver uses a UIA Current* property other than CurrentIsReadOnly"; exit 1
           fi
           test -f crates/driver/src/lib.rs # the grep above is not vacuous
+      - name: ADR 0004 section 7 - driver injects KEYBOARD input only (no mouse, no coordinates, no window messages, no shell) and only in platform/windows.rs
+        run: |
+          # No mouse input of any kind and no coordinate or message-based injection anywhere in the driver.
+          if grep -rnE 'MOUSEEVENTF|mouse_event|SetCursorPos|INPUT_MOUSE|MOUSEINPUT|SendMessage|PostMessage|keybd_event|ShellExecute' --include='*.rs' crates/driver/src \
+            | grep -vE '^crates/driver/src/platform/windows\.rs:'; then
+            echo "driver uses a forbidden input API"; exit 1
+          fi
+          # windows.rs may only MENTION the shell API in a comment that says it is never used.
+          if grep -nE 'MOUSEEVENTF|mouse_event|SetCursorPos|INPUT_MOUSE|MOUSEINPUT|SendMessage|PostMessage|keybd_event' crates/driver/src/platform/windows.rs; then
+            echo "windows.rs uses a forbidden input API"; exit 1
+          fi
+          if grep -nE 'ShellExecute' crates/driver/src/platform/windows.rs | grep -vE '^[0-9]+:[[:space:]]*(//|///|//!)'; then
+            echo "windows.rs calls the shell API"; exit 1
+          fi
+          # The keyboard batch API and its struct type appear ONLY in crates/driver/src/platform/windows.rs
+          # (tests.rs, a #[cfg(test)] module that never ships, may contain ONLY these two tokens).
+          hits=$(grep -rnE 'SendInput|INPUT_KEYBOARD' --include='*.rs' apps crates tools \
+            | grep -vE '^crates/driver/src/(platform/windows|tests)\.rs:' || true)
+          if [ -n "$hits" ]; then
+            echo "SendInput / INPUT_KEYBOARD outside crates/driver/src/platform/windows.rs:"; echo "$hits"; exit 1
+          fi
+          grep -q 'SendInput' crates/driver/src/platform/windows.rs # not vacuous
+          # tests.rs is exempt only because it is test-only: lib.rs must declare it under cfg(test).
+          grep -qE '^#\[cfg\(test\)\]$' crates/driver/src/lib.rs
+          grep -A1 -E '^#\[cfg\(test\)\]$' crates/driver/src/lib.rs | grep -qE '^mod tests;$'
+      - name: ADR 0004 section 6 - LiveTarget::uia_element is used only by the Windows actuator
+        run: |
+          hits=$(grep -rnE 'uia_element' --include='*.rs' apps crates tools \
+            | grep -vE '^crates/(firewall/src/target|driver/src/platform/windows)\.rs:' || true)
+          if [ -n "$hits" ]; then
+            echo "uia_element used outside crates/driver/src/platform/windows.rs:"; echo "$hits"; exit 1
+          fi
+          grep -q 'pub fn uia_element' crates/firewall/src/target.rs # not vacuous
+          grep -q 'uia_element' crates/driver/src/platform/windows.rs
+      - name: ADR 0004 section 3 - the Windows actuator type stays pub(crate)
+        run: |
+          grep -q 'pub(crate) struct WinActuator' crates/driver/src/platform/windows.rs
+          if grep -rnE 'pub[[:space:]]+struct[[:space:]]+WinActuator|WinActuator' --include='*.rs' apps crates tools \
+            | grep -vE '^crates/driver/src/(platform/windows|tests)\.rs:'; then
+            echo "WinActuator named outside the driver's Windows module"; exit 1
+          fi
       - name: ADR 0004 section 4.7 - nothing reads the clipboard
         run: |
           if grep -rnE 'GetClipboardData|OpenClipboard' --include='*.rs' crates/firewall crates/driver crates/action crates/policy; then

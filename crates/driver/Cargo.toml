@@ -17,6 +17,24 @@ frame = { path = "../frame" }
 policy = { path = "../policy" }
 thiserror = "1"
 
+# Platform deps are target-gated so Linux builds never see them (L-009, CI driver tree grep).
+# Permissive (MIT OR Apache-2.0). Features: Foundation (HWND/BOOL), Security (token elevation,
+# CreateProcessW attributes), System_Com (CoInitializeEx), System_Threading (CreateProcessW,
+# process image path), UI_Accessibility (UIA patterns), UI_Input_KeyboardAndMouse (the keyboard
+# batch API; NO mouse input is ever built), UI_WindowsAndMessaging (EnumWindows,
+# SetForegroundWindow), Graphics_Dwm (cloaked-window filter).
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Dwm",
+  "Win32_Security",
+  "Win32_System_Com",
+  "Win32_System_Threading",
+  "Win32_UI_Accessibility",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
 [dev-dependencies]
 driver = { path = ".", features = ["fakes"] }
 firewall = { path = "../firewall", features = ["fakes"] }

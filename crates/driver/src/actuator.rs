@@ -57,6 +57,9 @@ pub trait Actuator: Send + Sync {
     /// `Driver::emergency_release` and again after any input call that returned while the
     /// driver was released meanwhile, and after an actuator panic.
     fn release_all(&self) {}
+    /// Called once on the driver's worker thread before its first primitive (the Windows actuator
+    /// initialises COM here). Must tolerate being called on an already initialised thread.
+    fn init_thread(&self) {}
 }
 
 /// Everything is `Err(Unsupported)` (Linux, macOS).

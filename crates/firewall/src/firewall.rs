@@ -761,7 +761,7 @@ impl<
 
         // 4-6. Re-resolve inside that hwnd only; is_password first; identity must match exactly.
         let mut runtime_id = Vec::new();
-        if let Some(t) = slot {
+        let handle = if let Some(t) = slot {
             runtime_id = t.identity.runtime_id.clone();
             let req = ResolveRequest {
                 hwnd: observed.hwnd,
@@ -790,7 +790,22 @@ impl<
             if found.rect != t.rect {
                 return Err(TargetRefusal::TargetChanged { field: "rect" });
             }
-        }
+            found.handle
+        } else {
+            // Window targets (Windows): the window / scroll-container element, resolved by the
+            // firewall so the driver never searches for it.
+            #[cfg(target_os = "windows")]
+            {
+                let (hwnd, scroll) = (observed.hwnd, kind == TargetKind::ScrollRoot);
+                resolver_call(&resolver, &self.resolver_busy, timeout, move |r| {
+                    r.resolve_window(hwnd, scroll)
+                })?
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                crate::target::ElementHandle::default()
+            }
+        };
 
         // 6b. Cheap second foreground check AFTER the resolve: the user (or an app) may have
         // switched windows while the element was being re-resolved.
@@ -832,6 +847,7 @@ impl<
             observed.clone(),
             runtime_id,
             guard,
+            handle,
         ))
     }
 

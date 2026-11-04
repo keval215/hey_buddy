@@ -470,15 +470,78 @@ Build: `pnpm --filter desktop tauri dev` (debug build: has the fake-task harness
     answer "The agent is working. Stop it first".
 Not covered by hardware here: the Windows message-loop thread itself (compile-checked only).
 
-## Driver (S2-14c/d) - NOTHING RUNNABLE YET (Windows actuator is S2-14d)
+## Driver (S2-14c) - Linux tests only
 
-S2-14c is fully covered by Linux tests against the fake actuator (`cargo test -p driver`, see
-`docs/driver.md`). Until S2-14d lands there is no real input path, so none of these can be tried by hand:
-UIA pattern clicks (Invoke/Toggle/Select/ExpandCollapse), `SendInput` typing in chunks of 16 with the focus
-check, key combos, Ctrl+C copy, scroll, launching Notepad from the allowlist, focusing an app, the 3 s deadline
-on a blocking `Invoke` (modal dialog), foreground-lock behaviour of `SetFocus`, `release_all` while a key is held,
-refusal on an elevated target / lock screen / UAC, and the ADR 0004 section 19 VERIFY list. S2-14d adds the real
-checklist here.
+S2-14c is covered by Linux tests against the fake actuator (`cargo test -p driver`, see `docs/driver.md`). The real
+input path is the next section.
+
+## Windows actuator (S2-14d2) - UNTESTED on this machine (all of it)
+
+`crates/driver/src/platform/windows.rs` was only compile-checked (`x86_64-pc-windows-gnu`); the pure parts
+(`input_plan.rs`) and the `focus_state` ordering (`win_pure.rs`) are Linux-tested. Run hey_buddy NOT elevated (an
+elevated hey_buddy refuses to build the driver: `Unsupported("elevated")`). Drive it through the dev harness / an
+approved action; record outcomes and latency (ms) for every item.
+
+Launch and focus:
+- [ ] Open `notepad` through the allowlist: Notepad appears with a window (no console flash, not hidden), only one
+      process, no arguments. VERIFY the Windows 11 Notepad alias / packaged exe: `%SystemRoot%\System32\notepad.exe`
+      exists and launches the Store Notepad, and `observe` then reports `app: notepad.exe` (if the packaged exe has
+      another name, the allowlist and deny lists need it).
+- [ ] Rename/remove `System32\notepad.exe` (or point the allowlist at a missing file): clean `Platform("launch target
+      missing")`, nothing launched, no PATH search. An allowlist entry that is relative / UNC / has `..` is refused.
+- [ ] An exe whose manifest requires elevation: refused (`launch needs elevation`), NO UAC prompt appears.
+- [ ] `FocusApp` on a background Notepad: it comes to the front right after clicking Approve in our panel. VERIFY the
+      foreground-lock behaviour (works from the approval click? after a hotkey? when another app was just used?).
+      A refusal must surface as `focus refused` / `focus not taken`, not a silent success. `SetForegroundWindow` may be
+      refused by the foreground lock; that is reported and never worked around. A window of a process with HIGHER
+      integrity than hey_buddy (e.g. an elevated Notepad) or of unknown integrity is skipped: `no window to focus`.
+- [ ] While the agent types: do NOT touch the keyboard (especially Ctrl/Alt/Win). Unicode packets can act as
+      shortcuts if a modifier is physically held. Try holding Ctrl during a `TypeText` and record what happens.
+- [ ] Stuck-key recovery (hard to provoke; read the code path): after an `input failed; keys may be held` error, the
+      next action (or `init_thread`) first releases the remembered keys. Check no modifier stays logically down.
+
+Typing and keys:
+- [ ] Type a 40-character text into Notepad (`TypeText`): observe the 3 chunks (16+16+8), the result is exactly the
+      text, `delivery` is `DeliveredUnverified`. Include non-ASCII (e, CJK) and an emoji (one batch, no split pair).
+- [ ] Focus steal mid-typing: start a long `TypeText` and alt-tab away while it runs: it STOPS (`FocusLost`),
+      `Partial{n}`, nothing lands in the other app after the switch (at most the one chunk in flight).
+- [ ] 1000-character text: expect `Partial` after about 2 s (`Revoked`, `ACTION_TTL`); record how many characters made it.
+- [ ] `SetText` into a plain Edit (Notepad): replaced via ValuePattern; into a read-only edit: refused
+      (`element is read-only`); into a control without ValuePattern: `Unsupported`.
+- [ ] `KeyCombo` Tab / Shift+Tab / Enter / Esc / arrows / Home/End/PageUp/PageDown / Space; Ctrl+A / Ctrl+Z / Ctrl+F
+      in Notepad; Backspace and Delete (extended flag: Delete must delete, not behave as NumPad Del) only in an
+      editable target.
+- [ ] `CopySelection`: select text, run it, paste elsewhere by hand: the text is there; hey_buddy never reads the
+      clipboard (check no clipboard access in the process, e.g. with a clipboard monitor).
+- [ ] Kill hotkey mid-typing: hold Shift on the keyboard (physically) while an action types, press the kill hotkey:
+      typing stops, no key stays logically down afterwards (type a letter: lower case; Ctrl/Shift not stuck). Repeat
+      with a `KeyCombo` Ctrl+A. `release_all` is safe to call twice.
+
+Patterns:
+- [ ] Click a Button via Invoke (a harmless one); a button that opens a modal dialog: the 3 s deadline fires, the
+      driver reports `Busy` until the dialog closes (VERIFY whether `Invoke` blocks).
+- [ ] Toggle a CheckBox (state flips once); select a RadioButton / Tab / ListItem; open a ComboBox (ExpandCollapse:
+      Expand only).
+- [ ] Scroll: Notepad (long text), Chrome and Edge (a long page; window target), a list inside an app (element target);
+      small step and large page, up/down/left/right; `repeat` 3. VERIFY `ScrollPattern` availability in Chrome/Edge
+      (`resolve_window` scroll root) and that scrolling a non-scrollable direction reports an error, not success.
+
+Refusals (nothing may be typed or sent):
+- [ ] Typing into a password field (IsPassword) at observe time: no `#n` target. Focus a password field by hand then run
+      TypeText on another field: `SecureTarget` at the focus check.
+- [ ] OTP-ish field: an Edit named "Verification code" / "One time code" that is not IsPassword: `SensitiveTarget`.
+      Known gap: a Document/Custom OTP box is not detected (docs/observation.md).
+- [ ] Elevated target (run an elevated Notepad in the foreground): `ElevatedTarget`; lock screen / UAC: `SessionPaused`.
+- [ ] Our own window in the foreground: `OwnWindow`.
+
+Latency to record (ms): `revalidate` (resolve + 2 foreground reads), `verify_focus` per chunk (now `GetFocusedElement`
++ property reads + parent walk, no tree search; expect well under 100 ms; compare with the old 700 ms walk), one
+`send_chars` batch, `Invoke`, `SetValue`, `launch`, `focus_app`, and the per-chunk total for typing 1000 characters.
+
+VERIFY list additions from d2: `AgileReference` of a UIA element resolves on the driver worker; `COM` init on the worker
+(`init_thread`) tolerates an already initialised thread; the window root runtime id from `ElementFromHandle(hwnd)` equals
+the one met on the focused element's parent chain (otherwise window-target typing/scrolling fails closed with
+`FocusLost`); `GetCurrentPatternAs` on elements without the pattern fails (mapped to `Unsupported`), not a null success.
 
 ## Windows agent observation (S2-14d1) - UNTESTED on this machine (all of it)
 
@@ -539,6 +602,7 @@ Copied from `docs/agents/STATE.md` "User must verify locally"; T7 / T8 items.
 - [ ] T8: all of `firewall/platform/{windows,macos}.rs` (UIA `IsPassword`, AX walk, enable-accessibility poll, lock-screen probes, 1500/2500 ms detector timeouts, system-owner allow-list)
 - [ ] T13: all of `firewall/platform/{macos_text,windows_text}.rs` (see "Text path (T13)")
 - [ ] S2-14d1: all of `firewall/platform/windows_agent.rs` (see "Windows agent observation (S2-14d1)")
+- [ ] S2-14d2: all of `crates/driver/src/platform/windows.rs` and the redesigned `focus_state` (see "Windows actuator (S2-14d2)")
 - [ ] T8: test on Safari, Chrome, Electron and native login dialogs
 - [ ] Desktop ticket must declare PerMonitorV2 DPI awareness in the Windows manifest (the Windows firewall detector blocks every check until it does)
 

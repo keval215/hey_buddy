@@ -170,7 +170,7 @@ impl From<ActError> for DriverError {
     }
 }
 
-/// What reached the target. `SendInput` / pattern return values are never delivery proof, so a
+/// What reached the target. keyboard-batch / pattern return values are never delivery proof, so a
 /// success is only ever `DeliveredUnverified` (the next observation shows the effect).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Delivery {

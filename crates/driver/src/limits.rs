@@ -42,12 +42,19 @@ impl LaunchAllowlist {
         Some(self)
     }
 
-    /// The default list: `notepad` -> `%SystemRoot%\System32\notepad.exe` (ADR 0004 OQ5).
+    /// The default list: `notepad` -> `%SystemRoot%\System32\notepad.exe` (ADR 0004 OQ5). The path
+    /// is built from the `SystemRoot` environment variable, which must be an absolute local
+    /// directory (not UNC, no `..`); otherwise the list is EMPTY (no guess, no PATH search).
     pub fn windows_default() -> Self {
-        let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
-        Self::empty()
-            .with("notepad", format!("{root}\\System32\\notepad.exe"))
-            .unwrap_or_default()
+        Self::windows_default_for(std::env::var("SystemRoot").ok().as_deref())
+    }
+
+    /// [`windows_default`](Self::windows_default) for an explicit `SystemRoot` value.
+    pub(crate) fn windows_default_for(system_root: Option<&str>) -> Self {
+        match crate::input_plan::notepad_path(system_root) {
+            Some(p) => Self::empty().with("notepad", p).unwrap_or_default(),
+            None => Self::empty(),
+        }
     }
 
     pub fn resolve(&self, id: &LaunchId) -> Option<&Path> {
@@ -185,6 +192,28 @@ mod tests {
         assert!(!s.is_denied("notes.exe"));
         assert!(s.is_denied("BANK.exe"));
         assert!(s.is_denied("other.exe"));
+    }
+
+    #[test]
+    fn default_allowlist_needs_a_valid_system_root() {
+        let id = LaunchId::new("notepad").unwrap();
+        let ok = LaunchAllowlist::windows_default_for(Some("C:\\Windows"));
+        assert_eq!(
+            ok.resolve(&id),
+            Some(Path::new("C:\\Windows\\System32\\notepad.exe"))
+        );
+        for bad in [
+            None,
+            Some(""),
+            Some("\\\\host\\share"),
+            Some("..\\x"),
+            Some("C:\\a\\.."),
+        ] {
+            assert!(
+                LaunchAllowlist::windows_default_for(bad).is_empty(),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]

@@ -96,10 +96,31 @@ logic, integrity RID mapping, exe path to app id, creation-time comparison, ance
   (`GetTokenInformation(TokenIntegrityLevel)` with `PROCESS_QUERY_LIMITED_INFORMATION`; an access-denied token open
   of a TARGET process counts as higher integrity, so elevated windows give `ElevatedTarget`), and
   `on_user_desktop` = `OpenInputDesktop` succeeds and `UOI_NAME == "Default"`.
-- `focus_state`: `GetFocusedElement`; `IsPassword` first (`Secure`), then the secret-lexicon check on text-like
-  controls (`Sensitive`), then `CompareElements(focused, target)` (`Target`) and a raw-view ancestor walk bounded to
-  64 steps (`Descendant`); a longer chain counts as `Other`.
+- `focus_state` (redesigned in S2-14d2; no `locate` / `FindFirst` / 700 ms walk per call): `GetFocusedElement`;
+  `IsPassword` of the focused element FIRST (`Secure`); for text-like controls only the Name against the secret
+  lexicon (`Sensitive`; a Document / Pane / Group / Button name is never read); then the focused element's runtime id
+  against the target's (cheap property read; equal => `Target`); then a raw-view parent walk (`GetParentElement`,
+  bounded to 64 steps) comparing runtime ids with the target's (`Descendant`); only when the target was not found,
+  the window element's runtime id (`ElementFromHandle(hwnd)`) is compared with the focused element and its ancestors
+  (inside the observed window but not inside the target: `Other` for an element target, `Descendant` for the window
+  targets). A chain longer than the bound, an unreadable parent, or an empty / unusable runtime id never matches
+  (`Other`, fail closed). All decisions are in `win_pure.rs::place_focus` over the `FocusCursor` trait and are
+  Linux-tested with a Windows-cursor-shaped fake (read order, bounds, cycles, empty ids).
+- `resolve` hands the re-resolved element to the `LiveTarget` (`ElementHandle`, an agile COM reference; the driver's
+  actuator acts on exactly that element and never searches). For the window targets `resolve_window` returns the
+  window element, or for a scroll root the window element if it has a `ScrollPattern`, else its first descendant with
+  `IsScrollPatternAvailable` (a property condition; a password field is never returned). VERIFY on Windows.
 - `windows` crate features added: `Win32_Security`, `Win32_Graphics_Dwm` (same permissive crate).
+
+### Known gap: OTP fields that are not Edit controls
+
+The sensitive-label check on the FOCUSED element reads a Name only for text-like controls (Edit, ComboBox and other
+editable types), because Document / Pane / Group / Custom names are page and window titles (D-003). A one-time-code
+box that a web app builds as a `Document`, `Custom` or `Pane` element (some Chromium/Electron widgets, canvas inputs,
+segmented code boxes) and that is not `IsPassword` is therefore NOT recognised by `focus_state`: typing into it is
+only stopped when the target's own label (read at observe time, `sensitive_label`) names a secret. Residual risk,
+accepted for v1; the mitigation is the observe-time label check on emitted targets plus the user's approval.
+Revisit with a per-role allowlist or a UIA `LabeledBy` read if it shows up in practice.
 
 ## Platform adapters (S2-14d)
 
