@@ -6,6 +6,10 @@ _Owner: orch. Newest first. Max 60 entries; archive older ones to
 Format:
 
 ```
+## H-S2-17 2026-11-04 S2-17+23a -> coder, reviewer
+Asked: agent supervisor wiring.
+Result: APPROVED (5 MINOR); ReverifiedAtExecute judged SAFE-IF -> D-009.
+
 ## H-S2-16 2026-11-04 S2-16 -> coder x2, reviewer
 Asked: approval broker + window + UI.
 Result: round 1 CHANGES REQUESTED (MAJOR held-key repeat), round 2 accepted by orch.
