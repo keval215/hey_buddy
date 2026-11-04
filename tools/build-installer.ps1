@@ -28,8 +28,9 @@ if ($LASTEXITCODE -ne 0) { throw 'tauri build failed' }
 $out = Join-Path $root 'dist/installer'
 Remove-Item $out -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $out | Out-Null
-$setup = Get-ChildItem (Join-Path $root 'target/release/bundle/nsis') -Filter '*-setup.exe'
-if (-not $setup) { throw 'no NSIS installer produced' }
+$setup = @(Get-ChildItem (Join-Path $root 'target/release/bundle/nsis') -Filter '*-setup.exe')
+if ($setup.Count -eq 0) { throw 'no NSIS installer produced' }
+$setupPath = $setup[0].FullName
 $files = @($setup)
 if ($Msi) { $files += Get-ChildItem (Join-Path $root 'target/release/bundle/msi') -Filter '*.msi' }
 $files | Copy-Item -Destination $out
@@ -39,7 +40,10 @@ $lines = Get-ChildItem $out -File | Where-Object Name -ne 'SHA256SUMS' | ForEach
 # LF line endings, no BOM, so `sha256sum -c` works on the file.
 [IO.File]::WriteAllText((Join-Path $out 'SHA256SUMS'), (($lines -join "`n") + "`n"))
 
-# 4. Assertions on the built files (offline).
-cargo run -q -p installer-check -- --installer $setup[0].FullName --exe (Join-Path $root 'target/release/desktop.exe') --agent $agent
+# 4. Assertions on the built files (offline). The main app exe is the cargo bin `desktop`
+#    (Tauri default name; the installed name is likely desktop.exe, verify on Windows). The
+#    installer's own manifest may be compressed, so extraction failure is a printed NOTE, not fatal
+#    (pass --require-installer-manifest to make it fatal).
+cargo run -q -p installer-check -- --installer $setupPath --exe (Join-Path $root 'target/release/desktop.exe') --agent $agent
 if ($LASTEXITCODE -ne 0) { throw 'installer-check failed' }
 Write-Host "UNSIGNED installer written to $out (SmartScreen will warn)."

@@ -165,27 +165,110 @@ pub fn check_config(base: &Value, overlay: &Value, hooks: Option<&str>) -> Vec<S
     bad
 }
 
-/// The NSIS hooks must grant ALL APPLICATION PACKAGES read+execute only, and delete nothing.
+/// The only two ACL commands the hooks may run, compared after trimming the line.
+const GRANT_DIR: &str =
+    r#"nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$INSTDIR" /grant "*S-1-15-2-1:(RX)"'"#;
+const GRANT_AGENT: &str = r#"nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$INSTDIR\buddy-agent.exe" /grant "*S-1-15-2-1:(RX)"'"#;
+
+fn is_word(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// True when `token` occurs in `text` (ASCII case-insensitive) starting at a word boundary.
+/// Whitespace, tabs, `/`, `:` and so on all count as boundaries.
+fn has_token(text: &str, token: &str) -> bool {
+    let (t, k) = (text.to_ascii_lowercase(), token.to_ascii_lowercase());
+    t.match_indices(&k)
+        .any(|(i, _)| !t[..i].chars().next_back().is_some_and(is_word))
+}
+
+/// Body of `!macro NAME ... !macroend` (comments already removed), if present.
+fn macro_body<'a>(code: &'a str, name: &str) -> Option<&'a str> {
+    let start = code.find(&format!("!macro {name}"))?;
+    let rest = &code[start..];
+    let end = rest.find("!macroend")?;
+    Some(&rest[..end])
+}
+
+/// The NSIS hooks may only grant ALL APPLICATION PACKAGES `(RX)` on the install dir (not
+/// inherited) and on buddy-agent.exe, must guard against drive roots / user folders, and must
+/// delete nothing. Structural: exact lines, not a substring blacklist.
 pub fn check_hooks(h: &str) -> Vec<String> {
-    let code: String = h
+    let lines: Vec<&str> = h
         .lines()
-        .filter(|l| !l.trim_start().starts_with(';'))
-        .collect::<Vec<_>>()
-        .join("\n");
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with(';'))
+        .collect();
+    let code = lines.join("\n");
     let mut bad = Vec::new();
-    if !code.contains("S-1-15-2-1") || !code.contains("(RX)") || !code.contains("icacls") {
-        bad.push("hooks: no icacls (RX) grant to ALL APPLICATION PACKAGES (S-1-15-2-1)".into());
-    }
-    for forbidden in [
-        "(F)", "(M)", "(W)", "(WD)", "(GA)", "(GW)", "Everyone", "S-1-1-0",
-    ] {
-        if code.contains(forbidden) {
-            bad.push(format!("hooks: forbidden ACL token {forbidden}"));
+    for want in [GRANT_DIR, GRANT_AGENT] {
+        let n = lines.iter().filter(|l| **l == want).count();
+        if n != 1 {
+            bad.push(format!(
+                "hooks: expected exactly one line `{want}`, found {n}"
+            ));
         }
     }
-    for forbidden in ["RMDir", "Delete ", "RequestExecutionLevel admin", "runas"] {
-        if code.contains(forbidden) {
+    for l in &lines {
+        let low = l.to_ascii_lowercase();
+        let acl_cmd = ["icacls", "cacls", "takeown", "/grant", "/deny", "/setowner"]
+            .iter()
+            .any(|k| low.contains(k));
+        if acl_cmd && *l != GRANT_DIR && *l != GRANT_AGENT {
+            bad.push(format!("hooks: unexpected ACL command line: {l}"));
+        }
+        if l.contains("S-1-15-2-1") && *l != GRANT_DIR && *l != GRANT_AGENT {
+            bad.push(format!("hooks: unexpected use of S-1-15-2-1: {l}"));
+        }
+    }
+    for forbidden in [
+        "/grant:r",
+        "/inheritance",
+        "/reset",
+        "/remove",
+        "Everyone",
+        "S-1-1-0",
+        "RequestExecutionLevel admin",
+        "runas",
+    ] {
+        if code
+            .to_ascii_lowercase()
+            .contains(&forbidden.to_ascii_lowercase())
+        {
             bad.push(format!("hooks: forbidden token {forbidden}"));
+        }
+    }
+    // Fail-closed guard for user-selectable install dirs.
+    for var in [
+        "$PROFILE",
+        "$DOCUMENTS",
+        "$DESKTOP",
+        "$LOCALAPPDATA",
+        "$PROGRAMFILES",
+    ] {
+        if !code.contains(var) {
+            bad.push(format!("hooks: install-dir guard does not mention {var}"));
+        }
+    }
+    if !code.contains("MessageBox") {
+        bad.push("hooks: guard must warn with a MessageBox when it skips the grant".into());
+    }
+    // Nothing may delete anything (the uninstall macros especially; S3-6 owns data deletion).
+    for name in ["NSIS_HOOK_PREUNINSTALL", "NSIS_HOOK_POSTUNINSTALL"] {
+        match macro_body(&code, name) {
+            None => bad.push(format!("hooks: macro {name} missing")),
+            Some(body) => {
+                for t in ["Delete", "RMDir", "RemoveDirectory"] {
+                    if has_token(body, t) {
+                        bad.push(format!("hooks: {name} contains forbidden token {t}"));
+                    }
+                }
+            }
+        }
+    }
+    for t in ["RMDir", "RemoveDirectory", "Delete"] {
+        if has_token(&code, t) {
+            bad.push(format!("hooks: forbidden token {t}"));
         }
     }
     bad
@@ -270,7 +353,8 @@ mod tests {
     fn good_overlay() -> Value {
         json!({"bundle":{"resources":{"../../../target/release/buddy-agent.exe":"buddy-agent.exe"}}})
     }
-    const HOOKS: &str = "; comment (F)\nnsExec::ExecToLog 'icacls \"$INSTDIR\" /grant \"*S-1-15-2-1:(OI)(CI)(RX)\"'\n";
+    /// The real hooks file: the mutation tests below start from what actually ships.
+    const HOOKS: &str = include_str!("../../../apps/desktop/src-tauri/installer/hooks.nsh");
 
     #[test]
     fn good_config_passes() {
@@ -308,10 +392,87 @@ mod tests {
         assert!(!check_config(&good_base(), &good_overlay(), None).is_empty());
     }
     #[test]
+    fn shipped_hooks_pass() {
+        assert_eq!(check_hooks(HOOKS), Vec::<String>::new());
+    }
+    fn mutated(from: &str, to: &str) -> Vec<String> {
+        assert!(HOOKS.contains(from), "test setup: {from}");
+        check_hooks(&HOOKS.replace(from, to))
+    }
+    #[test]
     fn hooks_negatives() {
-        assert!(check_hooks(HOOKS).is_empty());
+        // Comments never count.
         assert!(!check_hooks("; only a comment S-1-15-2-1 (RX) icacls").is_empty());
-        assert!(!check_hooks("icacls x /grant *S-1-15-2-1:(F) (RX)").is_empty());
-        assert!(!check_hooks(&format!("{HOOKS}\nRMDir /r $APPDATA")).is_empty());
+        // Wrong SID, wider perms, inheritance.
+        assert!(!mutated("*S-1-15-2-1:(RX)", "*S-1-1-0:(RX)").is_empty());
+        assert!(!mutated("*S-1-15-2-1:(RX)", "*S-1-15-2-2:(RX)").is_empty());
+        assert!(!mutated("*S-1-15-2-1:(RX)", "*S-1-15-2-1:(RX)(WD)").is_empty());
+        assert!(!mutated("*S-1-15-2-1:(RX)", "*S-1-15-2-1:(RX,DE)").is_empty());
+        assert!(!mutated("*S-1-15-2-1:(RX)", "*S-1-15-2-1:(OI)(CI)(RX)").is_empty());
+        assert!(!mutated("*S-1-15-2-1:(RX)", "*S-1-15-2-1:(F)").is_empty());
+        assert!(!mutated(
+            "/grant \"*S-1-15-2-1:(RX)\"'\n    Pop",
+            "/grant:r \"*S-1-15-2-1:(RX)\"'\n    Pop"
+        )
+        .is_empty());
+        // Extra ACL commands.
+        for extra in [
+            "nsExec::Exec 'icacls \"$PROFILE\" /inheritance:r'",
+            "nsExec::Exec 'icacls x /reset'",
+            "nsExec::Exec 'takeown /f x'",
+            "nsExec::Exec 'cacls x /G Everyone:F'",
+            "ExecWait 'cmd /c icacls x /grant *S-1-15-2-1:(RX)'",
+        ] {
+            assert!(
+                !mutated(
+                    "!macro NSIS_HOOK_PREINSTALL",
+                    &format!("!macro NSIS_HOOK_PREINSTALL\n  {extra}")
+                )
+                .is_empty(),
+                "{extra}"
+            );
+        }
+        // A duplicated or missing grant line.
+        assert!(!mutated(
+            "!macro NSIS_HOOK_PREINSTALL",
+            &format!("!macro NSIS_HOOK_PREINSTALL\n{GRANT_DIR}")
+        )
+        .is_empty());
+        assert!(!mutated(GRANT_AGENT, "").is_empty());
+    }
+    #[test]
+    fn hooks_delete_tokens_in_uninstall_fail() {
+        for t in [
+            "Delete\t$INSTDIR\\x",
+            "Delete /REBOOTOK x",
+            "delete x",
+            "RMDir /r $APPDATA",
+            "rmdir\t$APPDATA",
+            "RemoveDirectory x",
+            "DeleteRegKey HKCU x",
+        ] {
+            let m = mutated(
+                "!macro NSIS_HOOK_POSTUNINSTALL",
+                &format!("!macro NSIS_HOOK_POSTUNINSTALL\n  {t}"),
+            );
+            assert!(!m.is_empty(), "{t}");
+            let m = mutated(
+                "!macro NSIS_HOOK_PREUNINSTALL",
+                &format!("!macro NSIS_HOOK_PREUNINSTALL\n{t}"),
+            );
+            assert!(!m.is_empty(), "{t}");
+        }
+        // A word that merely contains the token is fine.
+        assert!(mutated(
+            "!macro NSIS_HOOK_POSTUNINSTALL",
+            "!macro NSIS_HOOK_POSTUNINSTALL\n  DetailPrint \"Undeleted\""
+        )
+        .is_empty());
+    }
+    #[test]
+    fn hooks_guard_must_exist() {
+        assert!(!mutated("$PROFILE", "$TEMP").is_empty());
+        assert!(!mutated("MessageBox", "DetailPrint").is_empty());
+        assert!(!check_hooks("").is_empty());
     }
 }

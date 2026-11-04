@@ -317,6 +317,9 @@ jobs:
       - name: Build frontend (Tauri embeds dist)
         run: pnpm --filter desktop build
       - run: cargo check --workspace
+      # Kept on purpose: builds the app with the BASE config (no installer overlay, no buddy-agent
+      # resource), proving a plain `tauri build` still works. The installer step below rebuilds with
+      # the overlay.
       - name: Tauri build
         run: pnpm --filter desktop tauri build --no-bundle
       - name: Build unsigned NSIS installer + SHA256SUMS + assertions (S3-1; no signing, no secrets)

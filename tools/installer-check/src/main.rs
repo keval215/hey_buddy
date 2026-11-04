@@ -2,9 +2,13 @@
 //!
 //! Static mode (default, runs on Linux CI): checks tauri.conf.json, the installer overlay, the NSIS
 //! hooks and the source manifest. Artifact flags add checks of built files:
-//!   --installer <setup.exe>   exists, is a PE file; its own manifest (if readable) is asInvoker
-//!   --exe <hey_buddy.exe>     embedded app manifest: PerMonitorV2, asInvoker, no uiAccess
-//!   --agent <buddy-agent.exe> exists (it ships next to the main exe)
+//!   --installer <setup.exe>   exists, is a PE file; its own manifest (if readable) is asInvoker.
+//!                             If the manifest cannot be extracted (NSIS may compress it) a NOTE is
+//!                             printed; add --require-installer-manifest to make that a failure.
+//!   --require-installer-manifest  fail when the installer's manifest cannot be extracted
+//!   --exe <app.exe>           the Tauri-produced main app exe (likely desktop.exe; verify on
+//!                             Windows): embedded manifest PerMonitorV2, asInvoker, no uiAccess
+//!   --agent <buddy-agent.exe> exists (it ships beside the main app exe in the install dir)
 //! Unsigned installers are expected in S3-1: that is noted, not failed.
 
 use std::{env, fs, path::PathBuf, process::exit};
@@ -36,7 +40,9 @@ fn main() {
         Err(e) => bad.push(format!("source manifest unreadable: {e}")),
     }
 
-    let args: Vec<String> = env::args().skip(1).collect();
+    let mut args: Vec<String> = env::args().skip(1).collect();
+    let require_manifest = args.iter().any(|a| a == "--require-installer-manifest");
+    args.retain(|a| a != "--require-installer-manifest");
     let mut i = 0;
     while i < args.len() {
         let flag = args[i].as_str();
@@ -52,8 +58,17 @@ fn main() {
                     bad.push("installer is not a PE file".into());
                 }
                 // The NSIS stub's own manifest, when stored uncompressed, must not elevate.
-                if let Some(m) = extract_manifest(&b) {
-                    bad.extend(check_manifest_level_only(&m));
+                match extract_manifest(&b) {
+                    Some(m) => bad.extend(check_manifest_level_only(&m)),
+                    None if require_manifest => bad.push(
+                        "installer: embedded manifest could not be extracted \
+                         (--require-installer-manifest)"
+                            .into(),
+                    ),
+                    None => println!(
+                        "NOTE: the installer's embedded manifest could not be extracted \
+                         (likely compressed); its elevation level was NOT checked."
+                    ),
                 }
             }
             ("--exe", Ok(b)) => match extract_manifest(&b) {

@@ -14,7 +14,9 @@ pwsh tools/build-installer.ps1        # add -Msi to also build an MSI (not built
 
 Steps: `cargo build -p agent --bin buddy-agent --release`, `pnpm install`, then
 `pnpm --filter desktop tauri build --bundles nsis --config src-tauri/tauri.installer.conf.json`, copy to
-`dist/installer/`, write `SHA256SUMS`, run `installer-check` against the built files.
+`dist/installer/`, write `SHA256SUMS`, run `installer-check` against the built files. The installer's own embedded manifest may be compressed; if it
+cannot be extracted `installer-check` prints a NOTE and carries on (the script does not pass
+`--require-installer-manifest`; pass it by hand to make that a failure).
 
 Outputs: `dist/installer/hey_buddy_<version>_x64-setup.exe` and `dist/installer/SHA256SUMS`. The version comes from
 the workspace `Cargo.toml` (`tauri.conf.json` has no `version`). CI uploads both as the artifact `hey_buddy-installer`.
@@ -47,12 +49,29 @@ The agent engine sandbox launches only `<install_dir>\buddy-agent.exe` (see `doc
 `target/release/buddy-agent.exe` to the resource `buddy-agent.exe`, which the NSIS bundler installs in the install
 dir root, next to the main exe.
 
+The main exe is the Tauri-produced app exe (cargo bin `desktop`, so likely `desktop.exe` in the install dir; VERIFY
+on Windows, we deliberately keep the Tauri default name). `buddy-agent.exe` sits beside it.
+
 An AppContainer process can only read and execute files whose ACL grants `ALL APPLICATION PACKAGES` (S-1-15-2-1).
-`%LOCALAPPDATA%\Programs` does not grant it by default, so `NSIS_HOOK_POSTINSTALL` runs
-`icacls "$INSTDIR" /grant "*S-1-15-2-1:(OI)(CI)(RX)"` (read+execute only, inherited by the files). This needs no
-admin: the per-user install dir is owned by the installing user, and an owner may change the DACL of their own files.
-If icacls fails the install still succeeds and the agent fails closed at runtime (`sandbox_failed`); nothing is
-spawned unsandboxed. UNTESTED on a real machine: confirm in `docs/manual-tests.md` (Installer S3-1).
+`%LOCALAPPDATA%\Programs` does not grant it by default, and `$INSTDIR` is user-selectable, so the grant is as narrow as
+possible. `NSIS_HOOK_POSTINSTALL` runs exactly two commands, both `(RX)` only and NOT inherited (no `(OI)(CI)`):
+
+```
+icacls "$INSTDIR" /grant "*S-1-15-2-1:(RX)"                        (traverse the install dir only)
+icacls "$INSTDIR\buddy-agent.exe" /grant "*S-1-15-2-1:(RX)"        (the one file the sandbox launches)
+```
+
+buddy-agent is a statically linked Rust exe, so no DLLs of ours need a grant (Windows system DLLs already allow
+ALL APPLICATION PACKAGES). If a missing-DLL failure shows up in the manual test, add one narrow per-file grant.
+
+Guard (fails closed): if `$INSTDIR` is a drive root or equals `$PROFILE`, `$DOCUMENTS`, `$DESKTOP`, `$LOCALAPPDATA`,
+`$APPDATA`, `$PROGRAMFILES` or `$PROGRAMFILES64`, the grant is skipped, the log says so and a MessageBox warns that the
+agent sandbox will be unavailable. This needs no admin: the per-user install dir is owned by the installing user, and
+an owner may change the DACL of their own files. If icacls fails (exit code compared as a string, since nsExec can
+return `error` or `timeout`) the install still succeeds and the agent fails closed at runtime (`sandbox_failed`);
+nothing is spawned unsandboxed. `installer-check` verifies the hooks structurally (exactly those two grant lines, SID
+`*S-1-15-2-1`, perms exactly `(RX)`, no other ACL commands, no delete tokens). UNTESTED on a real machine: confirm in
+`docs/manual-tests.md` (Installer S3-1).
 
 ## Updater (ADR 0005)
 

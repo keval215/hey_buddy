@@ -793,8 +793,13 @@ The NSIS build cannot run on Linux. Download the artifact, check `SHA256SUMS`, t
 - [ ] WebView2: on a machine without the runtime the installer downloads it and says so; with it present nothing is
       downloaded.
 - [ ] hey_buddy starts after install (tray icon, hotkey), icon looks right in Start menu, tray and installer.
-- [ ] `buddy-agent.exe` sits next to `hey_buddy.exe`; `icacls "<install dir>"` lists `ALL APPLICATION PACKAGES:(OI)(CI)(RX)`
-      and NO write grant. A plan task spawns the sandboxed agent (see "Agent engine sandbox").
+- [ ] `buddy-agent.exe` sits beside the Tauri-produced main app exe in the install dir (likely `desktop.exe`; record the
+      real name). `icacls "<install dir>"` lists `ALL APPLICATION PACKAGES:(RX)` (NOT `(OI)(CI)`, so nothing inherited)
+      and `icacls "<install dir>\buddy-agent.exe"` lists `ALL APPLICATION PACKAGES:(RX)`; no write grant anywhere.
+      A plan task spawns the sandboxed agent (see "Agent engine sandbox"). If it fails with a missing DLL, note which.
+- [ ] Guard: install into a drive root (`D:\`) or your profile / Documents / Desktop folder: the installer shows a
+      warning that the agent sandbox will be unavailable, NO `ALL APPLICATION PACKAGES` ACE is added to that folder
+      (`icacls` shows none), and the agent stays off (`sandbox_failed`), nothing is spawned unsandboxed.
 - [ ] Run the installer a second time (upgrade path, as the updater will): no arguments, no prompt for admin.
 - [ ] Uninstall: install dir is gone; settings, models and audit log in AppData are still there by default; the
       "delete application data" checkbox is OFF by default.

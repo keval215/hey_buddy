@@ -6,6 +6,10 @@ _Owner: orch. Newest first. Max 60 entries; archive older ones to
 Format:
 
 ```
+## H-S3-1 2026-11-04 S3-1 -> coder x2, reviewer
+Asked: unsigned NSIS per-user installer + installer-check + icons.
+Result: round 1 CHANGES REQUESTED (MAJOR icacls scope), round 2 accepted by orch (13 installer-check tests). NSIS build/CI artifact UNTESTED.
+
 ## H-S2-23b 2026-11-04 S2-23b -> coder, reviewer
 Asked: runtime glue, Tauri commands, settings, exit-test doc, supervisor minors.
 Result: APPROVED round 1 (4 MINOR deferred to S2-22).

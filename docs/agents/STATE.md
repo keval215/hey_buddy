@@ -68,7 +68,7 @@ Branches: step2a/hardening -> step2b/agent-harness -> step3/packaging -> step4/f
 
 | Ticket | Title | Status | Rounds | Notes |
 |---|---|---|---|---|
-| S3-1 | Windows installer build (unsigned) | TODO | 0 | after Step 2 |
+| S3-1 | Windows installer build (unsigned) | DONE | 2 | round 2 accepted by orch; NSIS/CI build untested |
 | S3-2 | [ARCH] Auto-update design -> ADR 0005 | DONE | 0 | D-010 provisional |
 | S3-3 | Update manifest parser + signature verifier (no real keys) | TODO | 0 |  |
 | S3-4 | First-run wizard | TODO | 0 |  |
