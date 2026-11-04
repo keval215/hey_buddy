@@ -245,3 +245,22 @@ fn debug_output_has_no_labels_or_text() {
     assert!(!dbg.contains("John") && !dbg.contains("Smith") && !dbg.contains("Name"));
     assert!(dbg.contains("BoundStep"), "log alive: {dbg}");
 }
+
+#[test]
+fn joined_label_flags_from_the_firewall_make_split_words_classify() {
+    // A format character inside a label is shown as a space in the descriptor ("Del ete"), so
+    // policy's own lexicon misses it; the firewall's joined-label flag (S2-14e) does not.
+    let case = |raw: &str, plan_label: &str| {
+        let rig = Rig::new();
+        rig.desk.rename(HWND, &[4], raw); // "Refresh" -> raw
+        bind_one(&rig, &click(plan_label)).unwrap().classification()
+    };
+    assert_eq!(case("Del\u{200B}ete", "Del ete").tier, Tier::Never);
+    assert_eq!(case("Buy\u{200D}", "Buy").tier, Tier::Never);
+    assert_eq!(case("Check\u{200B}out", "Check out").tier, Tier::Never);
+    let sub = case("Sub\u{2060}mit", "Sub mit");
+    assert_eq!((sub.tier, sub.submit), (Tier::Consequential, true));
+    // Genuinely split words and ordinary labels are unchanged.
+    assert_eq!(case("Del ete", "Del ete").tier, Tier::Consequential);
+    assert_eq!(case("Cancel", "Cancel").tier, Tier::Consequential);
+}

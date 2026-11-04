@@ -852,6 +852,149 @@ fn window_targets_verify_focus_anywhere_inside_the_window() {
     assert_eq!(t.verify_focus(), Ok(()));
 }
 
+#[test]
+fn focused_sensitive_non_password_field_refuses_every_focus_check() {
+    let d = ScriptedDesktop::new().with_window(
+        login_window("App.exe")
+            .element(ElemSpec::new(
+                30,
+                NodeRole::TextField,
+                "Enter the code (OTP)",
+                Rect::new(200, 500, 300, 30),
+            ))
+            .element(ElemSpec::new(
+                31,
+                NodeRole::TextField,
+                "Pass\u{200B}word again",
+                Rect::new(200, 540, 300, 30),
+            ))
+            .element(ElemSpec::new(
+                32,
+                NodeRole::Button,
+                "Reset token",
+                Rect::new(200, 580, 100, 30),
+            )),
+    );
+    let f = fw_of(&d);
+    let o = observe(&f);
+    let email = reval(&f, &o, TargetSel::Element(el(&o, 1))).unwrap();
+    let win = reval(&f, &o, TargetSel::Window).unwrap();
+    // Focus on the email field is fine; on an OTP field (not IsPassword) nothing may land.
+    d.set_focus(HWND, Some(&[1]));
+    assert_eq!(email.verify_focus(), Ok(()));
+    for rid in [30, 31] {
+        d.set_focus(HWND, Some(&[rid]));
+        assert_eq!(email.verify_focus(), Err(TargetRefusal::SensitiveTarget));
+        assert_eq!(
+            email.verify_focus_within(),
+            Err(TargetRefusal::SensitiveTarget)
+        );
+        assert_eq!(win.verify_focus(), Err(TargetRefusal::SensitiveTarget));
+    }
+    // A button is not a text target: only text-like focused elements are label-checked.
+    d.set_focus(HWND, Some(&[32]));
+    assert_eq!(win.verify_focus(), Ok(()));
+    // IsPassword still wins and says so.
+    d.set_focus(HWND, Some(&[2]));
+    assert_eq!(email.verify_focus(), Err(TargetRefusal::SecureTarget));
+}
+
+#[test]
+fn foreground_switch_during_resolve_is_caught_by_the_second_read() {
+    let d = desktop();
+    let f = fw_of(&d);
+    let o = observe(&f);
+    d.set_foreground_after_resolve(0x200);
+    assert_eq!(
+        refusal(reval(&f, &o, TargetSel::Element(el(&o, 3)))),
+        TargetRefusal::ForegroundChanged
+    );
+    // The hook is one-shot; and the foreground really is elsewhere now.
+    assert_eq!(d.foreground_hwnd(), 0x200);
+    d.set_foreground(HWND);
+    assert!(reval(&f, &o, TargetSel::Element(el(&o, 3))).is_ok());
+    // Both the first and the second foreground read happen on every revalidate.
+    let before = d.calls().foreground;
+    let _ = reval(&f, &o, TargetSel::Element(el(&o, 3))).unwrap();
+    assert_eq!(d.calls().foreground - before, 2);
+}
+
+#[test]
+fn visible_apps_drop_ids_with_spaces_or_over_64_chars() {
+    let long = format!("{}.exe", "x".repeat(61)); // 65 chars
+    let ok64 = format!("{}.exe", "y".repeat(60)); // 64 chars
+    let d = desktop()
+        .with_window(WindowSpec::new(0x300, "My Cool App.exe", 6001, WIN))
+        .with_window(WindowSpec::new(0x301, &long, 6002, WIN))
+        .with_window(WindowSpec::new(0x302, &ok64, 6003, WIN));
+    let o = observe(&fw_of(&d));
+    let apps: Vec<&str> = o.apps().iter().map(AppId::as_str).collect();
+    assert!(apps.contains(&"app.exe") && apps.contains(&"other.exe"));
+    assert!(apps.contains(&ok64.as_str()), "{apps:?}");
+    assert!(!apps.iter().any(|a| a.contains(' ')), "{apps:?}");
+    assert!(!apps.contains(&long.as_str()));
+    assert!(!o.text().text().contains("my cool app"));
+    assert!(AppId::parse_visible("notepad.exe").is_some());
+    assert!(AppId::parse_visible("a b.exe").is_none());
+    assert!(AppId::parse_visible(&"z".repeat(65)).is_none());
+    assert!(AppId::parse_visible(&"z".repeat(64)).is_some());
+}
+
+#[test]
+fn describe_flags_classify_the_joined_label() {
+    let d = ScriptedDesktop::new().with_window(
+        WindowSpec::new(HWND, "App.exe", PID, WIN)
+            .element(ElemSpec::new(
+                1,
+                NodeRole::Button,
+                "Del\u{200B}ete",
+                Rect::new(200, 200, 50, 20),
+            ))
+            .element(ElemSpec::new(
+                2,
+                NodeRole::Button,
+                "Buy\u{200D}",
+                Rect::new(200, 230, 50, 20),
+            ))
+            .element(ElemSpec::new(
+                3,
+                NodeRole::Button,
+                "Sub\u{2060}mit",
+                Rect::new(200, 260, 50, 20),
+            ))
+            .element(ElemSpec::new(
+                4,
+                NodeRole::Button,
+                "Cancel",
+                Rect::new(200, 290, 50, 20),
+            ))
+            .element(ElemSpec::new(
+                5,
+                NodeRole::Button,
+                "Del ete",
+                Rect::new(200, 320, 50, 20),
+            )),
+    );
+    let f = fw_of(&d);
+    let o = observe(&f);
+    let flags = |n: u32| o.describe_flags(el(&o, n)).unwrap();
+    assert!(flags(1).destructive_label && !flags(1).purchase_label);
+    assert!(flags(2).purchase_label && !flags(2).destructive_label);
+    assert!(flags(3).submit_label);
+    assert_eq!(flags(4), LabelFlags::default());
+    assert_eq!(
+        flags(5),
+        LabelFlags::default(),
+        "genuinely split words stay split"
+    );
+    // Foreign refs and restricted apps have no flags; canonical bytes are unchanged by flags.
+    let other = observe(&fw_of(&desktop()));
+    assert!(o.describe_flags(el(&other, 1)).is_none());
+    let desc = o.describe(el(&o, 2)).unwrap();
+    let expect = 1 + 28 + (8 + "app.exe".len()) + (8 + desc.role.name().len()) + 32 + 16 + 2;
+    assert_eq!(desc.canonical_bytes().len(), expect);
+}
+
 // ---------- deadlines, panics, busy ----------
 
 /// Wait (bounded) until `f` holds.

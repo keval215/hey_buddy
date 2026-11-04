@@ -480,6 +480,48 @@ on a blocking `Invoke` (modal dialog), foreground-lock behaviour of `SetFocus`, 
 refusal on an elevated target / lock screen / UAC, and the ADR 0004 section 19 VERIFY list. S2-14d adds the real
 checklist here.
 
+## Windows agent observation (S2-14d1) - UNTESTED on this machine (all of it)
+
+`firewall/platform/windows_agent.rs` was only compile-checked (`x86_64-pc-windows-gnu`). Pure parts are
+Linux-tested (`win_pure.rs`). The app must be per-monitor DPI aware (PerMonitorV2 manifest) or every call blocks.
+Drive it through the driver/dev harness or a scratch `Firewall::observe` caller.
+
+Observe (each: check `apps:` line, `#n` lines, no titles/values, `secure_fields` count):
+- [ ] Notepad: observe works; text field is `[empty]`/`[has text]`, never its content; `app:` is `notepad.exe`.
+- [ ] Chrome and Edge: first observe may be root-only (lazy tree) and retried; page title / URL never appear; a login
+      page's password field is `[hidden]`, has no `#n` target (`element(n)` is `None`).
+- [ ] Explorer: observable, but `describe` is `None` and `revalidate` is `RestrictedApp`.
+- [ ] UAC consent prompt and the lock screen: session probe pauses (`LockScreen`); `consent.exe`, `LogonUI.exe`,
+      `CredentialUIBroker.exe`, `LockApp.exe` never appear in `apps:` (VERIFY the exact exe names).
+- [ ] A deny-listed app in the foreground: `Withheld`; in the background: absent from `apps:`.
+- [ ] Our own overlay/panel in the foreground: not observed; our pid never in `apps:`.
+- [ ] `apps:` lists visible, non-minimised, non-cloaked top-level apps only (minimise one, move one to another
+      virtual desktop, check both vanish); no ids with spaces or over 64 chars.
+- [ ] Latency of `observe` (preflight + tree walk + identity + EnumWindows) against the 1200 ms walk budget / 1500 ms
+      text timeout, on Notepad, Chrome with a big page, Explorer. Record the numbers.
+- [ ] Per-monitor DPI: observe on a 150% secondary monitor; rects equal the physical pixels `capture` uses; with a
+      non-PerMonitor thread the call fails closed.
+
+Revalidate (observe, then change the world, then `revalidate` the `#n`; expect the refusal in brackets):
+- [ ] rename a label (e.g. edit a button's Name in the app / change a tab's text) [TargetChanged label];
+- [ ] move or resize the window / scroll so the rect changes [TargetChanged rect];
+- [ ] switch the foreground to another app [ForegroundChanged]; switch during the call (hard to time) [same];
+- [ ] restart the app (recycled pid/hwnd) [StaleRef];
+- [ ] close the dialog/element [StaleRef];
+- [ ] turn a field into a password (toggle "show password" off where an app does that) [SecureTarget];
+- [ ] focus a password field then `verify_focus` [SecureTarget]; focus an OTP / "Verification code" / PIN field that is
+      NOT IsPassword then `verify_focus`/`verify_focus_within` [SensitiveTarget];
+- [ ] focus an element inside the target then `verify_focus_within` [ok] and `verify_focus` [FocusLost];
+- [ ] run an ELEVATED cmd.exe/notepad.exe in the foreground (run hey_buddy normally) [ElevatedTarget]; check the
+      access-denied-token path produces this and not a generic block;
+- [ ] lock the session / UAC prompt appears between observe and revalidate [SessionPaused];
+- [ ] VERIFY: the runtime-id property condition finds the element (add a temporary log of which path was used:
+      property or fallback walk); `CompareElements` on Chromium focused elements; `GetFocusedElement` across
+      Chrome/Edge/Electron; `UOI_NAME` is "Default" on the normal desktop; `TokenIntegrityLevel` with
+      `PROCESS_QUERY_LIMITED_INFORMATION`; `GetProcessTimes` creation time is stable across calls.
+- [ ] Latency of `revalidate` (resolve + two foreground reads) against the 1000 ms resolver timeout, including the
+      fallback walk on a large Chrome page.
+
 ## Step 2 packaging note
 
 - [ ] macOS bundled builds (not `tauri dev`) need an `Info.plist` with
@@ -496,6 +538,7 @@ Copied from `docs/agents/STATE.md` "User must verify locally"; T7 / T8 items.
 - [ ] T7: unverified deny-list ids (Keeper, NordPass, Enpass, RoboForm, Dashlane exe, bitwarden safari)
 - [ ] T8: all of `firewall/platform/{windows,macos}.rs` (UIA `IsPassword`, AX walk, enable-accessibility poll, lock-screen probes, 1500/2500 ms detector timeouts, system-owner allow-list)
 - [ ] T13: all of `firewall/platform/{macos_text,windows_text}.rs` (see "Text path (T13)")
+- [ ] S2-14d1: all of `firewall/platform/windows_agent.rs` (see "Windows agent observation (S2-14d1)")
 - [ ] T8: test on Safari, Chrome, Electron and native login dialogs
 - [ ] Desktop ticket must declare PerMonitorV2 DPI awareness in the Windows manifest (the Windows firewall detector blocks every check until it does)
 

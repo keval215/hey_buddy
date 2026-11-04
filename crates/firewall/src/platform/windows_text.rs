@@ -50,8 +50,15 @@ use crate::{FirewallError, NodeRole, RawWindowTree, ScreenTextSource};
 const RETRY_STEP: Duration = Duration::from_millis(100);
 const RETRIES: u32 = 5;
 
-struct UiaCursor {
+/// Also wrapped by the agent cursor in `windows_agent.rs` (adds `identity`).
+pub(super) struct UiaCursor {
     all: IUIAutomationCondition,
+}
+
+impl UiaCursor {
+    pub(super) fn new(all: IUIAutomationCondition) -> Self {
+        Self { all }
+    }
 }
 
 fn control_type(n: &IUIAutomationElement) -> Result<i32, FirewallError> {

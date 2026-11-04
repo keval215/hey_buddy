@@ -92,6 +92,8 @@ impl ElementRef {
 pub struct AppId(String);
 
 pub const MAX_APP_ID_CHARS: usize = 128;
+/// Longest app id listed in `Observation::apps()`.
+pub const MAX_VISIBLE_APP_ID_CHARS: usize = 64;
 
 impl AppId {
     /// Lowercases and validates; `None` when invalid.
@@ -107,6 +109,14 @@ impl AppId {
         });
         // No leading/trailing/double spaces: the string must round-trip through sanitise.
         (ok && crate::text::sanitise(&s) == s).then_some(Self(s))
+    }
+
+    /// Parse an id for the `apps:` list of an observation: stricter than [`AppId::parse`], an id
+    /// with a space or longer than [`MAX_VISIBLE_APP_ID_CHARS`] is dropped (S2-14e: such names
+    /// are never real exe names and read like prose to a model).
+    pub fn parse_visible(raw: &str) -> Option<Self> {
+        let id = Self::parse(raw)?;
+        (id.0.chars().count() <= MAX_VISIBLE_APP_ID_CHARS && !id.0.contains(' ')).then_some(id)
     }
 
     pub fn as_str(&self) -> &str {
@@ -177,6 +187,17 @@ impl fmt::Debug for TargetDescriptor {
     }
 }
 
+/// Read-only label flags computed in the firewall on the JOINED (format characters stripped,
+/// never split) label: `Del<ZWSP>ete` is still "delete". Exposed through
+/// [`Observation::describe_flags`], NOT part of [`TargetDescriptor::canonical_bytes`] (ADR 0004 §7
+/// fixes that layout). Heuristics: they can only cause stricter handling.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LabelFlags {
+    pub destructive_label: bool,
+    pub purchase_label: bool,
+    pub submit_label: bool,
+}
+
 /// Window identity bound into an observation. Private.
 #[derive(Clone)]
 pub(crate) struct WindowIdentity {
@@ -192,6 +213,7 @@ pub(crate) struct TargetSlot {
     pub(crate) label: Option<Arc<str>>,
     pub(crate) rect: Rect,
     pub(crate) sensitive_label: bool,
+    pub(crate) flags: LabelFlags,
 }
 
 /// What `#n` can be addressed as.
@@ -339,6 +361,18 @@ impl Observation {
             editable: t.editable,
             sensitive_label: t.sensitive_label,
         })
+    }
+
+    /// Joined-label lexicon flags of a referenced node (same visibility rules as
+    /// [`describe`](Self::describe)).
+    pub fn describe_flags(&self, r: ElementRef) -> Option<LabelFlags> {
+        if r.observation != self.id || builtin::is_restricted(self.app_id.as_str()) {
+            return None;
+        }
+        let Slot::Target(t) = self.slot(r.node)? else {
+            return None;
+        };
+        Some(t.flags)
     }
 
     /// Descriptors of every addressable node, in emission order (`#1`, `#2`, ...). Secure and

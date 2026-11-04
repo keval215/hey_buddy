@@ -83,8 +83,8 @@ pub use firewall::{
     DEFAULT_TARGET_TIMEOUT, DEFAULT_TEXT_TIMEOUT, DEFAULT_TIMEOUT,
 };
 pub use observe::{
-    AppId, ElementRef, Observation, ObservationFlags, ObservationId, ObserveVerdict,
-    TargetDescriptor, MAX_APP_ID_CHARS,
+    AppId, ElementRef, LabelFlags, Observation, ObservationFlags, ObservationId, ObserveVerdict,
+    TargetDescriptor, MAX_APP_ID_CHARS, MAX_VISIBLE_APP_ID_CHARS,
 };
 pub use platform::{platform_firewall, UnsupportedDetector, UnsupportedSessionProbe};
 pub use redacted::RedactedFrame;

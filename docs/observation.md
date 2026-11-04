@@ -1,9 +1,10 @@
 # Agent observation (S2-14a)
 
 Implements the firewall half of ADR 0004 (§5, §6, §8, §11). Only the firewall reads OS content for
-the agent. The driver crate (S2-14c, `docs/driver.md`) consumes it; there is no Windows adapter yet (S2-14d): on every
-platform `platform_firewall()` installs `UnsupportedObservationSource` / `UnsupportedTargetResolver`,
-so `observe` is `Blocked(Unsupported)` and `revalidate` is `Err(Blocked(Unsupported))` (fail closed).
+the agent. The driver crate (S2-14c, `docs/driver.md`) consumes it. On Windows `platform_firewall()` installs the UIA
+readers (S2-14d1, see "Windows" below; UNTESTED at runtime); on every other platform it installs
+`UnsupportedObservationSource` / `UnsupportedTargetResolver`, so `observe` is `Blocked(Unsupported)` and `revalidate`
+is `Err(Blocked(Unsupported))` (fail closed).
 
 ## `Firewall::observe(deny) -> ObserveVerdict`
 
@@ -58,6 +59,47 @@ English-only, hand-written, word-bounded heuristics. `payment_suspected` (card n
 IBAN, sort/routing number, UPI PIN, ...) and `sensitive_label` (password, passcode, PIN, OTP,
 verification code, 2FA, recovery code, seed phrase, API key, token, SSN, ...). They can only cause
 refusals; a miss never allows something else refuses.
+
+## Joined-label flags and S2-14d1 additions
+
+- Lexicons (`sensitive.rs`) strip format / invisible characters (Cf, zero-width, bidi, tags) BEFORE matching
+  (`Pass<ZWSP>word` is one word) and gained `pwd`, `ccv`, `secret`, `passwort`, `pin number`, `card num`.
+- `Observation::describe_flags(ElementRef) -> Option<LabelFlags>`: `destructive_label`, `purchase_label`,
+  `submit_label`, computed in the firewall on the JOINED label. NOT part of `TargetDescriptor::canonical_bytes`
+  (ADR 0004 section 7 fixes that layout). `policy::bind_step` ORs them into `BoundStepFacts` (stricter only); the
+  policy crate keeps its own lexicon check on the displayed label as defence in depth.
+- `FocusState::Sensitive` (=> `TargetRefusal::SensitiveTarget` from `verify_focus*`): the keyboard-focused element is a
+  text-like control whose Name matches the secret lexicon although it is not `IsPassword` (OTP / PIN field).
+  Only text-like controls are label-checked; Document / Pane / Group / Window names (titles) are never read.
+- `revalidate` reads the foreground a second time after `resolve` (`ForegroundChanged` / `StaleRef` if it moved).
+- `Observation::apps()` drops ids containing a space or longer than 64 characters (`AppId::parse_visible`).
+
+## Windows adapters (S2-14d1) - UNTESTED at runtime
+
+`platform/windows_agent.rs` (all OS calls) over `platform/win_pure.rs` (pure, Linux-tested: runtime-id and SAFEARRAY
+logic, integrity RID mapping, exe path to app id, creation-time comparison, ancestor-walk bound, rect conversion,
+`UOI_NAME` check, visible-window filter, the resolver read ORDER, focus classification).
+
+- `WinObservationSource`: foreground window only, shared `walk_tree_identified`. `AgentCursor` wraps the text
+  source's `UiaCursor`; `identity` runs after `IsPassword` was false, for emitted nodes only: runtime id,
+  control type, SHA-256 of the AutomationId. No Name read there (the walker hashes the label it read). Window
+  identity: hwnd, pid, `GetProcessTimes` creation time, `QueryFullProcessImageNameW` path. Visible apps via
+  `EnumWindows` (visible, not DWM-cloaked, not minimised, not our pid). Per-monitor DPI check, fail closed. The
+  foreground (hwnd, pid, creation time, path) is re-read after the walk.
+- `WinTargetResolver::resolve`: inside the observed hwnd only. Primary: `ElementFromHandle` + `FindFirst(Descendants)`
+  with a `UIA_RuntimeIdPropertyId` SAFEARRAY condition; the hit's runtime id must match exactly. Fallback (property
+  condition unreliable): a 700 ms bounded subtree walk that asks `IsPassword` first on every node, never descends
+  into password fields and compares runtime ids. No match is `Gone`; out of budget is an error (fail closed). Reads on
+  the found element: `IsPassword`, then control type, AutomationId (hashed), Name (hashed at once, never returned),
+  bounding rect.
+- `foreground()`: window identity + app id, `integrity` of the foreground process token vs ours
+  (`GetTokenInformation(TokenIntegrityLevel)` with `PROCESS_QUERY_LIMITED_INFORMATION`; an access-denied token open
+  of a TARGET process counts as higher integrity, so elevated windows give `ElevatedTarget`), and
+  `on_user_desktop` = `OpenInputDesktop` succeeds and `UOI_NAME == "Default"`.
+- `focus_state`: `GetFocusedElement`; `IsPassword` first (`Secure`), then the secret-lexicon check on text-like
+  controls (`Sensitive`), then `CompareElements(focused, target)` (`Target`) and a raw-view ancestor walk bounded to
+  64 steps (`Descendant`); a longer chain counts as `Other`.
+- `windows` crate features added: `Win32_Security`, `Win32_Graphics_Dwm` (same permissive crate).
 
 ## Platform adapters (S2-14d)
 

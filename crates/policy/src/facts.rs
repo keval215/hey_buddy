@@ -89,6 +89,12 @@ pub struct BoundStepFacts {
     pub payment_context: Option<bool>,
     /// The firewall's `sensitive_label` flag for the target.
     pub sensitive_label: bool,
+    /// The firewall's joined-label lexicon flags for the target (S2-14e): the label with format
+    /// characters STRIPPED, so `Del<ZWSP>ete` is still destructive. ORed with this crate's own
+    /// lexicon check on the displayed label (stricter only).
+    pub destructive_label: bool,
+    pub purchase_label: bool,
+    pub submit_label: bool,
     /// `type` only; `None` is treated as model-generated.
     pub provenance: Option<Provenance>,
     /// `type` only: text is 13-19 digits passing Luhn.
@@ -122,6 +128,9 @@ impl BoundStepFacts {
             target_denied: None,
             payment_context: None,
             sensitive_label: false,
+            destructive_label: false,
+            purchase_label: false,
+            submit_label: false,
             provenance: None,
             card_like_text: false,
             session: None,
@@ -202,6 +211,13 @@ impl BoundStepFacts {
     }
     pub fn sensitive_label(mut self, b: bool) -> Self {
         self.sensitive_label = b;
+        self
+    }
+    /// Joined-label lexicon flags from `firewall::Observation::describe_flags`.
+    pub fn label_flags(mut self, f: firewall::LabelFlags) -> Self {
+        self.destructive_label = f.destructive_label;
+        self.purchase_label = f.purchase_label;
+        self.submit_label = f.submit_label;
         self
     }
     pub fn session(mut self, s: SessionState) -> Self {

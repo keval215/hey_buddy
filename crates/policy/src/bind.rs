@@ -262,6 +262,11 @@ pub fn bind_step(
         if let Some(l) = d.label.as_deref() {
             facts = facts.label(l);
         }
+        // Joined-label lexicons computed in the firewall (stricter only; policy's own check on
+        // the displayed label still runs).
+        if let Some(fl) = obs.describe_flags(d.element) {
+            facts = facts.label_flags(fl);
+        }
     } else if matches!(
         step,
         PlanStep::Click { .. } | PlanStep::Type { .. } | PlanStep::Submit { .. }

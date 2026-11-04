@@ -144,6 +144,8 @@ struct World {
     source_panics: bool,
     resolver_delay: Duration,
     resolver_panics: bool,
+    /// One-shot: after the next `resolve`, this window becomes the foreground.
+    foreground_after_resolve: Option<u64>,
 }
 
 /// Cheap to clone; all clones share one world.
@@ -173,6 +175,7 @@ impl ScriptedDesktop {
                 source_panics: false,
                 resolver_delay: Duration::ZERO,
                 resolver_panics: false,
+                foreground_after_resolve: None,
             })),
         }
     }
@@ -201,6 +204,11 @@ impl ScriptedDesktop {
 
     pub fn set_foreground(&self, hwnd: u64) {
         self.w().foreground = hwnd;
+    }
+    /// Test hook: right after the next `resolve` returns, `hwnd` becomes the foreground window
+    /// (the user switched windows while the element was being re-resolved).
+    pub fn set_foreground_after_resolve(&self, hwnd: u64) {
+        self.w().foreground_after_resolve = Some(hwnd);
     }
     pub fn set_session(&self, s: SessionProbeState) {
         self.w().session = s;
@@ -406,6 +414,27 @@ impl ScriptedDesktop {
     }
 }
 
+impl ScriptedDesktop {
+    fn resolve_in(w: &World, req: &ResolveRequest) -> ResolvedTarget {
+        let Some(win) = w.windows.iter().find(|x| x.hwnd == req.hwnd) else {
+            return ResolvedTarget::Gone;
+        };
+        let Some(e) = win.elements.iter().find(|e| e.runtime_id == req.runtime_id) else {
+            return ResolvedTarget::Gone;
+        };
+        // is_password FIRST; nothing else is read for a password field.
+        if e.password {
+            return ResolvedTarget::Secure;
+        }
+        ResolvedTarget::Found(ResolvedFields {
+            control_type: e.control_type,
+            automation_id_hash: hash_automation_id(&e.automation_id),
+            label_hash: hash_label(e.label.as_deref()),
+            rect: e.rect,
+        })
+    }
+}
+
 fn window_facts(win: &WindowSpec) -> WindowFacts {
     WindowFacts {
         hwnd: win.hwnd,
@@ -500,23 +529,12 @@ impl TargetResolver for ScriptedDesktop {
         if panics {
             panic!("scripted resolver panic");
         }
-        let w = self.w();
-        let Some(win) = w.windows.iter().find(|x| x.hwnd == req.hwnd) else {
-            return Ok(ResolvedTarget::Gone);
-        };
-        let Some(e) = win.elements.iter().find(|e| e.runtime_id == req.runtime_id) else {
-            return Ok(ResolvedTarget::Gone);
-        };
-        // is_password FIRST; nothing else is read for a password field.
-        if e.password {
-            return Ok(ResolvedTarget::Secure);
+        let mut w = self.w();
+        let result = Self::resolve_in(&w, req);
+        if let Some(h) = w.foreground_after_resolve.take() {
+            w.foreground = h;
         }
-        Ok(ResolvedTarget::Found(ResolvedFields {
-            control_type: e.control_type,
-            automation_id_hash: hash_automation_id(&e.automation_id),
-            label_hash: hash_label(e.label.as_deref()),
-            rect: e.rect,
-        }))
+        Ok(result)
     }
 
     fn focus_state(&self, hwnd: u64, runtime_id: &[i32]) -> Result<FocusState, FirewallError> {
@@ -546,6 +564,16 @@ impl TargetResolver for ScriptedDesktop {
         match focused {
             None => Ok(FocusState::None),
             Some(e) if e.password => Ok(FocusState::Secure),
+            // Same rule as the Windows resolver: text-like focused elements whose label names a
+            // secret / one-time code (the label is lexicon-checked here, never returned).
+            Some(e)
+                if (e.editable || matches!(e.role, NodeRole::TextField | NodeRole::ComboBox))
+                    && e.label
+                        .as_deref()
+                        .is_some_and(crate::sensitive::sensitive_label) =>
+            {
+                Ok(FocusState::Sensitive)
+            }
             Some(_) if runtime_id.is_empty() => Ok(FocusState::Descendant),
             Some(_) if frid == runtime_id => Ok(FocusState::Target),
             // Runtime ids are flat in the fake: "descendant" = longer id with the target as prefix.

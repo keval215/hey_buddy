@@ -237,13 +237,13 @@ fn fact_rows(f: &BoundStepFacts, ctx: &PolicyContext, a: &mut Acc) {
 
     // 10, 11, 9: label lexicons on click / submit.
     if matches!(f.op, FactOp::Click | FactOp::Submit) {
-        if lexicon::is_destructive(label) {
+        if f.destructive_label || lexicon::is_destructive(label) {
             a.raise(T::Never, R::DestructiveLabel);
         }
-        if lexicon::is_purchase(label) {
+        if f.purchase_label || lexicon::is_purchase(label) {
             a.raise(T::Never, R::PurchaseLabel);
         }
-        if lexicon::is_submit(label) && a.tier <= T::Consequential {
+        if (f.submit_label || lexicon::is_submit(label)) && a.tier <= T::Consequential {
             a.tier = T::Consequential;
             a.reason = R::Submit;
             a.submit = true;

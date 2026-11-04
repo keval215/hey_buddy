@@ -10,8 +10,8 @@ use crate::blackout::{blackout, DEFAULT_PADDING_PX};
 use crate::builtin::{self, WithAuthSurfaces};
 use crate::error::*;
 use crate::observe::{
-    AppId, Observation, ObservationFlags, ObservationId, ObserveVerdict, Slot, TargetSlot,
-    WindowIdentity,
+    AppId, LabelFlags, Observation, ObservationFlags, ObservationId, ObserveVerdict, Slot,
+    TargetSlot, WindowIdentity,
 };
 use crate::redacted::RedactedFrame;
 use crate::target::{
@@ -277,6 +277,8 @@ impl FocusGuard for FocusCtx {
             )?;
             match state {
                 FocusState::Secure => Err(TargetRefusal::SecureTarget),
+                // A focused OTP / PIN field that is not IsPassword: nothing may land in it.
+                FocusState::Sensitive => Err(TargetRefusal::SensitiveTarget),
                 FocusState::Target => Ok(()),
                 FocusState::Descendant if within => Ok(()),
                 _ => Err(TargetRefusal::FocusLost),
@@ -621,7 +623,7 @@ impl<
             if a.pid == self.own_pid || deny.is_denied(&a.app_id) {
                 continue;
             }
-            if let Some(id) = AppId::parse(&a.app_id) {
+            if let Some(id) = AppId::parse_visible(&a.app_id) {
                 if !apps.contains(&id) && apps.len() < MAX_OBSERVED_APPS {
                     apps.push(id);
                 }
@@ -669,6 +671,11 @@ impl<
                             label: e.label.map(Arc::from),
                             rect,
                             sensitive_label: e.sensitive_label,
+                            flags: LabelFlags {
+                                destructive_label: e.destructive_label,
+                                purchase_label: e.purchase_label,
+                                submit_label: e.submit_label,
+                            },
                         })
                     }
                     _ => Slot::Unaddressable,
@@ -784,6 +791,15 @@ impl<
                 return Err(TargetRefusal::TargetChanged { field: "rect" });
             }
         }
+
+        // 6b. Cheap second foreground check AFTER the resolve: the user (or an app) may have
+        // switched windows while the element was being re-resolved.
+        let again: ForegroundFacts =
+            resolver_call(&resolver, &self.resolver_busy, timeout, |r| r.foreground())?;
+        if !again.on_user_desktop {
+            return Err(TargetRefusal::SessionPaused(PauseReason::AuthPrompt));
+        }
+        same_window(&again.window, observed)?;
 
         // Heuristic refusals (lexicons): payment pages allow only scrolling; secret-named text
         // targets are never typed into.

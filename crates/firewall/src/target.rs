@@ -171,6 +171,10 @@ pub enum FocusState {
     None,
     /// The focused element is a password field.
     Secure,
+    /// The focused element is a text field whose label names a secret or one-time code (OTP,
+    /// PIN, ...) although it is not `IsPassword`. Decided inside the resolver on the label it
+    /// just read for the focused element. Takes precedence over `Target` / `Descendant`.
+    Sensitive,
     /// The focused element is the target.
     Target,
     /// The focused element is inside the target (for the window target: anywhere inside it).

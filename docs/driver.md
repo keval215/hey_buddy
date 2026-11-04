@@ -174,8 +174,13 @@ helpers); `tools/check-doctest-codes.sh`.
 
 ## What S2-14d (Windows actuator) must implement
 
+Checklist: **d1 DONE** (firewall side, Windows UIA `ObservationSource` / `TargetResolver` / `TreeCursor::identity`,
+`crates/firewall/src/platform/windows_agent.rs` + pure `win_pure.rs`, wired in `platform_firewall()`; compile-checked,
+UNTESTED at runtime; see `docs/observation.md`). **d2 PENDING** (`WinActuator` in `crates/driver`, everything below
+except the firewall readers).
+
 `crates/driver/src/platform/windows.rs` (`#[cfg(target_os = "windows")]`), plus the firewall's Windows
-`ObservationSource` / `TargetResolver` (S2-14a left them `Unsupported`). `windows` crate features
+`ObservationSource` / `TargetResolver` (done in d1; S2-14a left them `Unsupported`). `windows` crate features
 `Win32_UI_Input_KeyboardAndMouse`, `Win32_Security` under `[target.'cfg(windows)'.dependencies]` of the
 driver only. Every call is made by the driver's worker; the actuator itself must not spawn threads.
 

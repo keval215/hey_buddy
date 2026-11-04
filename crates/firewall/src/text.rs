@@ -30,7 +30,9 @@ use crate::scrub::{
     is_address_bar_label, is_browser_chrome_label, is_tab_strip_label, mark_count, scrub_links,
     toolbar_starts_with_tab,
 };
-use crate::sensitive::{payment_suspected, sensitive_label};
+use crate::sensitive::{
+    destructive_label, payment_suspected, purchase_label, sensitive_label, submit_label,
+};
 
 /// Maximum emitted (numbered) nodes.
 pub const MAX_EMITTED_NODES: usize = 400;
@@ -369,6 +371,10 @@ pub(crate) struct Emitted {
     pub(crate) label: Option<String>,
     pub(crate) rect: Option<Rect>,
     pub(crate) sensitive_label: bool,
+    /// Action lexicons on the JOINED (Cf-stripped, unsplit) label (S2-14e).
+    pub(crate) destructive_label: bool,
+    pub(crate) purchase_label: bool,
+    pub(crate) submit_label: bool,
 }
 
 /// Steps 4-11 of ADR 0002 A2 (pure). `record_rects` are the secure-field rects of the preflight
@@ -578,6 +584,9 @@ fn redact_core(
             label: (!n.secure).then(|| emitted_label(n)).flatten(),
             rect: n.rect,
             sensitive_label: !n.secure && node_texts(n).any(sensitive_label),
+            destructive_label: !n.secure && node_texts(n).any(destructive_label),
+            purchase_label: !n.secure && node_texts(n).any(purchase_label),
+            submit_label: !n.secure && node_texts(n).any(submit_label),
         });
         text.push_str(&format!("#{} {}\n", rects.len(), body));
         used += line_len;
