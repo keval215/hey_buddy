@@ -1,5 +1,14 @@
 import { useEffect, useState } from "react";
-import { badgeText, clipRaw, isCloud, isWindows, previewSrc, purposeText, shortDigest } from "./logic";
+import {
+  badgeText,
+  clipRaw,
+  isCloud,
+  isWindows,
+  previewSrc,
+  purposeNotice,
+  purposeText,
+  shortDigest,
+} from "./logic";
 import type { RequestView } from "./logic";
 
 /** Exactly what a request contains: shared by the preview panel and the "Last request" view. */
@@ -45,6 +54,8 @@ export function RequestFields({ r, cacheKey }: { r: RequestView; cacheKey?: stri
         </span>
         <span className="text-neutral-500">digest {shortDigest(r.digest_hex)}</span>
       </div>
+
+      {purposeNotice(r) && <p className="text-neutral-700">{purposeNotice(r)}</p>}
 
       <section>
         <h2 className="font-medium">Screen text (exactly as sent)</h2>

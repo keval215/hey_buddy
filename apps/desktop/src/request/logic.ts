@@ -50,6 +50,16 @@ export function purposeText(r: Pick<RequestView, "purpose">): string | null {
   return r.purpose === "AgentPlan" ? "Agent planning" : null;
 }
 
+/**
+ * One-line notice for agent planning requests: the request carries the spoken task text
+ * (S2-10 follow-up). Null for ordinary turns.
+ */
+export function purposeNotice(r: Pick<RequestView, "purpose">): string | null {
+  return r.purpose === "AgentPlan"
+    ? "This request contains the task you spoke (shown under \"What you said\")."
+    : null;
+}
+
 /** Whole seconds left until `deadlineMs`, never negative. */
 export function secondsLeft(deadlineMs: number, nowMs: number): number {
   return Math.max(0, Math.ceil((deadlineMs - nowMs) / 1000));

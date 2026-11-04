@@ -11,6 +11,7 @@ export default defineConfig({
         main: "index.html",
         overlay: "overlay.html",
         preview: "preview.html",
+        approval: "approval.html",
       },
     },
   },

@@ -26,6 +26,9 @@ const COMMANDS: &[&str] = &[
     "export_audit_log",
     "clear_audit_log",
     "kill_agent",
+    "approval_ready",
+    "approval_displayed",
+    "approval_respond",
     "debug_fake_task",
 ];
 

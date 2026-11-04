@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "approval",
+  "description": "Approval window: listen to events, say it is displayed, answer Approve/Deny for approvals core created, and the stop-only kill_agent. Nothing else (no fs, shell, http, dialog or other commands).",
+  "windows": ["approval"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-approval-ready",
+    "allow-approval-displayed",
+    "allow-approval-respond",
+    "allow-kill-agent"
+  ]
+}

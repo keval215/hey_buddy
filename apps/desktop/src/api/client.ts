@@ -2,6 +2,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { type UnlistenFn, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import type { ApprovalClosedDto } from "../ipc/ApprovalClosedDto";
+import type { ApprovalDecisionDto } from "../ipc/ApprovalDecisionDto";
+import type { ApprovalRequestDto } from "../ipc/ApprovalRequestDto";
 import type { Decision } from "../ipc/Decision";
 import type { LastRequestDto } from "../ipc/LastRequestDto";
 import type { PreviewClosed } from "../ipc/PreviewClosed";
@@ -33,6 +36,8 @@ export const EVT = {
   turnError: "turn:error",
   turnPreview: "turn:preview",
   previewClosed: "turn:preview_closed",
+  approvalRequest: "approval:request",
+  approvalClosed: "approval:closed",
   engineSwapRequested: "engine_swap_requested",
   engineSwapDone: "engine_swap_done",
   engineSwapFailed: "engine_swap_failed",
@@ -48,6 +53,8 @@ export interface EventMap {
   "turn:error": TurnError;
   "turn:preview": PreviewDto;
   "turn:preview_closed": PreviewClosed;
+  "approval:request": ApprovalRequestDto;
+  "approval:closed": ApprovalClosedDto;
   engine_swap_requested: EngineSwapEvent;
   engine_swap_done: EngineSwapEvent;
   engine_swap_failed: EngineSwapEvent;
@@ -114,6 +121,13 @@ export const api = {
     invoke<void>("preview_decision", { requestId, decision }),
   /** Preview window only: the preview waiting for a decision (a panel that mounts late). */
   getPendingPreview: () => invoke<PreviewDto | null>("get_pending_preview"),
+  /** Approval window only: approvals waiting now (a window that mounts late). */
+  approvalReady: () => invoke<ApprovalRequestDto[]>("approval_ready"),
+  /** Approval window only: this request is on screen (starts the 500 ms input guard). */
+  approvalDisplayed: (id: string) => invoke<void>("approval_displayed", { id }),
+  /** Approval window only: answer a request core created; the digest must be echoed back. */
+  approvalRespond: (id: string, decision: ApprovalDecisionDto, echoedDigest: string) =>
+    invoke<void>("approval_respond", { id, decision, echoedDigest }),
   getLastRequest: () => invoke<LastRequestDto | null>("get_last_request"),
   /** The key goes to the OS keychain; it is never returned. Provider allowlist: "anthropic". */
   setApiKey: (provider: string, key: string) => invoke<Settings>("set_api_key", { provider, key }),

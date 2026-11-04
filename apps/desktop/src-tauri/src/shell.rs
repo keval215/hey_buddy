@@ -17,7 +17,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
-use crate::{hotkey, kill, overlay, preview};
+use crate::{approval, hotkey, kill, overlay, preview};
 
 const MAIN: &str = "main";
 const DISPLAY_POLL: Duration = Duration::from_secs(3);
@@ -150,6 +150,8 @@ pub fn setup(app: &AppHandle, buddy: &Arc<Buddy>) -> tauri::Result<()> {
     // Preview panel: the core shows cloud previews through it (no panel = no cloud, fail closed).
     buddy.set_preview_sink(Arc::new(preview::TauriSink(app.clone())));
     preview::create(app, buddy)?;
+    // Approval window (S2-16): no window = every approval is denied (fail closed).
+    approval::create(app)?;
 
     hotkey::register_initial(app, buddy);
     if let Some(ctl) = app.try_state::<Arc<KillController>>() {

@@ -632,6 +632,32 @@ Revalidate (observe, then change the world, then `revalidate` the `#n`; expect t
 - [ ] Latency of `revalidate` (resolve + two foreground reads) against the 1000 ms resolver timeout, including the
       fallback walk on a large Chrome page.
 
+## Approval window (S2-16) - UNTESTED on this machine (Windows, real app)
+
+Linux tests cover the broker, the typed summaries, the capability files and the React logic. Nothing
+creates requests in the running app until the supervisor lands (S2-23), so these checks need either
+that ticket or a temporary local debug command that calls `ApprovalBroker::request_plan` / `request_step`
+(do not commit it).
+
+- [ ] Capture exclusion: with a request on screen, take a screenshot (Win+Shift+S), start a screen
+      recording, and share the screen in a call: the approval window must be absent (black or missing).
+- [ ] Always on top: open another window over it; the approval window stays above.
+- [ ] Focus: the window takes focus when it appears and NOTHING inside is focused (no focus ring on
+      Approve). Pressing Enter or Space does nothing. Tab moves between Deny, Stop agent and (when
+      enabled) Approve; Enter or Space on a focused Approve still does nothing.
+- [ ] Click guard: Approve is disabled and shows a countdown for 0.5 s after the window appears; a
+      click in that time (press the mouse as the window appears) does nothing; after it, one click
+      approves. Deny works at any moment.
+- [ ] Esc = Deny, also during the countdown.
+- [ ] Keyboard-only path: Ctrl+Shift+A approves once the countdown has ended, and not before.
+- [ ] Stop agent button: pending approvals disappear, the window hides, "Stopped." is spoken and the
+      activity log has a `killed` entry. The kill hotkey and the tray item do the same while the window
+      is up.
+- [ ] Hostile labels (needs a plan with a target label such as `<b>Save</b>`, an RTL override, a very
+      long name): shown as plain text, one line, no markup effect, cut at about 60 characters.
+- [ ] Closing the window with the X denies the request (the task ends), and the window is not destroyed.
+- [ ] A request that nobody answers disappears after 30 s (step) / 10 min (plan) and counts as expired.
+
 ## Step 2 packaging note
 
 - [ ] macOS bundled builds (not `tauri dev`) need an `Info.plist` with

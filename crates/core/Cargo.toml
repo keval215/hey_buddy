@@ -40,6 +40,8 @@ tokio = { version = "1", default-features = false, features = ["sync", "time", "
 futures = { version = "0.3", default-features = false, features = ["std", "alloc"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 sha2 = "0.10"
+# Unguessable approval ids (S2-16). Already in the tree via firewall and policy.
+getrandom = "0.3"
 # Model downloader (S2-4). Same reqwest/rustls(ring) setup as the `llm` crate (L-009: no default
 # features, so no native-tls / openssl); no new crates in the lock file.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2"] }

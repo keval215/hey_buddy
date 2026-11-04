@@ -327,6 +327,7 @@ dependencies = [
  "firewall",
  "frame",
  "futures",
+ "getrandom 0.3.4",
  "libc",
  "llm",
  "png",

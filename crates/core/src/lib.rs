@@ -2,6 +2,7 @@
 
 pub mod activity;
 pub mod api;
+pub mod approval;
 pub mod audit_log;
 pub mod buddy;
 pub mod consent;

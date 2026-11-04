@@ -7,6 +7,9 @@ use buddy_core::api::{
     LastRequestDto, ModelRow, PreviewDto, Settings, SettingsField, SettingsIssue, SettingsPatch,
     SettingsResult, Status, SwapTarget,
 };
+use buddy_core::approval::{
+    ApprovalBroker, ApprovalDecisionDto, ApprovalRequestDto, APPROVAL_WINDOW,
+};
 use buddy_core::kill::{KillController, KillReason};
 use buddy_core::Buddy;
 use tauri::{AppHandle, Manager, State};
@@ -223,6 +226,55 @@ pub fn kill_agent(ctl: State<Arc<KillController>>) {
     ctl.trip(KillReason::StopButton);
 }
 
+/// Approval window only (capability `approval`; also checked by label here): the approvals that
+/// are waiting, oldest first, so a window that mounts after `approval:request` still shows them.
+/// The window can only read and answer approvals core created; it cannot create one.
+#[tauri::command]
+pub fn approval_ready(
+    window: tauri::Window,
+    broker: State<ApprovalBroker>,
+) -> Result<Vec<ApprovalRequestDto>, String> {
+    only_approval_window(&window)?;
+    Ok(broker.pending_requests())
+}
+
+/// Approval window only: this request is on screen now (starts the 500 ms input guard).
+#[tauri::command]
+pub fn approval_displayed(
+    window: tauri::Window,
+    broker: State<ApprovalBroker>,
+    id: String,
+) -> Result<(), String> {
+    only_approval_window(&window)?;
+    broker.mark_displayed(&id).map_err(|e| e.to_string())
+}
+
+/// Approval window only: Approve or Deny a request core created. Refused (a fixed token, the
+/// request stays pending) for an unknown id, a wrong digest, before the display acknowledgement
+/// or inside the 500 ms guard.
+#[tauri::command]
+pub fn approval_respond(
+    window: tauri::Window,
+    broker: State<ApprovalBroker>,
+    id: String,
+    decision: ApprovalDecisionDto,
+    echoed_digest: String,
+) -> Result<(), String> {
+    only_approval_window(&window)?;
+    broker
+        .respond(&id, decision, &echoed_digest)
+        .map_err(|e| e.to_string())
+}
+
+/// Defence in depth behind the per-window capability.
+fn only_approval_window(window: &tauri::Window) -> Result<(), String> {
+    if window.label() == APPROVAL_WINDOW {
+        Ok(())
+    } else {
+        Err("forbidden".to_string())
+    }
+}
+
 /// Dev builds only: start a fake long task (waits for the kill switch) for manual tests.
 #[cfg(debug_assertions)]
 #[tauri::command]
@@ -358,6 +410,102 @@ mod tests {
         for cmd in ["preview_decision", "get_pending_preview"] {
             assert!(preview.contains(&allow(cmd)));
             assert!(!default.contains(&allow(cmd)), "{cmd} is preview-only");
+        }
+    }
+
+    /// The approval window's commands (S2-16): the window may call these and nothing else.
+    const APPROVAL_COMMANDS: &[&str] =
+        &["approval_ready", "approval_displayed", "approval_respond"];
+
+    #[test]
+    fn approval_capability_grants_exactly_the_allowed_permissions() {
+        let approval = permissions(include_str!("../capabilities/approval.json"));
+        let expected: BTreeSet<String> = [
+            "core:event:allow-listen",
+            "core:event:allow-unlisten",
+            "allow-approval-ready",
+            "allow-approval-displayed",
+            "allow-approval-respond",
+            "allow-kill-agent",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(approval, expected);
+        // Only the approval window, nothing else (no wildcard).
+        let json = include_str!("../capabilities/approval.json");
+        assert!(json.contains("\"windows\": [\"approval\"]"));
+        for forbidden in [
+            "fs:",
+            "shell:",
+            "http:",
+            "dialog:",
+            "opener:",
+            "process:",
+            "core:window",
+            "core:webview",
+        ] {
+            assert!(
+                !json.contains(forbidden),
+                "approval.json must not grant {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn approval_commands_are_only_in_the_approval_capability() {
+        let default = permissions(include_str!("../capabilities/default.json"));
+        let overlay = permissions(include_str!("../capabilities/overlay.json"));
+        let preview = permissions(include_str!("../capabilities/preview.json"));
+        let approval = permissions(include_str!("../capabilities/approval.json"));
+        let build = include_str!("../build.rs");
+        let main = include_str!("main.rs");
+        for cmd in APPROVAL_COMMANDS {
+            let p = allow(cmd);
+            assert!(approval.contains(&p), "approval.json must allow {p}");
+            assert!(!default.contains(&p), "default.json must not allow {p}");
+            assert!(!overlay.contains(&p), "overlay.json must not allow {p}");
+            assert!(!preview.contains(&p), "preview.json must not allow {p}");
+            assert!(
+                build.contains(&format!("\"{cmd}\"")),
+                "build.rs lacks {cmd}"
+            );
+            assert_eq!(
+                main.matches(&format!("commands::{cmd},")).count(),
+                2,
+                "main.rs must register {cmd} in both handler lists"
+            );
+        }
+    }
+
+    #[test]
+    fn every_capability_file_allows_the_stop_command() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        let mut n = 0;
+        for entry in std::fs::read_dir(dir).expect("capabilities dir") {
+            let path = entry.expect("entry").path();
+            if path.extension().is_some_and(|e| e == "json") {
+                let json = std::fs::read_to_string(&path).expect("read");
+                assert!(
+                    permissions(&json).contains("allow-kill-agent"),
+                    "{path:?} must allow kill_agent"
+                );
+                n += 1;
+            }
+        }
+        assert!(n >= 4, "capability files found: {n}");
+    }
+
+    #[test]
+    fn the_desktop_manifest_enables_no_test_doubles() {
+        let manifest = include_str!("../Cargo.toml");
+        for banned in ["fakes", "test-support"] {
+            assert!(
+                !manifest
+                    .lines()
+                    .any(|l| l.contains(banned) && !l.trim_start().starts_with('#')),
+                "desktop Cargo.toml mentions {banned}"
+            );
         }
     }
 }

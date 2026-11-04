@@ -1,13 +1,14 @@
 //! hey_buddy desktop shell (T10): tray, settings window, push-to-talk hotkey, per-display
 //! click-through overlay. Thin glue: all logic lives in `buddy-core` (ADR 0001).
 //!
-//! Privacy: overlays, the settings window and the preview panel are excluded from screen capture (Windows:
+//! Privacy: overlays, the settings window, the preview panel and the approval window are excluded from screen capture (Windows:
 //! `exclude_window_from_capture`; macOS: the capture crate excludes this process by pid).
 //! Nothing here logs labels or any model/user content.
 
 // Prevents an extra console window on Windows in release.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod approval;
 mod commands;
 mod engine;
 mod hotkey;
@@ -35,7 +36,13 @@ fn main() {
             app.manage(buddy.clone());
             // The kill switch exists before anything else can start (S2-13).
             app.manage(kill::KillHotkey::new());
-            app.manage(buddy_core::kill::KillController::for_buddy(&buddy));
+            let ctl = buddy_core::kill::KillController::for_buddy(&buddy);
+            // The approval broker is stopped by the same switch (S2-16). The supervisor (S2-23)
+            // asks it; the approval window can only answer.
+            app.manage(buddy_core::approval::ApprovalBroker::with_system_clock(
+                ctl.gate().kill_switch(),
+            ));
+            app.manage(ctl);
             // Enables the models screen. Creates nothing and downloads nothing by itself.
             if let Ok(data) = app.path().app_data_dir() {
                 buddy.set_models_dir(buddy_core::download::models_dir(&data));
@@ -73,6 +80,9 @@ fn main() {
         commands::export_audit_log,
         commands::clear_audit_log,
         commands::kill_agent,
+        commands::approval_ready,
+        commands::approval_displayed,
+        commands::approval_respond,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -98,6 +108,9 @@ fn main() {
         commands::export_audit_log,
         commands::clear_audit_log,
         commands::kill_agent,
+        commands::approval_ready,
+        commands::approval_displayed,
+        commands::approval_respond,
     ]);
 
     builder
