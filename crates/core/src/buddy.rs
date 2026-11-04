@@ -618,6 +618,12 @@ impl Buddy {
         *lock(&self.activity) = Some(probe);
     }
 
+    /// An activity probe is installed (the agent supervisor refuses to run without one: with no
+    /// probe the audit-clear and deny-list guards would treat a running agent as idle).
+    pub fn has_activity_probe(&self) -> bool {
+        lock(&self.activity).is_some()
+    }
+
     /// True while a task is active or an intent / action is outstanding.
     fn agent_busy(&self) -> bool {
         let probe = lock(&self.activity).clone();

@@ -210,6 +210,12 @@ pub fn plan_summary(digest8: &str, lines: &[ApprovalLineDto]) -> String {
     )
 }
 
+/// Fixed-format one-line summary of the "Run it for real?" offer that follows a dry run (S2-23).
+/// Distinct from [`plan_summary`] so the window can tell the two questions apart.
+pub fn live_offer_summary(digest8: &str, lines: &[ApprovalLineDto]) -> String {
+    format!("Run it for real? {}", plan_summary(digest8, lines))
+}
+
 /// Fixed-format one-line summary of a step approval.
 pub fn step_summary(line: &ApprovalLineDto, submit: bool, changed: bool, digest8: &str) -> String {
     let tier = match line.tier {

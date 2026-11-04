@@ -23,6 +23,8 @@ real-voice = [
 # The engine protocol, sandbox launcher and ProcessEngine (ADR 0003). Only core may depend on it.
 agent = { path = "../agent" }
 audit = { path = "../audit" }
+# The desktop driver (S2-17/23): core is the only crate that wires driver + agent + policy together.
+driver = { path = "../driver" }
 policy = { path = "../policy" }
 voice = { path = "../voice" }
 capture = { path = "../capture" }
@@ -55,6 +57,8 @@ libc = "0.2"
 # HostileEngine, TestSandbox, FakeEngine (L-006: never reaches the desktop tree).
 agent = { path = "../agent", features = ["fakes"] }
 capture = { path = "../capture", features = ["fakes"] }
+# FakeActuator for the supervisor tests (L-006: never reaches the desktop tree).
+driver = { path = "../driver", features = ["fakes"] }
 firewall = { path = "../firewall", features = ["fakes"] }
 tempfile = "3"
 # Test doubles only (L-006): never reaches the desktop tree.

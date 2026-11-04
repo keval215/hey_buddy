@@ -100,7 +100,7 @@ pipe ends, an idempotent non-blocking `kill_handle()` and a blocking `wait()`. `
   preview ("Agent planning" badge) + Send for EACH call including repairs (`Cancel`/timeout = `ConsentDenied`, zero transport
   calls); local needs no preview.
 - `ProcessEngineKiller: EngineKiller` holds the current `AgentEngine` (attach/detach) and calls its non-blocking `kill()`.
-  Plug it in with `KillController::set_engine_killer`; the supervisor (S2-23) is NOT wired yet.
+  Plug it in with `KillController::set_engine_killer`; the supervisor (S2-17/23, `AgentSupervisor::wire_kill`) now does it and attaches/detaches the engine of each task (see `docs/supervisor.md`).
 - `llm` additions (ADR 0002 section 12, additive): `LlmRequest::with_output_schema(OutputSchema)`; Ollama body gains
   `"format": <schema>` after `"stream"` and uses temperature 0 / `num_predict` 1024 for schema requests; Anthropic puts the
   schema text in the system prompt (and `temperature: 0`); `RequestPreview.purpose: Turn | AgentPlan` (`PurposeDto` in the
@@ -124,4 +124,18 @@ pipe ends, an idempotent non-blocking `kill_handle()` and a blocking `wait()`. `
   sandbox (S2-10/15)".
 - Real Ollama `format` behaviour with qwen3:4b (does it honour the schema at 4k context? is `num_predict` 1024 enough?) and
   the Anthropic reply when the schema is only in the prompt.
-- The supervisor wiring (S2-23): per-task engine creation, `ProcessEngineKiller::attach`, `policy::propose` on the draft.
+- The supervisor wiring (S2-17/23) is DONE in `crates/core/src/agent/` and tested on Linux with fakes (`EngineFactory` makes a fresh
+  engine + `CoreModelGateway` per task, `ProcessEngineKiller::attach`/`detach`, `policy::propose_as` on the draft, `PlanLimits`
+  local/cloud from `AgentSettings::cloud_planning`, `foreground_app` only when the observation was Clear and the app is not
+  deny-listed). Still untested for real: the whole flow with the Windows sandbox, real Ollama and a real desktop (exit test).
+
+## S2-23 follow-ups (done, kept for the record)
+| Follow-up | Where |
+|---|---|
+| fresh ProcessEngine + gateway per task | `EngineFactory`, `ProcessEngineFactory` (`agent/types.rs`) |
+| attach / detach the engine killer | `AttachGuard` in `supervisor.rs`; `wire_kill()` |
+| `policy::propose` on the draft | `run_inner` step 3 (`PlanRejected(code)`), tests `policy_rejects_*` |
+| PlanLimits local/cloud from settings | `AgentSettings::cloud_planning` |
+| foreground_app only if Clear and not deny-listed | `AgentSupervisor::foreground_app` |
+| Read+Reversible ops table (S2-21) | the gate's origins (`docs/policy.md`), `RequestOrigin::policy_origin` |
+| still open | separate agent-provider setting; Anthropic `max_tokens` 1024 vs 12-step plans; a real `Catalogue` (Start menu) |

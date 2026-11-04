@@ -658,6 +658,18 @@ that ticket or a temporary local debug command that calls `ApprovalBroker::reque
 - [ ] Closing the window with the X denies the request (the task ends), and the window is not destroyed.
 - [ ] A request that nobody answers disappears after 30 s (step) / 10 min (plan) and counts as expired.
 
+## Agent supervisor (S2-17/23) - UNTESTED on this machine (Windows, real app) - PLACEHOLDER
+
+The supervisor (`crates/core/src/agent/`, `docs/supervisor.md`) is tested on Linux with fakes only. Nothing in the Tauri app calls
+`run_task` yet: the start-task command and the voice trigger come with the next ticket, which also writes the final **Step 2 exit test**
+(docs/STEP2.md "Step 2 exit test", the six items). Until then there is nothing to click. What that ticket must verify on Windows:
+- observe mode ON: "open Notepad and type a sentence" shows "would do" and executes nothing; "Run it for real?" runs exactly those steps;
+- every step approval and the Submit approval show in the approval window; plan approval alone never runs a submit;
+- hostile page text does not change the plan; the kill switch stops the engine, the driver (no stuck keys) and the run;
+- the audit log lists every action (write-ahead intent) and contains no typed value, transcript or screen text;
+- a scheduled / manual task pauses with a notification at the first step it may not run.
+The wiring chooses a `BindFacts` source (`UnknownFacts` fails closed: nothing but reads can run; `ReverifiedAtExecute` is opt-in).
+
 ## Step 2 packaging note
 
 - [ ] macOS bundled builds (not `tauri dev`) need an `Info.plist` with

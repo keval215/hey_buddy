@@ -324,6 +324,7 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "capture",
+ "driver",
  "firewall",
  "frame",
  "futures",

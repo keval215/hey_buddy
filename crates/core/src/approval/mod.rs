@@ -42,8 +42,8 @@ pub use dto::{
     EVT_APPROVAL_REQUEST,
 };
 pub use summary::{
-    clean, line, plan_lines, plan_summary, step_summary, OpKind, StepFacts, MAX_LABEL_CHARS,
-    MAX_LINES, MAX_TEXT_CHARS,
+    clean, line, live_offer_summary, plan_lines, plan_summary, step_summary, OpKind, StepFacts,
+    MAX_LABEL_CHARS, MAX_LINES, MAX_TEXT_CHARS,
 };
 
 /// An approve this soon after the window showed the request is ignored (ADR 0003 section 7).
@@ -282,6 +282,28 @@ impl ApprovalBroker {
             summary,
             lines,
             live,
+            false,
+            PLAN_TTL,
+            ttl,
+        )
+    }
+
+    /// Ask "Run it for real?" after a dry run (S2-23): a PLAN approval for the same digest with a
+    /// distinct summary. `ttl` can only tighten [`PLAN_TTL`].
+    pub fn request_live_offer(
+        &self,
+        digest: &ApprovalDigest,
+        steps: &[StepFacts],
+        ttl: Option<Duration>,
+    ) -> Result<PendingApproval, RequestError> {
+        let lines = summary::plan_lines(steps);
+        let summary = summary::live_offer_summary(digest.short(), &lines);
+        self.submit(
+            ApprovalKindDto::Plan,
+            digest.hex().to_string(),
+            summary,
+            lines,
+            true,
             false,
             PLAN_TTL,
             ttl,
