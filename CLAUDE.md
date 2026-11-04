@@ -75,6 +75,7 @@ docs/                  STEP1.md, adr/, agents/ (team memory)
 - JS/TS: `pnpm install`, `pnpm lint`, `pnpm typecheck`, `pnpm test`
 - App: `pnpm --filter desktop tauri dev` (no voice engines); real voice: `pnpm --filter desktop tauri dev --features real-voice`
   (cmake + clang, models in `<app data>/models` or `HEY_BUDDY_MODELS_DIR`, `ORT_DYLIB_PATH`; see `docs/manual-tests.md`)
+- Red-team suite (attacks must fail closed; `docs/redteam.md`): `bash tools/check-redteam.sh` (or `cargo test -p buddy-core --test redteam`)
 - Core e2e (fakes): `cargo test -p buddy-core --test e2e`; `cargo clippy -p buddy-core --features real-voice` checks the real adapters compile
 
 (Update this list when tooling changes.)

@@ -242,7 +242,8 @@ impl AgentVoice for BuddyVoice {
 }
 
 /// The sentences to speak for a finished task. Fixed sentences, or read answers (cleared labels).
-/// A kill says nothing here: the kill controller already said "Stopped.".
+/// A kill and a limit stop say nothing here: both go through the kill controller (`trip` /
+/// `trip_limit`), which already said "Stopped." once.
 pub fn sentences_for(report: &TaskReport) -> Vec<String> {
     let fixed = |n: Notice| vec![spoken::notice(n, Locale::En).to_owned()];
     match report.outcome {
@@ -253,8 +254,7 @@ pub fn sentences_for(report: &TaskReport) -> Vec<String> {
                 report.answers.iter().map(|a| a.sentence()).collect()
             }
         }
-        TaskOutcome::Killed(_) => Vec::new(),
-        TaskOutcome::Stopped(_) => fixed(Notice::Stopped),
+        TaskOutcome::Killed(_) | TaskOutcome::Stopped(_) => Vec::new(),
         TaskOutcome::Denied(_) | TaskOutcome::Expired(_) => fixed(Notice::AgentDeclined),
         TaskOutcome::Paused(_) => fixed(Notice::AgentNeedsYou),
         TaskOutcome::Refused(_)

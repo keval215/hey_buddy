@@ -37,6 +37,8 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: Red-team suite (S2-22, fails closed on every attack case; not vacuous)
+        run: bash tools/check-redteam.sh
       - name: ts-rs generated IPC types are up to date (cargo test regenerates them)
         run: |
           if [ -n "$(git status --porcelain -- apps/desktop/src/ipc)" ]; then

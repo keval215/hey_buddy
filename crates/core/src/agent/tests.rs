@@ -1594,8 +1594,20 @@ impl AppDenyPolicy for CountingDeny {
 
 #[tokio::test]
 async fn a_deny_listed_foreground_app_never_reaches_the_planner() {
-    // Run 1: nothing denied. The planner learns the foreground app and we learn how many deny
-    // checks happen before the planner is called (the last of them is the foreground filter).
+    // FIXED expectation, not derived from the supervisor: `k` is how many times the firewall asks
+    // the deny list during ONE observation (measured by observing directly). The supervisor must
+    // ask exactly once more (the foreground filter) before it calls the planner, and denying that
+    // very ask must blank the app. Removing the filter leaves the count at `k` and leaks the app.
+    let probe = CountingDeny {
+        calls: Default::default(),
+        after: usize::MAX,
+    };
+    let e0 = env();
+    let _ = e0.drv.observe(&probe);
+    let k = probe.calls.load(Ordering::SeqCst);
+    assert!(k >= 1);
+
+    // Run 1: nothing denied. The planner learns the app; one ask beyond the firewall's.
     let seen = Arc::new(Seen::default());
     let deny = Arc::new(CountingDeny {
         calls: Default::default(),
@@ -1618,14 +1630,14 @@ async fn a_deny_listed_foreground_app_never_reaches_the_planner() {
         Some("notes.exe"),
         "a clear, allowed app is passed"
     );
-    assert!(at_plan >= 1);
+    assert_eq!(at_plan, k + 1, "the foreground filter asked the deny list");
 
     // Run 2: the app is denied exactly at the foreground filter (the observation itself was
     // Clear). The planner must get NO app.
     let seen = Arc::new(Seen::default());
     let deny = Arc::new(CountingDeny {
         calls: Default::default(),
-        after: at_plan - 1,
+        after: k,
     });
     let e = env_with(Opts {
         deny: deny.clone(),
@@ -2003,6 +2015,30 @@ async fn a_kill_through_the_buddys_controller_stops_the_task_and_speaks_nothing_
 }
 
 #[tokio::test]
+async fn a_limit_stop_says_stopped_exactly_once() {
+    let g = glue(true, Arc::new(ReverifiedAtExecute));
+    let speaker = Arc::new(crate::kill::FakeSpeaker::default());
+    g.ctl.set_speaker(speaker.clone());
+    // Six identical steps in a row: more than the interactive repeat limit (5).
+    g.factory.draft(&steps_json(&[
+        SCROLL1, SCROLL1, SCROLL1, SCROLL1, SCROLL1, SCROLL1,
+    ]));
+    let r = bounded(g.rt.run(TRANSCRIPT.into())).await;
+    assert_eq!(r.outcome, TaskOutcome::Stopped("runaway"), "{r:?}");
+    assert!(g.ctl.wait_idle(Duration::from_secs(10)));
+    assert_eq!(
+        speaker.calls.load(Ordering::SeqCst),
+        1,
+        "the kill controller spoke once"
+    );
+    assert!(
+        g.voice.said().is_empty(),
+        "the runtime added none: {:?}",
+        g.voice.said()
+    );
+}
+
+#[tokio::test]
 async fn start_task_is_rejected_unless_the_agent_is_enabled_and_idle() {
     // The user setting is OFF by default: nothing starts.
     let g = glue(false, Arc::new(UnknownFacts));
@@ -2139,7 +2175,8 @@ fn spoken_sentences_are_fixed_or_made_of_cleared_labels_only() {
     };
     let fixed = |o| sentences_for(&rep(o));
     assert_eq!(fixed(TaskOutcome::Completed), vec!["Done."]);
-    assert_eq!(fixed(TaskOutcome::Stopped("runaway")), vec!["Stopped."]);
+    // A limit stop goes through the kill controller, which says "Stopped." itself: exactly once.
+    assert!(fixed(TaskOutcome::Stopped("runaway")).is_empty());
     assert!(fixed(TaskOutcome::Killed(Stage::Run)).is_empty());
     assert_eq!(
         fixed(TaskOutcome::Denied(Stage::LiveOffer)),

@@ -45,7 +45,7 @@ TaskRequest{origin, transcript}
 
 | Piece | What it is |
 |---|---|
-| `AgentSupervisor` / `SupervisorParts` | owns the ONE gate (`KillController::gate()`), the audit sink (`buddy.audit_sink()`), the `ApprovalBroker`, the driver, the engine factory, settings, deny list, catalogue, notifier, pacing. `AgentSupervisor::new` returns `Err(SupervisorError::AuditMismatch)` (`audit_mismatch`) unless `parts.audit` is the very sink the gate writes to (`PolicyGate::audit_sink()`) |
+| `AgentSupervisor` / `SupervisorParts` | owns the ONE gate (`KillController::gate()`), the audit sink (`buddy.audit_sink()`), the `ApprovalBroker`, the driver, the engine factory, settings, deny list, catalogue, notifier, pacing. `AgentSupervisor::new` returns `Err(SupervisorError::AuditMismatch)` (`audit_mismatch`) unless `parts.audit` is the very sink the gate writes to (`PolicyGate::uses_audit_sink(&sink)`, a pointer compare; the gate exposes no writer) |
 | `AgentDriver: ObservationSource + Sealed` | `observe`, `with_latest`, `execute(ApprovedAction)`, `emergency_release`. SEALED: only `driver::Driver<A>` (tests: REAL driver over `FakeActuator`) and, on Windows, `WindowsAgentDriver` (over `windows_driver()`). Doc states the SAFE-IF condition: an impl must keep `Firewall::revalidate` + `LiveTarget::verify_focus` before every input (D-009 relies on exactly these) |
 | `EngineFactory` -> `EngineParts` | fresh `AgentEngine` + `ModelGateway` per task (`ProcessEngineFactory` = `ProcessEngine` + `CoreModelGateway`) |
 | `AgentSettings` | `agent_enabled`, `activity_probe_installed`, `observe_mode` (default ON), `cloud_planning` (PlanLimits 45 s cloud / 60 s local). `BuddyAgentSettings` is the real one: all read from the persisted `Settings` (see "Wiring" below) |
@@ -97,14 +97,20 @@ Tauri (apps/desktop/src-tauri/src/agent.rs, at startup)
 * **Commands.** `agent_start_task` checks the window label (`main`), starts `run_task` on the async runtime and returns at once; it
   rejects with fixed tokens `agent_disabled`, `busy`, `bad_request`, `agent_unavailable`. It approves nothing.
 * **Outcome and speech.** `AgentTaskDto` carries the outcome kind and detail tokens, counts and the read answers. Spoken (local TTS slot
-  only): "Done." (Completed), "Stopped." (limit), "Okay, I won't." (Denied/Expired), "I need you to take a look." (Paused), "I couldn't do
-  that." (Refused, PlanFailed, PlanRejected, Blocked, Failed); nothing for a kill (the kill controller says "Stopped." itself). Model text,
+  only): "Done." (Completed), "Okay, I won't." (Denied/Expired), "I need you to take a look." (Paused), "I couldn't do
+  that." (Refused, PlanFailed, PlanRejected, Blocked, Failed); nothing for a kill or a limit stop (both trip the kill controller, which says "Stopped." exactly once; test `a_limit_stop_says_stopped_exactly_once`). Model text,
   the transcript and screen text are never spoken, with ONE exception: read answers.
 * **Read results (S2-18).** A `find_text` / `answer_from_screen` step yields a typed `ReadAnswer` (`agent/read.rs`) built ONLY from the
   firewall-cleared `RedactedScreenText` of that step's fresh observation: a match count plus the first matching element's fixed role word
   and label (control characters removed, at most 80 chars). The query (engine-authored) only selects labels and is never quoted.
   v1 has no model summary, so `answer_from_screen` uses the same label match. Spoken as "I found one match. The first is a button: Save."
   or "I could not find that on the screen.", through the local TTS slot; `Debug` never prints the label. No firewall change.
+
+### `agent_enabled` is read at task start only
+`AgentSettings::agent_enabled` (and the activity-probe check) is evaluated ONCE, in step 1 of `run_task`. Turning the setting off while a
+task runs does not stop that task: the kill switch (hotkey, tray, stop button) is the stop, and it is live between every phase. The
+next task is refused (`agent_disabled`). `observe_mode` and `cloud_planning` are likewise read once per task (the live offer / plan
+approval is decided after the dry run; flipping `observe_mode` later cannot skip an approval already asked or add a grant).
 
 ## Guarantees
 
@@ -156,7 +162,7 @@ Tauri (apps/desktop/src-tauri/src/agent.rs, at startup)
 | kill after attach, before `engine.plan` | `Killed(planning)`, `plan()` never called, engine + core gateway killed | `a_kill_between_attach_and_plan_never_starts_the_plan`, `a_kill_in_the_planning_window_kills_the_model_gateway` |
 | kill after propose / before approval / loop start / after observe / after step approval | `Killed(planning / plan_approval / run)`, nothing asked or minted as listed | `a_kill_after_propose_*`, `a_kill_before_the_approval_is_asked_*`, `a_kill_at_the_start_of_the_run_loop_*`, `a_kill_after_the_fresh_observation_*`, `a_kill_after_a_step_approval_*` |
 | unattended vs interactive limits | each origin gets its own `RunLimits` | `unattended_tasks_use_the_unattended_limits_*` |
-| deny-listed foreground app | never in `PlanInput` | `a_deny_listed_foreground_app_never_reaches_the_planner` |
+| deny-listed foreground app | never in `PlanInput` (fixed expectation: the foreground filter makes exactly one more deny ask than one firewall observation; denying that ask blanks the app; mutation-checked) | `a_deny_listed_foreground_app_never_reaches_the_planner`, red-team `the_foreground_filter_blanks_a_deny_listed_app_that_the_firewall_let_through` |
 | cloud vs local | 45 s / 60 s plan deadline | `cloud_planning_gets_the_45s_deadline_and_local_the_60s_one` |
 | broker cannot show a step approval | `Denied(step_approval)`, nothing run | `an_unavailable_approval_broker_at_a_step_is_a_deny` |
 | audit sink is not the gate's | `Err(audit_mismatch)` | `the_supervisor_refuses_an_audit_sink_that_is_not_the_gates` |
@@ -168,6 +174,9 @@ Tauri (apps/desktop/src-tauri/src/agent.rs, at startup)
 | read answers | typed, from cleared text, spoken | `find_text_results_are_read_from_cleared_screen_text_and_spoken` |
 | `agent_mode` route | transcript to the agent, never to chat | `crates/core/tests/e2e.rs` `agent_mode_*` |
 Every awaited task in the supervisor tests is wrapped in a 30 s `bounded(..)` so a removed hook FAILS with a timeout instead of hanging.
+
+## Red-team suite
+`docs/redteam.md` / `crates/core/tests/redteam/`: every attack case of S2-22 against this supervisor (public API only), with its own mutation self-check. CI step "Red-team suite".
 
 ## Mutation self-check (run by hand, each made exactly the listed tests fail, then reverted)
 - pass the gate's digest instead of the shown (broker) digest to `gate.decide` -> `a_digest_mismatch_between_broker_and_gate_aborts` fails;

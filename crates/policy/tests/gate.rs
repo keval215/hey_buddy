@@ -666,3 +666,13 @@ fn plans_reports_approvals_and_grants_belong_to_one_gate() {
         Some(Refusal::WrongPlan)
     );
 }
+
+#[test]
+fn uses_audit_sink_is_a_pointer_compare_and_exposes_no_writer() {
+    let rig = Rig::new();
+    let own: std::sync::Arc<dyn policy::AuditSink> = rig.audit.clone();
+    assert!(rig.gate.uses_audit_sink(&own));
+    let other: std::sync::Arc<dyn policy::AuditSink> =
+        std::sync::Arc::new(policy::MemoryAudit::new());
+    assert!(!rig.gate.uses_audit_sink(&other));
+}

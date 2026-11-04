@@ -292,11 +292,7 @@ impl AgentSupervisor {
     /// append-only log (fail closed: no supervisor at all).
     pub fn new(parts: SupervisorParts) -> Result<Self, SupervisorError> {
         let gate = Arc::clone(parts.controller.gate());
-        let same_sink = std::ptr::eq(
-            Arc::as_ptr(&parts.audit).cast::<()>(),
-            Arc::as_ptr(&gate.audit_sink()).cast::<()>(),
-        );
-        if !same_sink {
+        if !gate.uses_audit_sink(&parts.audit) {
             return Err(SupervisorError::AuditMismatch);
         }
         let clock = gate.clock();
