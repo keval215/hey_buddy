@@ -103,7 +103,114 @@ class Negative(unittest.TestCase):
     def test_publish_not_tag_gated(self):
         t = GOOD.replace("if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')", "if: always()")
         self.assertTrue(has(t, "v* tag push"))
+        COND = "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
+        for bad in [
+            "github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v')",
+            "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || always()",
+            "always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')",
+            "${{ always() }} && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')",
+            "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !cancelled()",
+            "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && failure()",
+            "github.event_name == 'push' && cancelled() && startsWith(github.ref, 'refs/tags/v')",
+            "${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) }}",
+            "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')",
+            "github.event_name != 'push' && startsWith(github.ref, 'refs/tags/v')",
+            "true",
+        ]:
+            self.assertTrue(has(GOOD.replace(COND, bad), "v* tag push"), bad)
+
+    def test_publish_gate_normalisation_is_accepted(self):
+        COND = "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
+        for ok in [
+            "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}",
+            "github.event_name  ==  'push'   &&  startsWith(github.ref ,  'refs/tags/v')",
+            "github.event_name == 'push' && startsWith(github.ref,'refs/tags/v')",
+        ]:
+            self.assertEqual(errs(GOOD.replace(COND, ok)), [], ok)
+
+    def test_publish_gate_missing(self):
         self.assertTrue(has(GOOD.replace("    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')\n", ""), "v* tag push"))
+
+    def _with_cmd(self, new):
+        """GOOD with the publish command replaced by `new` (the create command plus --draft is replaced entirely)."""
+        old = 'gh release create "$TAG" --draft \\\n            --title x assets/*'
+        self.assertIn(old, GOOD)
+        return GOOD.replace(old, new)
+
+    def test_draft_only_inside_quoted_argument(self):
+        self.assertTrue(has(self._with_cmd('gh release create "$TAG" --title "--draft" assets/*'), "without --draft"))
+        self.assertTrue(has(self._with_cmd("gh release create \"$TAG\" --notes '--draft' assets/*"), "without --draft"))
+        self.assertTrue(has(self._with_cmd('gh release create "$TAG" --title="x --draft" assets/*'), "without --draft"))
+
+    def test_draft_flag_forms_accepted(self):
+        self.assertEqual(errs(self._with_cmd('gh   release   create "$TAG" --title x --draft assets/*')), [])
+        self.assertEqual(errs(self._with_cmd('gh -R o/r release create "$TAG" --title x --draft assets/*')), [])
+
+    def test_draft_on_other_command_does_not_count(self):
+        self.assertTrue(has(self._with_cmd('echo --draft && gh release create "$TAG" assets/*'), "without --draft"))
+        self.assertTrue(has(self._with_cmd('gh release create "$TAG" assets/* ; echo --draft'), "without --draft"))
+
+    def test_spacing_variants_of_create(self):
+        t = self._with_cmd('gh  release  create "$TAG" assets/*')
+        self.assertTrue(has(t, "without --draft"))
+        t = self._with_cmd('gh -R o/r release create "$TAG" assets/*')
+        self.assertTrue(has(t, "without --draft"))
+        t = self._with_cmd('gh --repo o/r release create "$TAG" assets/*')
+        self.assertTrue(has(t, "release"))  # fail closed even if the parser cannot tell
+
+    def test_indirect_command(self):
+        t = self._with_cmd('CMD="gh release"\n          $CMD create "$TAG" assets/*')
+        self.assertTrue(has(t, "indirect"))
+        t = self._with_cmd('"$GH" release create "$TAG" --draft assets/*')
+        self.assertTrue(has(t, "indirect"))
+
+    def test_obscured_command(self):
+        self.assertTrue(has(self._with_cmd('bash -c "gh release create $TAG --draft"'), "obscured"))
+        self.assertTrue(has(self._with_cmd('eval "gh release create $TAG"'), "obscured"))
+
+    def test_gh_api_on_releases(self):
+        for cmd in [
+            "gh api -X PATCH repos/o/r/releases/1 -F draft=false",
+            "gh api --method PATCH /repos/o/r/releases/1 --field draft=false",
+            "gh api repos/o/r/releases -f tag_name=v1",
+            "gh api -X PATCH repos/o/r/RELEASES/1",
+        ]:
+            self.assertTrue(has(GOOD + "          " + cmd + "\n", "gh api"), cmd)
+
+    def test_draft_false_forms(self):
+        for bad in ["-F draft=false", "--field draft=0", 'draft: "false"', "draft: ${{ inputs.d }}", "'draft': false", "draft=$D", "draft: 'false'"]:
+            self.assertTrue(has(GOOD + "          echo x " + bad + "\n", "draft to false"), bad)
+        self.assertEqual(errs(GOOD + "          echo draft=true\n"), [])
+
+    def test_release_actions(self):
+        for bad in ["softprops/action-gh-release@v2", "ncipollo/release-action@v1", "actions/create-release@v1", "actions/upload-release-asset@v1"]:
+            self.assertTrue(has(GOOD.replace("actions/checkout@v4", bad), "release action"), bad)
+        self.assertTrue(has(GOOD.replace("actions/checkout@v4", "softprops/action-gh-release@v2"), "release action", "ci.yml"))
+
+    def test_release_other_subcommands(self):
+        for sub in ["edit v1 --draft=false", "upload v1 f", "delete v1", "upload v1 f --clobber"]:
+            self.assertTrue(has(GOOD + "          gh release " + sub + "\n", "existing release"), sub)
+
+    def test_unbalanced_quote_fails_closed(self):
+        self.assertTrue(has(self._with_cmd('gh release create "$TAG --draft assets/*'), "tokenise"))
+
+    def test_injection_in_run(self):
+        for expr in ["github.ref_name", "github.head_ref", "github.ref", "github.event.pull_request.title", "github.event.head_commit.message",
+                     "github['ref_name']", "toJSON(github)", "github.base_ref", " github.ref_name "]:
+            t = GOOD.replace("echo hi", "echo ${{ " + expr + " }}")
+            self.assertTrue(has(t, "script injection"), expr)
+            self.assertTrue(has(t, "script injection", "ci.yml"), expr)
+
+    def test_injection_via_env_is_fine(self):
+        t = GOOD.replace("      - run: echo hi\n", "      - env:\n          TAG: ${{ github.ref_name }}\n        run: echo \"$TAG\"\n")
+        self.assertEqual(errs(t), [])
+        self.assertEqual(errs(GOOD.replace("echo hi", "echo ${{ github.repository }} ${{ runner.os }}")), [])
+
+    def test_warns_about_non_sha_uses(self):
+        w = cw.non_sha_uses("release.yml", GOOD)
+        self.assertEqual(len(w), 2)  # checkout@v4 and rust-toolchain@stable; the 40-hex upload-artifact is fine
+        self.assertTrue(all(x.startswith("WARNING") for x in w))
+        self.assertEqual(errs(GOOD), [])  # a warning is not an error
 
     def test_unpinned_actions(self):
         for bad in ["actions/checkout@main", "actions/checkout", "actions/checkout@v4-beta", "docker://alpine:3", "a/b@abc123", "dtolnay/rust-toolchain@master"]:

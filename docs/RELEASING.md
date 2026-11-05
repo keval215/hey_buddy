@@ -13,9 +13,9 @@ Private keys and signing commands never run in CI.
 
 | Trigger | Result |
 |---|---|
-| push of a tag `v*` | builds the installer, SBOM and licence report, assembles `SHA256SUMS`, then creates a DRAFT release (`--draft`, plus `--prerelease` if the tag contains `-`) with those files. |
-| pull request touching the workflow, `docs/release-template.md`, `tools/build-installer.ps1` or `tools/check-workflows.py` | the same build and assembly, NO publish job runs (dry run). |
-| manual run (Actions tab) | same as the dry run; it never publishes. |
+| push of a tag `v*` | builds the installer, SBOM and licence report, assembles `SHA256SUMS`, then creates a DRAFT release (`--draft`) with those files. The tag must be strict semver `vMAJOR.MINOR.PATCH` (the `bundle` job fails with a clear message otherwise; there are no pre-release tags, matching the updater). |
+| pull request touching the workflow, `docs/release-template.md`, `tools/build-installer.ps1` or `tools/check-workflows.py` | the same build and assembly, NO publish job runs. |
+| manual run (Actions tab) | the same build and assembly; it never publishes. |
 
 Jobs: `installer` (windows-latest, `tools/build-installer.ps1`, which also runs `installer-check`), `supply-chain`
 (ubuntu: `cargo cyclonedx` SBOM, `pnpm licenses list`, `cargo deny list` and `cargo deny check licenses sources bans`),
@@ -24,9 +24,29 @@ Jobs: `installer` (windows-latest, `tools/build-installer.ps1`, which also runs 
 automatic `GITHUB_TOKEN` and `gh release create --draft`). Every other job and the workflow default are `contents: read`.
 
 `tools/check-workflows.py` (run in the CI Linux job, with its tests) fails the build if a workflow could publish
-(draft false, release edit), names a secret other than `GITHUB_TOKEN`, writes outside the one publish job, uses
-`pull_request_target`, names signing material in `release.yml`, or uses an unpinned action. Run it locally:
+(draft false, a `gh release` command other than create/view/list/download, `gh api` on releases, a release action, an indirect
+`$CMD create`, a `--draft` that is not a standalone argument of `gh release create`, a publish job whose `if` is not
+exactly `github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')`), interpolates `github.ref_name`,
+`head_ref`, `ref` or `event.*` straight into `run:` text (use `env:`), names a secret other than `GITHUB_TOKEN`, writes outside the one publish job, uses
+`pull_request_target`, names signing material in `release.yml`, or uses an unpinned action. It also prints a WARNING
+(not a failure) for every `uses:` in `release.yml` that is not SHA-pinned; see the next section. Run it locally:
 `python3 -I tools/check-workflows_test.py && python3 -I tools/check-workflows.py`.
+
+The release workflow does not use `Swatinem/rust-cache` (a poisoned cache must not reach a release build); `ci.yml` does.
+
+## Known residual risks / VERIFY before first release
+
+- **Mutable action refs.** `release.yml` pins actions to major tags (`actions/checkout@v4`, `actions/upload-artifact@v4`,
+  `actions/download-artifact@v4`, `pnpm/action-setup@v4`, `actions/setup-node@v4`) and `dtolnay/rust-toolchain@stable`
+  (the same as `ci.yml`). A moved tag or a compromised action runs in the release build. VERIFY / TODO before the FIRST
+  real release: SHA-pin every `uses:` in `release.yml` (start with `publish-draft`, the only job with
+  `contents: write`, then `bundle`, `installer`, `supply-chain`) by looking each SHA up on GitHub; they could not be looked
+  up offline and none were invented. `tools/check-workflows.py` lists the non-SHA ones as WARNINGs until then.
+- **Unverified tool versions.** `cargo install --locked cargo-cyclonedx --version 0.5.9` and `cargo-deny --version 0.20.2`
+  were chosen without network access. VERIFY both versions exist and that the flags used still work (first real run);
+  also check their licences stay permissive.
+- **Draft safety is a static check.** The checker is a defence in depth, not a proof; read the workflow diff of any PR that
+  touches `release.yml` or the checker.
 
 Tool versions pinned in `release.yml` env: `CARGO_CYCLONEDX_VERSION` (0.5.9), `CARGO_DENY_VERSION` (0.20.2). They are
 installed with `cargo install --locked`. VERIFY on the first real run: the exact `cargo cyclonedx` flags and file names
@@ -37,7 +57,8 @@ the network jobs here. Fix the step, not the checker, if the first run complains
 
 1. **Version bump.** Edit `version` under `[workspace.package]` in `Cargo.toml` (the installer name and the app version come
    from it; `tauri.conf.json` has no version). Update `Cargo.lock` (`cargo check`), commit through a PR, merge to `main`.
-   Releases are strict `MAJOR.MINOR.PATCH` (the updater rejects anything else, ADR 0005 section 4.2).
+   Releases are strict `MAJOR.MINOR.PATCH` (the updater rejects anything else, ADR 0005 section 4.2); the workflow rejects any
+   other tag, including `v0.2.0-rc1`.
 2. **Tag.** `git tag -a v0.2.0 -m "hey_buddy 0.2.0" && git push origin v0.2.0` (tag from the merged commit). The `bundle`
    job refuses a tag that does not match the workspace version.
 3. **Wait for the draft.** Actions, "Release (draft only)", then Releases shows a DRAFT titled "hey_buddy v0.2.0 (unsigned)".
@@ -77,7 +98,7 @@ the network jobs here. Fix the step, not the checker, if the first run complains
 10. **Upload** `update-manifest.json` to the DRAFT release (web UI "Edit", drag the file; or `gh release upload v0.2.0
     update-manifest.json`). Never edit or replace other assets.
 11. **Review the draft:** notes text (replace the placeholder line at the bottom), unsigned/SmartScreen notice present,
-    asset list complete (installer, `SHA256SUMS`, SBOM tar, licence files, `update-manifest.json`), pre-release flag right.
+    asset list complete (installer, `SHA256SUMS`, SBOM tar, licence files, `update-manifest.json`), not marked pre-release.
 12. **Publish by hand** in the GitHub UI ("Publish release"). Clients fetch `releases/latest/download/update-manifest.json`,
     so publishing a release with a manifest is what rolls the update out. Nothing in this repository ever does that step.
 13. **After publishing:** open the Settings window in an older build that trusts your key, click "Check for updates": it

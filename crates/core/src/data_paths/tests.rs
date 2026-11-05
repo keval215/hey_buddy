@@ -424,8 +424,9 @@ fn delete_is_refused_while_busy_and_nothing_is_touched() {
 
 #[test]
 fn a_download_start_during_a_deletion_is_refused_and_the_flag_clears_after() {
-    use crate::activity::{Activity, ActivityProbe};
+    use crate::activity::ActivityProbe;
     use crate::download::DownloadError;
+    use policy::Activity;
     use std::sync::{Mutex, Weak};
 
     /// Asks the buddy to start a download while the deletion is running (the probe is called

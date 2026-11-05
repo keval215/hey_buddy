@@ -98,4 +98,4 @@ Recorded here for orch to fold into the ADR; none weakens a rule of the ADR.
 
 `tools/update-sign keygen|sign|verify` (ring + the same `update::verify`). Keys are read and written only at paths on the
 command line, `keygen` refuses to write inside a git work tree, never overwrites and never prints a private key.
-Run it offline; CI only tests it with ephemeral keys. Release steps: `docs/RELEASING.md` (stub, S3-7).
+Run it offline; CI only tests it with ephemeral keys. Release steps: `docs/RELEASING.md`.

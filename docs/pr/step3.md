@@ -19,7 +19,7 @@ D-010 (ADR 0005 auto-update) is PROVISIONAL, decided under D-008 while the user 
 fmt, clippy `-D warnings`, `cargo test --workspace`, `pnpm lint/typecheck/test`, cargo deny, red-team suite, dependency-direction tripwires, `installer-check` and `registry-check` (static), `check-workflows` (21 unit tests + the real workflows). Counts: see the latest CI run on the PR (orch to fill in before opening).
 
 ## NOT verified (needs Windows) - `docs/manual-tests.md`
-The NSIS build and install/uninstall, SmartScreen / Smart App Control behaviour, the update launcher (`CreateProcessW`, private directory, deny-write handle), the wizard against real hardware/mic/Ollama, real folders and junctions in data deletion, the first run of `release.yml` itself (tool flags for `cargo cyclonedx` / `cargo deny list`, artifact layout: VERIFY).
+The NSIS build and install/uninstall, SmartScreen / Smart App Control behaviour, the update launcher (`CreateProcessW`, private directory, deny-write handle), the wizard against real hardware/mic/Ollama, real folders and junctions in data deletion, SHA-pinning every `uses:` in `release.yml` before the first release (checker WARNs; see `docs/RELEASING.md` residual risks), the first run of `release.yml` itself (tool flags for `cargo cyclonedx` / `cargo deny list`, artifact layout: VERIFY).
 
 ## BLOCKED-ON-USER
 - Update keys: generate primary + backup OFFLINE, paste public halves into `TRUSTED_KEYS`, replace `OWNER_TODO` in the manifest URL, and edit the CI empty-key tripwire (ci.yml, ADR 0005 step, item 6) at the same moment - see `docs/RELEASING.md`

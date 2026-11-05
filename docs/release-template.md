@@ -10,7 +10,7 @@
 | File | What it is |
 |---|---|
 | `hey_buddy_<version>_x64-setup.exe` | Per-user installer (no administrator prompt) |
-| `SHA256SUMS` | SHA-256 of every file in this release |
+| `SHA256SUMS` | SHA-256 of every file attached by CI (`update-manifest.json` is added by hand later and is not listed) |
 | `sbom-rust-cyclonedx.tar.gz` | CycloneDX SBOM, one JSON file per Rust crate of the workspace |
 | `licenses-js.json` | Licences of the production JavaScript dependencies |
 | `licenses-rust.json`, `licenses-rust.tsv` | Licences of the Rust dependencies (`cargo deny list`) |

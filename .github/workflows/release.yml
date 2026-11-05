@@ -15,12 +15,7 @@ on:
       - 'docs/release-template.md'
       - 'tools/build-installer.ps1'
       - 'tools/check-workflows.py'
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: 'Informational: a manual run never publishes anything (only a v* tag push can create a draft).'
-        type: boolean
-        default: true
+  workflow_dispatch:  # a manual run never publishes anything (only a v* tag push can create a draft)
 
 permissions:
   contents: read
@@ -39,7 +34,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -64,7 +58,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
       - name: Install Tauri system libraries (cargo metadata resolves the full workspace)
         run: |
           sudo apt-get update
@@ -131,8 +124,12 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          echo "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'
-          want="${TAG#v}"; want="${want%%-*}"
+          # Strict MAJOR.MINOR.PATCH only (the updater rejects anything else, ADR 0005 section 4.2): no pre-release tags.
+          if ! echo "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "tag '$TAG' is not strict semver vMAJOR.MINOR.PATCH (for example v0.2.0); pre-release tags are not supported"
+            exit 1
+          fi
+          want="${TAG#v}"
           have=$(grep -m1 -E '^version = ' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')
           [ "$want" = "$have" ] || { echo "tag $TAG does not match workspace version $have"; exit 1; }
           ls release/*_"${have}"_x64-setup.exe
@@ -172,8 +169,6 @@ jobs:
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
-          flag=""
-          case "$TAG" in *-*) flag="--prerelease" ;; esac
-          gh release create "$TAG" --repo "$REPO" --draft $flag --verify-tag \
+          gh release create "$TAG" --repo "$REPO" --draft --verify-tag \
             --title "hey_buddy $TAG (unsigned)" --notes-file assets/release-notes.md \
             assets/release/*
