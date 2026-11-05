@@ -1,0 +1,179 @@
+name: Release (draft only)
+
+# S3-7. Builds the UNSIGNED NSIS installer, SHA256SUMS, an SBOM and a licence report.
+#  - tag push v*  -> builds, then creates a DRAFT GitHub release (a maintainer publishes it by hand).
+#  - pull request touching this pipeline, or a manual run -> the same build, NO publish step runs.
+# No signing, no secrets other than the automatic GITHUB_TOKEN. Procedure: docs/RELEASING.md.
+# tools/check-workflows.py asserts these properties in CI.
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'docs/release-template.md'
+      - 'tools/build-installer.ps1'
+      - 'tools/check-workflows.py'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Informational: a manual run never publishes anything (only a v* tag push can create a draft).'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Pinned tool versions (VERIFY: first real run). Both are permissive: cargo-cyclonedx Apache-2.0/MIT, cargo-deny Apache-2.0/MIT.
+  CARGO_CYCLONEDX_VERSION: '0.5.9'
+  CARGO_DENY_VERSION: '0.20.2'
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Build unsigned NSIS installer, SHA256SUMS and installer-check assertions
+        shell: pwsh
+        run: ./tools/build-installer.ps1
+      - name: Show checksums
+        shell: pwsh
+        run: Get-Content dist/installer/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-installer
+          path: dist/installer/*-setup.exe
+          if-no-files-found: error
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Tauri system libraries (cargo metadata resolves the full workspace)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install pinned SBOM and licence tools
+        run: |
+          cargo install --locked cargo-cyclonedx --version "$CARGO_CYCLONEDX_VERSION"
+          cargo install --locked cargo-deny --version "$CARGO_DENY_VERSION"
+      - name: SBOM (CycloneDX JSON, one file per workspace crate, plus the JS dependency list)
+        run: |
+          mkdir -p out
+          cargo cyclonedx --format json --override-filename sbom
+          find . -name sbom.json -not -path './target/*' -not -path '*/node_modules/*' | sort > out/sbom-files.txt
+          test -s out/sbom-files.txt # not vacuous
+          tar -czf out/sbom-rust-cyclonedx.tar.gz -T out/sbom-files.txt
+          pnpm licenses list --prod --json > out/licenses-js.json
+          test -s out/licenses-js.json
+      - name: Licence report (cargo deny list; the same policy as deny.toml)
+        run: |
+          cargo deny list --format json > out/licenses-rust.json
+          cargo deny list --format tsv > out/licenses-rust.tsv
+          test -s out/licenses-rust.tsv # not vacuous
+          cargo deny check licenses sources bans
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-supply-chain
+          path: out/*.*
+          if-no-files-found: error
+
+  bundle:
+    # Assembles and checks the exact set of files a draft would carry. Runs on PRs too (dry run).
+    needs: [installer, supply-chain]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-installer
+          path: release
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-supply-chain
+          path: release
+      - name: Drop helper files, write SHA256SUMS over every asset, verify it
+        run: |
+          rm -f release/sbom-files.txt
+          (cd release && sha256sum -- * | grep -v ' SHA256SUMS$' > SHA256SUMS && sha256sum -c SHA256SUMS)
+          cat release/SHA256SUMS
+          grep -q 'setup.exe' release/SHA256SUMS # not vacuous
+          grep -q 'sbom-rust-cyclonedx.tar.gz' release/SHA256SUMS
+          grep -q 'licenses-rust.tsv' release/SHA256SUMS
+      - name: Tag must match the workspace version and the installer name (tags only)
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          echo "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'
+          want="${TAG#v}"; want="${want%%-*}"
+          have=$(grep -m1 -E '^version = ' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')
+          [ "$want" = "$have" ] || { echo "tag $TAG does not match workspace version $have"; exit 1; }
+          ls release/*_"${have}"_x64-setup.exe
+      - name: Render the release notes from docs/release-template.md
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.0.0-dry-run' }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "$REPO" | grep -qE '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'
+          sed -e "s/{{TAG}}/${TAG}/g" -e "s|{{REPO}}|${REPO}|g" docs/release-template.md > release-notes.md
+          if grep -q '{{' release-notes.md; then echo "unreplaced placeholder"; exit 1; fi
+          grep -q 'unsigned' release-notes.md # not vacuous
+          cat release-notes.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: |
+            release/*
+            release-notes.md
+          if-no-files-found: error
+
+  publish-draft:
+    # The ONLY job that can write. Runs for a v* tag push and nothing else.
+    needs: [bundle]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: assets
+      - name: Create the DRAFT release (a maintainer publishes it by hand after signing the update manifest)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          flag=""
+          case "$TAG" in *-*) flag="--prerelease" ;; esac
+          gh release create "$TAG" --repo "$REPO" --draft $flag --verify-tag \
+            --title "hey_buddy $TAG (unsigned)" --notes-file assets/release-notes.md \
+            assets/release/*

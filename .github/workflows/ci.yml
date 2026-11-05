@@ -292,6 +292,12 @@ jobs:
           out=$(cargo run -q -p installer-check)
           echo "$out"
           echo "$out" | grep -q 'installer-check: OK' # not vacuous
+      - name: Workflow safety checks and their unit tests (S3-7; release is draft-only, no secrets, pinned actions)
+        run: |
+          python3 -I tools/check-workflows_test.py
+          out=$(python3 -I tools/check-workflows.py)
+          echo "$out"
+          echo "$out" | grep -qE 'check-workflows: OK \([2-9] files\)' # not vacuous (ci.yml and release.yml at least)
       - name: Model registry check (S3-5, static, offline; values stay TODO until a maintainer fills them)
         run: |
           out=$(cargo run -q -p registry-check -- models/registry.json)
