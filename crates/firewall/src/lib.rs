@@ -59,31 +59,59 @@
 //! Errors, `Debug` output and logs contain no pixels, window titles or field values.
 
 mod blackout;
+mod builtin;
+mod confusable;
 mod error;
 mod firewall;
+mod observe;
 mod platform;
 mod redacted;
 mod redacted_text;
 mod scrub;
+mod sensitive;
+mod target;
 mod text;
 
 #[cfg(any(test, feature = "fakes"))]
 pub mod fake;
+#[cfg(any(test, feature = "fakes"))]
+mod scripted;
 
+pub use builtin::{is_auth_surface_app, is_restricted_app};
+/// Width / confusable folding shared with `policy`'s lexicon matcher (S2-22b); escalate-only.
+pub use confusable::{fold_width, mixed_script, skeleton};
 pub use error::{BlockReason, FirewallError, PauseReason, SessionProbeState, SessionState};
 pub use firewall::{
     Firewall, PrivacyFirewall, SecureFieldDetector, SessionProbe, Verdict, DEFAULT_MAX_RECORD_AGE,
-    DEFAULT_TEXT_TIMEOUT, DEFAULT_TIMEOUT,
+    DEFAULT_TARGET_TIMEOUT, DEFAULT_TEXT_TIMEOUT, DEFAULT_TIMEOUT,
+};
+pub use observe::{
+    AppId, ElementRef, LabelFlags, Observation, ObservationFlags, ObservationId, ObserveVerdict,
+    TargetDescriptor, MAX_APP_ID_CHARS, MAX_VISIBLE_APP_ID_CHARS,
 };
 pub use platform::{platform_firewall, UnsupportedDetector, UnsupportedSessionProbe};
 pub use redacted::RedactedFrame;
 pub use redacted_text::RedactedScreenText;
+/// The firewall's label lexicons, read-only. `policy` keeps its own copies as defence in depth;
+/// a drift test there pins the relationship between the two.
+pub use sensitive::{
+    DESTRUCTIVE as DESTRUCTIVE_LEXICON, PAYMENT as PAYMENT_LEXICON, PURCHASE as PURCHASE_LEXICON,
+    SECRET as SECRET_LEXICON, SUBMIT as SUBMIT_LEXICON,
+};
+pub use target::{
+    hash_automation_id, hash_label, ElementHandle, FocusState, ForegroundFacts, LiveTarget,
+    NodeIdentity, ObservationSource, ObservedWindow, ResolveRequest, ResolvedFields,
+    ResolvedTarget, TargetRefusal, TargetResolver, TargetSel, UnsupportedObservationSource,
+    UnsupportedTargetResolver, VisibleApp, WindowFacts,
+};
 pub use text::{
-    NodeRole, RawTextNode, RawWindowTree, ScreenTextSource, TextCoverage, TextVerdict,
-    UnsupportedTextSource, WithheldReason, MAX_EMITTED_NODES, MAX_LABEL_CHARS, MAX_TEXT_CHARS,
-    MAX_VALUE_CHARS, TRUNCATED_MARKER,
+    is_hostile_char, NodeRole, RawTextNode, RawWindowTree, ScreenTextSource, TextCoverage,
+    TextVerdict, UnsupportedTextSource, WithheldReason, MAX_EMITTED_NODES, MAX_LABEL_CHARS,
+    MAX_TEXT_CHARS, MAX_VALUE_CHARS, TRUNCATED_MARKER,
 };
 
+#[cfg(test)]
+mod observe_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

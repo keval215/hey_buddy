@@ -73,6 +73,9 @@ struct ChatBody<'a> {
     model: &'a str,
     messages: [Message<'a>; 2],
     stream: bool,
+    /// The output schema (agent planning), right after `stream`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<&'a serde_json::Value>,
     think: bool,
     keep_alive: &'a str,
     options: Options,
@@ -175,12 +178,23 @@ impl LlmProvider for OllamaProvider {
                 },
             ],
             stream: true,
+            format: req.output_schema.as_ref().map(|s| s.schema()),
             think: false,
             keep_alive,
-            options: Options {
-                num_ctx: 4096,
-                num_predict: 512,
-                temperature: 0.6,
+            // Planning is deterministic (temperature 0) and may need a longer reply than a spoken
+            // answer; the context window stays the same.
+            options: if req.output_schema.is_some() {
+                Options {
+                    num_ctx: 4096,
+                    num_predict: 1024,
+                    temperature: 0.0,
+                }
+            } else {
+                Options {
+                    num_ctx: 4096,
+                    num_predict: 512,
+                    temperature: 0.6,
+                }
             },
         };
         let bytes = serde_json::to_vec(&body).map_err(|_| LlmError::Encode("body_serialize"))?;

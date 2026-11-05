@@ -1,0 +1,54 @@
+[package]
+name = "agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "hey_buddy agent engine (ADR 0003 sections 2-4): stdio protocol, sandbox launcher, MinimalEngine planner, ProcessEngine. Can only PROPOSE a JSON plan."
+
+[lib]
+name = "agent"
+path = "src/lib.rs"
+
+[[bin]]
+name = "buddy-agent"
+path = "src/main.rs"
+
+[features]
+default = []
+# FakeEngine, HostileEngine, InProcessMinimalEngine, TestSandbox. Dev-dependencies only (L-006);
+# CI checks the desktop tree never enables it.
+fakes = []
+
+# ADR 0003 section 11: this crate MUST NOT depend on policy, driver, action, capture, firewall,
+# llm, voice, reqwest, tauri or buddy-core (CI cargo-tree grep). The engine has no path to the
+# gate, the driver or the firewall.
+[dependencies]
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tokio = { version = "1", default-features = false, features = ["rt", "sync", "time", "macros"] }
+
+# Windows sandbox only (MIT OR Apache-2.0). Features: Foundation (HANDLE, errors), Security
+# (SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES), Security_Authorization (SID to string),
+# Security_Isolation (AppContainer profile), System_JobObjects, System_Pipes (CreatePipe),
+# System_Threading (CreateProcessW, attribute lists), System_Com (CoTaskMemFree),
+# System_LibraryLoader (SetDefaultDllDirectories, buddy-agent main only),
+# System_Environment is not used.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Security_Isolation",
+  "Win32_System_Com",
+  "Win32_System_JobObjects",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+agent = { path = ".", features = ["fakes"] }
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "time", "sync"] }

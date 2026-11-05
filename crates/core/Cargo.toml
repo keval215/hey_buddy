@@ -20,11 +20,18 @@ real-voice = [
 ]
 
 [dependencies]
+# The engine protocol, sandbox launcher and ProcessEngine (ADR 0003). Only core may depend on it.
+agent = { path = "../agent" }
+audit = { path = "../audit" }
+# The desktop driver (S2-17/23): core is the only crate that wires driver + agent + policy together.
+driver = { path = "../driver" }
+policy = { path = "../policy" }
 voice = { path = "../voice" }
 capture = { path = "../capture" }
 firewall = { path = "../firewall" }
 llm = { path = "../llm", features = ["keychain", "ollama", "anthropic"] }
 frame = { path = "../frame" }
+async-trait = "0.1"
 serde_json = "1"
 ts-rs = "11"
 serde = { version = "1", features = ["derive"] }
@@ -35,6 +42,8 @@ tokio = { version = "1", default-features = false, features = ["sync", "time", "
 futures = { version = "0.3", default-features = false, features = ["std", "alloc"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 sha2 = "0.10"
+# Unguessable approval ids (S2-16). Already in the tree via firewall and policy.
+getrandom = "0.3"
 # Model downloader (S2-4). Same reqwest/rustls(ring) setup as the `llm` crate (L-009: no default
 # features, so no native-tls / openssl); no new crates in the lock file.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2"] }
@@ -45,7 +54,11 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 libc = "0.2"
 
 [dev-dependencies]
+# HostileEngine, TestSandbox, FakeEngine (L-006: never reaches the desktop tree).
+agent = { path = "../agent", features = ["fakes"] }
 capture = { path = "../capture", features = ["fakes"] }
+# FakeActuator for the supervisor tests (L-006: never reaches the desktop tree).
+driver = { path = "../driver", features = ["fakes"] }
 firewall = { path = "../firewall", features = ["fakes"] }
 tempfile = "3"
 # Test doubles only (L-006): never reaches the desktop tree.
@@ -54,5 +67,4 @@ voice = { path = "../voice", features = ["fakes"] }
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "time", "test-util", "sync"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 png = "0.18"
-async-trait = "0.1"
 base64 = "0.23"

@@ -166,10 +166,18 @@ async fn turn(ctx: &TurnCtx) {
         .profile(&settings.profile)
         .is_some_and(profile_has_vlm);
 
-    let (heard, prep) = tokio::join!(
-        listen_and_transcribe(ctx),
-        prepare_screen(ctx, settings.vision_mode.into(), vlm)
-    );
+    // S2-23b: with `agent_mode` (and the agent allowed) the transcript goes to the agent, never to
+    // the chat model, and no chat screen read is prepared for it.
+    let agent_route = settings.agent_mode && settings.agent_enabled;
+    let (heard, prep) = if agent_route {
+        (listen_and_transcribe(ctx).await, None)
+    } else {
+        let (h, p) = tokio::join!(
+            listen_and_transcribe(ctx),
+            prepare_screen(ctx, settings.vision_mode.into(), vlm)
+        );
+        (h, Some(p))
+    };
     let mut speaker = Speaker::new(ctx);
     let transcript = match heard {
         Heard::Text(t) => t,
@@ -189,6 +197,21 @@ async fn turn(ctx: &TurnCtx) {
         });
     }
     ctx.phase(Phase::Thinking);
+    let Some(prep) = prep else {
+        // Agent route: hand the words over. If the agent cannot start, say so with a fixed
+        // sentence; the words never fall back to the chat model.
+        let started = ctx
+            .buddy
+            .agent_trigger()
+            .is_some_and(|t| t.start(transcript).is_ok());
+        if !started && ctx.alive() {
+            speaker
+                .say(spoken::notice(Notice::AgentCouldNot, LOCALE))
+                .await;
+        }
+        speaker.finish().await;
+        return;
+    };
     answer(ctx, &mut speaker, &settings, transcript, prep).await;
     speaker.finish().await;
 }

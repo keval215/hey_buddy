@@ -223,6 +223,9 @@ pub struct Settings {
     pub provider: ProviderChoice,
     /// Push-to-talk shortcut, e.g. `Ctrl+Alt+Space`.
     pub hotkey: String,
+    /// Kill-switch shortcut (S2-13), default `Ctrl+Alt+Shift+K`: at least two modifiers, one of
+    /// them Ctrl/Alt/Super, and never the push-to-talk chord.
+    pub kill_hotkey: String,
     /// Whether an API key is stored in the OS keychain (best effort); never persisted here and
     /// the key itself is never returned.
     pub has_api_key: bool,
@@ -233,9 +236,20 @@ pub struct Settings {
     /// The default models directory, for display (filled by `Buddy`; empty before the shell
     /// has set it). Never persisted.
     pub default_models_dir: String,
+    /// Observe mode (dry run first), default ON: every agent task starts as a dry run that shows
+    /// what it WOULD do and executes nothing; going live is a separate "Run it for real?" answer
+    /// for that one task. Turning it off only skips that dry-run-first question: every approval
+    /// and every gate check still applies.
+    pub observe_mode: bool,
+    /// The user allows the agent to run at all (default OFF). The agent also needs a writable
+    /// activity log and a registered stop shortcut (`Status.agent_enabled`).
+    pub agent_enabled: bool,
+    /// Voice requests go to the agent instead of the chat (default OFF; needs `agent_enabled`).
+    pub agent_mode: bool,
 }
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+Space";
+pub const DEFAULT_KILL_HOTKEY: &str = "Ctrl+Alt+Shift+K";
 pub const DEFAULT_PROFILE: &str = "default";
 
 impl Default for Settings {
@@ -246,10 +260,14 @@ impl Default for Settings {
             profile: DEFAULT_PROFILE.into(),
             provider: ProviderChoice::Ollama,
             hotkey: DEFAULT_HOTKEY.into(),
+            kill_hotkey: DEFAULT_KILL_HOTKEY.into(),
             has_api_key: false,
             anthropic_model: String::new(),
             models_dir: String::new(),
             default_models_dir: String::new(),
+            observe_mode: true,
+            agent_enabled: false,
+            agent_mode: false,
         }
     }
 }
@@ -277,10 +295,18 @@ pub struct SettingsPatch {
     #[ts(optional)]
     pub hotkey: Option<String>,
     #[ts(optional)]
+    pub kill_hotkey: Option<String>,
+    #[ts(optional)]
     pub anthropic_model: Option<String>,
     /// Custom models directory; an empty string goes back to the default.
     #[ts(optional)]
     pub models_dir: Option<String>,
+    #[ts(optional)]
+    pub observe_mode: Option<bool>,
+    #[ts(optional)]
+    pub agent_enabled: Option<bool>,
+    #[ts(optional)]
+    pub agent_mode: Option<bool>,
 }
 
 /// Which setting an issue is about (`File` = the settings file itself).
@@ -291,6 +317,7 @@ pub enum SettingsField {
     File,
     Profile,
     Hotkey,
+    KillHotkey,
     AnthropicModel,
     ModelsDir,
 }
@@ -304,6 +331,10 @@ pub enum IssueCode {
     Unknown,
     /// Hotkey without Ctrl, Alt or Super.
     NeedsModifier,
+    /// Kill hotkey with fewer than two modifiers.
+    NeedsTwoModifiers,
+    /// Kill hotkey equal to the push-to-talk hotkey (or the other way round).
+    Duplicate,
     /// Wrong shape (hotkey grammar, model id characters, forbidden path characters).
     InvalidFormat,
     TooLong,
@@ -379,6 +410,14 @@ pub enum LocalityDto {
     Cloud,
 }
 
+/// What a request is for (`RequestPurpose`). The panel says "Agent planning" for `AgentPlan`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum PurposeDto {
+    Turn,
+    AgentPlan,
+}
+
 /// The user's answer to a cloud preview (`preview_decision`). Step 1 has no "always allow".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -397,6 +436,7 @@ pub struct PreviewDto {
     pub provider_id: String,
     pub model: String,
     pub locality: LocalityDto,
+    pub purpose: PurposeDto,
     /// Full sha256 hex of the request (provider, endpoint, model, body).
     pub digest_hex: String,
     pub transcript: String,
@@ -427,6 +467,7 @@ pub struct LastRequestDto {
     pub provider_id: String,
     pub model: String,
     pub locality: LocalityDto,
+    pub purpose: PurposeDto,
     pub digest_hex: String,
     pub transcript: String,
     pub screen_text: Option<String>,
@@ -442,6 +483,11 @@ pub struct Status {
     pub phase: Phase,
     pub firewall: FirewallStatus,
     pub hotkey_registered: bool,
+    /// The kill-switch shortcut is registered with the OS (S2-13). `false` keeps the agent off:
+    /// no way to stop it means no agent (fail closed).
+    pub kill_hotkey_registered: bool,
+    /// The agent may run: activity log writable AND a kill trigger registered.
+    pub agent_enabled: bool,
     /// Fixed token when the settings file was unreadable and defaults are in use.
     pub settings_error: Option<String>,
     /// Stored values replaced at startup (e.g. a models folder that is gone).
@@ -450,6 +496,8 @@ pub struct Status {
     /// expected path), deny-list problems, apps removed from the default deny list. Never
     /// transcripts, replies or screen text.
     pub notices: Vec<String>,
+    /// The agent activity log is set up and writable. `false` keeps the agent off (fail closed).
+    pub audit_ready: bool,
 }
 
 /// Local state of one registry model, from the filesystem only (never from the network).
@@ -560,4 +608,66 @@ mod tests {
             assert_eq!(VisionMode::from(crate::route::VisionMode::from(m)), m);
         }
     }
+}
+
+/// One line of the agent activity log (S2-12). Content-free: ids, digests, fixed tokens and the
+/// sanitised target label (at most 60 characters, `[redacted]` for anything sensitive). Never
+/// typed text, transcripts, plan JSON, prompts, screen text, clipboard or screenshots.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AuditEntryDto {
+    #[ts(type = "number")]
+    pub ts_ms: u64,
+    pub session_id: String,
+    #[ts(type = "number | null")]
+    pub task: Option<u64>,
+    #[ts(type = "number")]
+    pub seq: u64,
+    pub event: String,
+    pub plan_digest8: Option<String>,
+    pub action_digest8: Option<String>,
+    pub step: Option<u16>,
+    pub op: Option<String>,
+    pub target_role: Option<String>,
+    pub target_label: Option<String>,
+    pub app_id: Option<String>,
+    pub tier: Option<String>,
+    pub decision: Option<String>,
+    pub result_code: Option<String>,
+    /// Length of typed text in characters (never the text).
+    pub text_len: Option<u32>,
+    /// Only on `cleared` lines.
+    pub segments_removed: Option<u32>,
+}
+
+/// Result of `get_audit_entries`: newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AuditPageDto {
+    pub entries: Vec<AuditEntryDto>,
+    /// Lines that could not be read in the files that were looked at.
+    pub corrupt_lines: u32,
+    /// Pass back as `cursor` for older entries; `null` at the end.
+    pub next_cursor: Option<u32>,
+    /// Number of log files on disk.
+    pub segments: u32,
+    /// More files than the soft limit: the user is asked to export and clear.
+    pub over_limit: bool,
+    pub ready: bool,
+}
+
+/// Result of `export_audit_log`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AuditExportDto {
+    /// How many log files were written into the export.
+    pub segments: u32,
+}
+
+/// Result of `clear_audit_log`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AuditClearDto {
+    /// How many log files were removed.
+    pub removed: u32,
 }

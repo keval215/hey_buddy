@@ -66,7 +66,8 @@ pub use ollama::{
 pub use optin::{CloudOptIn, ConsentSource};
 pub use provider::LlmProvider;
 pub use request::{
-    LlmRequest, Locality, PreparedRequest, RequestPreview, ScreenContext, DIGEST_DOMAIN,
+    LlmRequest, Locality, OutputSchema, PreparedRequest, RequestPreview, RequestPurpose,
+    ScreenContext, DIGEST_DOMAIN,
 };
 pub use stream::{AnthropicSseParser, LlmDelta, OllamaNdjsonParser, StopReason};
 #[cfg(any(feature = "ollama", feature = "anthropic"))]

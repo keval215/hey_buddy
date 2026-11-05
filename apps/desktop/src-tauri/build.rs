@@ -22,6 +22,16 @@ const COMMANDS: &[&str] = &[
     "add_deny_entry",
     "remove_deny_entry",
     "reset_deny_list_to_defaults",
+    "get_audit_entries",
+    "export_audit_log",
+    "clear_audit_log",
+    "kill_agent",
+    "approval_ready",
+    "approval_displayed",
+    "approval_respond",
+    "debug_fake_task",
+    "agent_start_task",
+    "agent_status",
 ];
 
 fn main() {

@@ -12,7 +12,7 @@ use voice::registry::Registry;
 
 use crate::api::{
     IssueCode, ProviderChoice, Settings, SettingsField, SettingsIssue, SettingsPatch, VisionMode,
-    DEFAULT_HOTKEY, DEFAULT_PROFILE,
+    DEFAULT_HOTKEY, DEFAULT_KILL_HOTKEY, DEFAULT_PROFILE,
 };
 use crate::models_path::validate_models_dir;
 use crate::route::effective_vision_mode;
@@ -181,8 +181,12 @@ struct Stored {
     profile: String,
     provider: ProviderChoice,
     hotkey: String,
+    kill_hotkey: String,
     anthropic_model: String,
     models_dir: String,
+    observe_mode: bool,
+    agent_enabled: bool,
+    agent_mode: bool,
 }
 
 impl Default for Stored {
@@ -194,8 +198,12 @@ impl Default for Stored {
             profile: DEFAULT_PROFILE.into(),
             provider: ProviderChoice::Ollama,
             hotkey: DEFAULT_HOTKEY.into(),
+            kill_hotkey: DEFAULT_KILL_HOTKEY.into(),
             anthropic_model: String::new(),
             models_dir: String::new(),
+            observe_mode: d.observe_mode,
+            agent_enabled: d.agent_enabled,
+            agent_mode: d.agent_mode,
         }
     }
 }
@@ -227,6 +235,21 @@ impl Stored {
                 }
             }
         }
+        if wants(|p| p.kill_hotkey.is_some()) {
+            match crate::kill_hotkey::kill_hotkey_issue(&self.kill_hotkey, &out.hotkey) {
+                Ok(h) => out.kill_hotkey = h,
+                Err(code) => {
+                    out.kill_hotkey = DEFAULT_KILL_HOTKEY.into();
+                    issues.push(issue(SettingsField::KillHotkey, code));
+                }
+            }
+        }
+        // A push-to-talk change that lands on the kill chord is the one rejected (a kill chord
+        // equal to the push-to-talk chord was already rejected above).
+        if out.hotkey == out.kill_hotkey {
+            out.hotkey = DEFAULT_HOTKEY.into();
+            issues.push(issue(SettingsField::Hotkey, IssueCode::Duplicate));
+        }
         if wants(|p| p.anthropic_model.is_some()) {
             match model_id_issue(&self.anthropic_model) {
                 Ok(m) => out.anthropic_model = m,
@@ -244,6 +267,10 @@ impl Stored {
                     issues.push(issue(SettingsField::ModelsDir, code));
                 }
             }
+        }
+        // Routing voice to the agent needs the agent to be allowed.
+        if !out.agent_enabled {
+            out.agent_mode = false;
         }
         (out, issues)
     }
@@ -311,10 +338,14 @@ impl SettingsStore {
             profile: self.stored.profile.clone(),
             provider: self.stored.provider,
             hotkey: self.stored.hotkey.clone(),
+            kill_hotkey: self.stored.kill_hotkey.clone(),
             has_api_key: false,
             anthropic_model: self.stored.anthropic_model.clone(),
             models_dir: self.stored.models_dir.clone(),
             default_models_dir: String::new(),
+            observe_mode: self.stored.observe_mode,
+            agent_enabled: self.stored.agent_enabled,
+            agent_mode: self.stored.agent_mode,
         }
     }
 
@@ -341,11 +372,23 @@ impl SettingsStore {
         if let Some(v) = &patch.hotkey {
             next.hotkey = v.clone();
         }
+        if let Some(v) = &patch.kill_hotkey {
+            next.kill_hotkey = v.clone();
+        }
         if let Some(v) = &patch.anthropic_model {
             next.anthropic_model = v.clone();
         }
         if let Some(v) = &patch.models_dir {
             next.models_dir = v.clone();
+        }
+        if let Some(v) = patch.observe_mode {
+            next.observe_mode = v;
+        }
+        if let Some(v) = patch.agent_enabled {
+            next.agent_enabled = v;
+        }
+        if let Some(v) = patch.agent_mode {
+            next.agent_mode = v;
         }
         let (next, issues) = next.sanitize(Some(patch));
         let json = serde_json::to_vec_pretty(&next).map_err(|_| SettingsError::Io)?;
@@ -654,6 +697,66 @@ mod tests {
     }
 
     #[test]
+    fn kill_hotkey_setting_validation_and_conflicts() {
+        let (d, mut s) = store();
+        let path = d.path().join("cfg").join("settings.json");
+        assert_eq!(s.settings().kill_hotkey, DEFAULT_KILL_HOTKEY);
+        // Valid.
+        let (out, issues) = s
+            .apply_with_issues(&patch_of(|p| p.kill_hotkey = Some("alt+shift+f9".into())))
+            .unwrap();
+        assert_eq!(
+            (out.kill_hotkey.as_str(), issues.len()),
+            ("Alt+Shift+F9", 0)
+        );
+        assert_eq!(
+            SettingsStore::load(&path).settings().kill_hotkey,
+            "Alt+Shift+F9"
+        );
+        // One modifier, no modifier, the push-to-talk chord, hostile text: default + typed issue.
+        for (bad, code) in [
+            ("Ctrl+K", IssueCode::NeedsTwoModifiers),
+            ("Shift+K", IssueCode::NeedsModifier),
+            ("K", IssueCode::NeedsModifier),
+            ("Ctrl+Alt+Space", IssueCode::Duplicate),
+            ("ctrl+ALT+space", IssueCode::Duplicate),
+            ("Ctrl+Alt+\u{202e}K", IssueCode::ControlChars),
+            ("", IssueCode::InvalidFormat),
+        ] {
+            let (out, issues) = s
+                .apply_with_issues(&patch_of(|p| p.kill_hotkey = Some(bad.into())))
+                .unwrap();
+            assert_eq!(out.kill_hotkey, DEFAULT_KILL_HOTKEY, "{bad:?}");
+            assert_eq!(
+                issue_codes(&issues, SettingsField::KillHotkey),
+                vec![code],
+                "{bad:?}"
+            );
+            let on_disk = std::fs::read_to_string(&path).unwrap();
+            assert!(!on_disk.contains("202e") && !on_disk.contains("Ctrl+K"));
+        }
+        // Moving push-to-talk onto the kill chord is the rejected change.
+        let (out, issues) = s
+            .apply_with_issues(&patch_of(|p| p.hotkey = Some("ctrl+alt+shift+k".into())))
+            .unwrap();
+        assert_eq!(out.hotkey, DEFAULT_HOTKEY);
+        assert_eq!(out.kill_hotkey, DEFAULT_KILL_HOTKEY);
+        assert_eq!(
+            issue_codes(&issues, SettingsField::Hotkey),
+            vec![IssueCode::Duplicate]
+        );
+        // A stored file with both equal is not trusted.
+        std::fs::write(
+            &path,
+            r#"{"hotkey":"Ctrl+Alt+K","kill_hotkey":"Ctrl+Alt+K"}"#,
+        )
+        .unwrap();
+        let bad = SettingsStore::load(&path);
+        assert_eq!(bad.load_error(), Some(ERR_SETTINGS_CORRUPT));
+        assert_eq!(bad.settings().kill_hotkey, DEFAULT_KILL_HOTKEY);
+    }
+
+    #[test]
     fn hotkey_table_valid_boundary_and_hostile() {
         let (d, mut s) = store();
         let path = d.path().join("cfg").join("settings.json");
@@ -959,6 +1062,40 @@ mod tests {
         }
     }
 
+    #[test]
+    fn agent_settings_default_safe_persist_and_agent_mode_needs_agent_enabled() {
+        let (d, mut s) = store();
+        let def = s.settings();
+        assert!(def.observe_mode, "observe mode (dry run first) defaults ON");
+        assert!(
+            !def.agent_enabled && !def.agent_mode,
+            "the agent defaults OFF"
+        );
+        // agent_mode alone does nothing.
+        let out = s.apply(&patch_of(|x| x.agent_mode = Some(true))).unwrap();
+        assert!(!out.agent_mode);
+        let out = s
+            .apply(&patch_of(|x| {
+                x.agent_enabled = Some(true);
+                x.agent_mode = Some(true);
+                x.observe_mode = Some(false);
+            }))
+            .unwrap();
+        assert!(out.agent_enabled && out.agent_mode && !out.observe_mode);
+        // Persisted.
+        let again = SettingsStore::load(d.path().join("cfg").join("settings.json"));
+        assert_eq!(again.settings(), out);
+        // Turning the agent off turns the mode off with it.
+        let out = s
+            .apply(&patch_of(|x| x.agent_enabled = Some(false)))
+            .unwrap();
+        assert!(!out.agent_mode && !out.observe_mode);
+        // An unreadable file gives the safe defaults.
+        fs::write(d.path().join("cfg").join("settings.json"), b"{bad").unwrap();
+        let bad = SettingsStore::load(d.path().join("cfg").join("settings.json"));
+        assert!(bad.settings().observe_mode && !bad.settings().agent_enabled);
+    }
+
     /// Every field of every settings type, by name. Adding a field makes this test fail until
     /// the new name is added HERE, which is the moment to confirm it is not a switch for the
     /// firewall, the OCR / redaction stages, the deny-list defaults, the preview gate or
@@ -970,10 +1107,14 @@ mod tests {
         "profile",     // which models load
         "provider",    // ollama or anthropic
         "hotkey",      // the push-to-talk chord (must include Ctrl/Alt/Super)
+        "kill_hotkey", // the kill-switch chord (can only STOP things; two modifiers, never the PTT chord)
         "has_api_key", // read-only display flag, never the key
         "anthropic_model", // cloud model id
         "models_dir",  // where model files live
         "default_models_dir", // display only
+        "observe_mode", // dry run first (default ON); turning it off only skips that question, never a check
+        "agent_enabled", // opt-in to the agent (default OFF); the readiness checks still apply
+        "agent_mode",   // route voice requests to the agent (default OFF)
     ];
 
     /// Words that would name a safety switch. Checked on top of the allowlist.
@@ -1027,8 +1168,12 @@ mod tests {
                 profile: Some(String::new()),
                 provider: Some(ProviderChoice::Ollama),
                 hotkey: Some(String::new()),
+                kill_hotkey: Some(String::new()),
                 anthropic_model: Some(String::new()),
                 models_dir: Some(String::new()),
+                observe_mode: Some(true),
+                agent_enabled: Some(false),
+                agent_mode: Some(false),
             })
             .unwrap(),
         );

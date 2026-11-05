@@ -13,8 +13,12 @@ mod macos_text;
 mod role_map;
 #[cfg(any(test, target_os = "macos", target_os = "windows"))]
 mod walk;
+#[cfg(any(test, target_os = "windows"))]
+mod win_pure;
 #[cfg(target_os = "windows")]
 pub mod windows;
+#[cfg(target_os = "windows")]
+mod windows_agent;
 #[cfg(target_os = "windows")]
 mod windows_text;
 
@@ -52,7 +56,11 @@ pub fn platform_firewall() -> Box<dyn crate::Firewall> {
         Box::new(
             crate::PrivacyFirewall::new(windows::WinDetector, windows::WinSessionProbe)
                 .with_detector_timeout(windows::DETECTOR_TIMEOUT)
-                .with_text_source(windows_text::WinTextSource),
+                .with_text_source(windows_text::WinTextSource)
+                .with_observation(
+                    windows_agent::WinObservationSource,
+                    windows_agent::WinTargetResolver,
+                ),
         )
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

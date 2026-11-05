@@ -1,0 +1,16 @@
+[package]
+name = "audit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "hey_buddy audit log (ADR 0003 section 13): append-only JSON-lines file sink for policy::AuditSink, tolerant reader, export and clear (std only, no async, no network)"
+
+[dependencies]
+policy = { path = "../policy" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,17 @@
+[package]
+name = "action"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "hey_buddy agent action vocabulary (ADR 0004 section 7): validated, canonical, OS-free"
+
+[dependencies]
+firewall = { path = "../firewall" }
+frame = { path = "../frame" }
+sha2 = "0.10"
+thiserror = "1"
+
+[dev-dependencies]
+# Fixed ObservationIds for golden vectors (test-only; never in the normal tree).
+firewall = { path = "../firewall", features = ["fakes"] }

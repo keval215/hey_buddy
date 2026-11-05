@@ -2,14 +2,20 @@
 
 use std::sync::Arc;
 
+use buddy_core::agent::{AgentRuntime, AgentStatusDto};
 use buddy_core::api::{
-    Decision, DenyListDto, DisplayDto, IssueCode, LastRequestDto, ModelRow, PreviewDto, Settings,
-    SettingsField, SettingsIssue, SettingsPatch, SettingsResult, Status, SwapTarget,
+    AuditClearDto, AuditExportDto, AuditPageDto, Decision, DenyListDto, DisplayDto, IssueCode,
+    LastRequestDto, ModelRow, PreviewDto, Settings, SettingsField, SettingsIssue, SettingsPatch,
+    SettingsResult, Status, SwapTarget,
 };
+use buddy_core::approval::{
+    ApprovalBroker, ApprovalDecisionDto, ApprovalRequestDto, APPROVAL_WINDOW,
+};
+use buddy_core::kill::{KillController, KillReason};
 use buddy_core::Buddy;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
-use crate::hotkey;
+use crate::{hotkey, kill};
 
 type B<'a> = State<'a, Arc<Buddy>>;
 
@@ -51,6 +57,29 @@ pub fn update_settings(
         }
         // The new shortcut is live (also heals a failed registration at startup).
         b.set_hotkey_registered(true);
+    }
+    if let Some((old, new)) = update.kill_hotkey_changed {
+        let ctl = app
+            .try_state::<Arc<KillController>>()
+            .map(|c| Arc::clone(&c));
+        let ok = ctl
+            .as_ref()
+            .is_some_and(|c| kill::rebind(&app, c, Some(&old), &new).is_ok());
+        if ok {
+            b.set_kill_hotkey_registered(true);
+        } else {
+            // The old chord stays registered; put it back in the settings file too.
+            if let Ok(back) = b.update_settings(&SettingsPatch {
+                kill_hotkey: Some(old),
+                ..Default::default()
+            }) {
+                result.settings = back.settings;
+            }
+            result.issues.push(SettingsIssue {
+                field: SettingsField::KillHotkey,
+                code: IssueCode::Unavailable,
+            });
+        }
     }
     Ok(result)
 }
@@ -163,6 +192,144 @@ pub fn reset_deny_list_to_defaults(b: B, confirm: Option<bool>) -> Result<DenyLi
         .map_err(|e| e.to_string())
 }
 
+/// Settings window only: a page of the agent activity log, newest first (`cursor` = how many
+/// entries to skip, `limit` default 50). Content-free. Errors are fixed tokens (`unavailable`).
+#[tauri::command]
+pub fn get_audit_entries(
+    b: B,
+    cursor: Option<u32>,
+    limit: Option<u32>,
+) -> Result<AuditPageDto, String> {
+    b.get_audit_entries(cursor, limit)
+        .map_err(|e| e.to_string())
+}
+
+/// Settings window only, explicit click: copy the activity log into a NEW file at `dest_path`
+/// (absolute, no overwrite). Errors: `invalid_path`, `exists`, `unavailable`, `io_error`.
+#[tauri::command]
+pub fn export_audit_log(b: B, dest_path: String) -> Result<AuditExportDto, String> {
+    b.export_audit_log(&dest_path).map_err(|e| e.to_string())
+}
+
+/// Settings window only, explicit click, needs `confirm: true` (`needs_confirm` otherwise):
+/// start a new log whose first line records the clear, then remove the old files.
+#[tauri::command]
+pub fn clear_audit_log(b: B, confirm: Option<bool>) -> Result<AuditClearDto, String> {
+    b.clear_audit_log(confirm.unwrap_or(false))
+        .map_err(|e| e.to_string())
+}
+
+/// ANY app window (settings, overlay, preview, approval): STOP everything. It can only stop
+/// things, so it is safe to expose everywhere. Never blocks: the epoch moves at once and the
+/// kill worker does the rest. Returns nothing (no state leaks to a compromised page).
+#[tauri::command]
+pub fn kill_agent(ctl: State<Arc<KillController>>) {
+    ctl.trip(KillReason::StopButton);
+}
+
+/// Approval window only (capability `approval`; also checked by label here): the approvals that
+/// are waiting, oldest first, so a window that mounts after `approval:request` still shows them.
+/// The window can only read and answer approvals core created; it cannot create one.
+#[tauri::command]
+pub fn approval_ready(
+    window: tauri::Window,
+    broker: State<ApprovalBroker>,
+) -> Result<Vec<ApprovalRequestDto>, String> {
+    only_approval_window(&window)?;
+    Ok(broker.pending_requests())
+}
+
+/// Approval window only: this request is on screen now (starts the 500 ms input guard).
+#[tauri::command]
+pub fn approval_displayed(
+    window: tauri::Window,
+    broker: State<ApprovalBroker>,
+    id: String,
+) -> Result<(), String> {
+    only_approval_window(&window)?;
+    broker.mark_displayed(&id).map_err(|e| e.to_string())
+}
+
+/// Approval window only: Approve or Deny a request core created. Refused (a fixed token, the
+/// request stays pending) for an unknown id, a wrong digest, before the display acknowledgement
+/// or inside the 500 ms guard.
+#[tauri::command]
+pub fn approval_respond(
+    window: tauri::Window,
+    broker: State<ApprovalBroker>,
+    id: String,
+    decision: ApprovalDecisionDto,
+    echoed_digest: String,
+) -> Result<(), String> {
+    only_approval_window(&window)?;
+    broker
+        .respond(&id, decision, &echoed_digest)
+        .map_err(|e| e.to_string())
+}
+
+/// Settings window only (capability `default`; also checked by label here): start ONE agent task
+/// from typed words. The task runs on the async runtime; this returns at once and the outcome
+/// arrives as the `agent:task_done` event (fixed tokens, counts and read answers) and a fixed
+/// spoken phrase. Rejected with a fixed token (`agent_disabled`, `busy`, `bad_request`,
+/// `agent_unavailable`) when the agent is not enabled in the settings, not ready (activity log,
+/// stop shortcut), already busy or has no runtime on this platform. Starting a task still needs
+/// every approval of the gate: this command never approves anything.
+#[tauri::command]
+pub fn agent_start_task(
+    window: tauri::Window,
+    app: AppHandle,
+    transcript: String,
+) -> Result<(), String> {
+    only_main_window(&window)?;
+    let rt = app
+        .try_state::<Arc<AgentRuntime>>()
+        .map(|r| Arc::clone(&r))
+        .ok_or_else(|| "agent_unavailable".to_string())?;
+    rt.start_task(transcript).map_err(|e| e.code().to_string())
+}
+
+/// Settings window only: whether the agent can start a task now, and why not.
+#[tauri::command]
+pub fn agent_status(window: tauri::Window, app: AppHandle, b: B) -> Result<AgentStatusDto, String> {
+    only_main_window(&window)?;
+    Ok(match app.try_state::<Arc<AgentRuntime>>() {
+        Some(rt) => rt.status(),
+        None => AgentStatusDto::no_runtime(&b),
+    })
+}
+
+/// The settings window's label.
+const MAIN_WINDOW: &str = "main";
+
+/// Defence in depth behind the per-window capability.
+fn only_main_window(window: &tauri::Window) -> Result<(), String> {
+    if label_is_main(window.label()) {
+        Ok(())
+    } else {
+        Err("forbidden".to_string())
+    }
+}
+
+fn label_is_main(label: &str) -> bool {
+    label == MAIN_WINDOW
+}
+
+/// Defence in depth behind the per-window capability.
+fn only_approval_window(window: &tauri::Window) -> Result<(), String> {
+    if window.label() == APPROVAL_WINDOW {
+        Ok(())
+    } else {
+        Err("forbidden".to_string())
+    }
+}
+
+/// Dev builds only: start a fake long task (waits for the kill switch) for manual tests.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub fn debug_fake_task(ctl: State<Arc<KillController>>) {
+    kill::debug_task::start(&ctl);
+}
+
 #[tauri::command]
 pub fn list_displays(b: B) -> Vec<DisplayDto> {
     b.list_displays()
@@ -194,7 +361,15 @@ mod tests {
         "add_deny_entry",
         "remove_deny_entry",
         "reset_deny_list_to_defaults",
+        "get_audit_entries",
+        "export_audit_log",
+        "clear_audit_log",
+        "agent_start_task",
+        "agent_status",
     ];
+
+    /// Commands every window may call (they can only stop things).
+    const EVERYWHERE: &[&str] = &["kill_agent"];
 
     /// The quoted strings of the `"permissions": [...]` array (capability files hold no
     /// escapes there; keeps this test free of a JSON dependency).
@@ -215,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn deny_list_commands_are_only_in_the_settings_window_capability() {
+    fn settings_only_commands_are_only_in_the_settings_window_capability() {
         let default = permissions(include_str!("../capabilities/default.json"));
         let overlay = permissions(include_str!("../capabilities/overlay.json"));
         let preview = permissions(include_str!("../capabilities/preview.json"));
@@ -225,10 +400,22 @@ mod tests {
             assert!(!overlay.contains(&p), "overlay.json must not allow {p}");
             assert!(!preview.contains(&p), "preview.json must not allow {p}");
         }
-        // The overlay can call nothing; the preview panel only its two commands.
-        assert!(overlay.iter().all(|p| p.starts_with("core:event:")));
-        let preview_cmds: BTreeSet<_> =
-            preview.iter().filter(|p| p.starts_with("allow-")).collect();
+        // `kill_agent` (stop only) is callable from every window.
+        for cmd in EVERYWHERE {
+            let p = allow(cmd);
+            assert!(default.contains(&p), "default.json must allow {p}");
+            assert!(overlay.contains(&p), "overlay.json must allow {p}");
+            assert!(preview.contains(&p), "preview.json must allow {p}");
+        }
+        // The overlay can call nothing but the stop command; the preview panel only its two
+        // commands and the stop command.
+        assert!(overlay
+            .iter()
+            .all(|p| p.starts_with("core:event:") || p == "allow-kill-agent"));
+        let preview_cmds: BTreeSet<_> = preview
+            .iter()
+            .filter(|p| p.starts_with("allow-") && *p != "allow-kill-agent")
+            .collect();
         assert_eq!(
             preview_cmds,
             ["allow-preview-decision", "allow-get-pending-preview"]
@@ -255,6 +442,17 @@ mod tests {
                 "main.rs must register {cmd} in both handler lists"
             );
         }
+        for cmd in EVERYWHERE {
+            assert!(
+                build.contains(&format!("\"{cmd}\"")),
+                "build.rs lacks {cmd}"
+            );
+            assert_eq!(
+                main.matches(&format!("commands::{cmd},")).count(),
+                2,
+                "main.rs must register {cmd} in both handler lists"
+            );
+        }
         // Everything declared in build.rs is granted to the settings window except the
         // two preview-window commands, which the preview capability has instead.
         let default = permissions(include_str!("../capabilities/default.json"));
@@ -262,6 +460,124 @@ mod tests {
         for cmd in ["preview_decision", "get_pending_preview"] {
             assert!(preview.contains(&allow(cmd)));
             assert!(!default.contains(&allow(cmd)), "{cmd} is preview-only");
+        }
+    }
+
+    /// The approval window's commands (S2-16): the window may call these and nothing else.
+    const APPROVAL_COMMANDS: &[&str] =
+        &["approval_ready", "approval_displayed", "approval_respond"];
+
+    #[test]
+    fn approval_capability_grants_exactly_the_allowed_permissions() {
+        let approval = permissions(include_str!("../capabilities/approval.json"));
+        let expected: BTreeSet<String> = [
+            "core:event:allow-listen",
+            "core:event:allow-unlisten",
+            "allow-approval-ready",
+            "allow-approval-displayed",
+            "allow-approval-respond",
+            "allow-kill-agent",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(approval, expected);
+        // Only the approval window, nothing else (no wildcard).
+        let json = include_str!("../capabilities/approval.json");
+        assert!(json.contains("\"windows\": [\"approval\"]"));
+        for forbidden in [
+            "fs:",
+            "shell:",
+            "http:",
+            "dialog:",
+            "opener:",
+            "process:",
+            "core:window",
+            "core:webview",
+        ] {
+            assert!(
+                !json.contains(forbidden),
+                "approval.json must not grant {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn approval_commands_are_only_in_the_approval_capability() {
+        let default = permissions(include_str!("../capabilities/default.json"));
+        let overlay = permissions(include_str!("../capabilities/overlay.json"));
+        let preview = permissions(include_str!("../capabilities/preview.json"));
+        let approval = permissions(include_str!("../capabilities/approval.json"));
+        let build = include_str!("../build.rs");
+        let main = include_str!("main.rs");
+        for cmd in APPROVAL_COMMANDS {
+            let p = allow(cmd);
+            assert!(approval.contains(&p), "approval.json must allow {p}");
+            assert!(!default.contains(&p), "default.json must not allow {p}");
+            assert!(!overlay.contains(&p), "overlay.json must not allow {p}");
+            assert!(!preview.contains(&p), "preview.json must not allow {p}");
+            assert!(
+                build.contains(&format!("\"{cmd}\"")),
+                "build.rs lacks {cmd}"
+            );
+            assert_eq!(
+                main.matches(&format!("commands::{cmd},")).count(),
+                2,
+                "main.rs must register {cmd} in both handler lists"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_commands_check_the_main_window_label_and_the_label_check_is_exact() {
+        let src = include_str!("commands.rs");
+        for name in ["agent_start_task", "agent_status"] {
+            let at = src.find(&format!("pub fn {name}(")).expect("command");
+            let body = &src[at..at + 600];
+            assert!(
+                body.contains("only_main_window(&window)?"),
+                "{name} must check the window label"
+            );
+        }
+        assert!(super::label_is_main("main"));
+        for other in ["approval", "preview", "overlay-0", "Main", "main ", ""] {
+            assert!(!super::label_is_main(other), "{other:?}");
+        }
+        // Only the settings window's capability has them (NEW_COMMANDS test), and the approval
+        // window's capability must not.
+        let approval = permissions(include_str!("../capabilities/approval.json"));
+        assert!(!approval.contains(&allow("agent_start_task")));
+        assert!(!approval.contains(&allow("agent_status")));
+    }
+
+    #[test]
+    fn every_capability_file_allows_the_stop_command() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        let mut n = 0;
+        for entry in std::fs::read_dir(dir).expect("capabilities dir") {
+            let path = entry.expect("entry").path();
+            if path.extension().is_some_and(|e| e == "json") {
+                let json = std::fs::read_to_string(&path).expect("read");
+                assert!(
+                    permissions(&json).contains("allow-kill-agent"),
+                    "{path:?} must allow kill_agent"
+                );
+                n += 1;
+            }
+        }
+        assert!(n >= 4, "capability files found: {n}");
+    }
+
+    #[test]
+    fn the_desktop_manifest_enables_no_test_doubles() {
+        let manifest = include_str!("../Cargo.toml");
+        for banned in ["fakes", "test-support"] {
+            assert!(
+                !manifest
+                    .lines()
+                    .any(|l| l.contains(banned) && !l.trim_start().starts_with('#')),
+                "desktop Cargo.toml mentions {banned}"
+            );
         }
     }
 }

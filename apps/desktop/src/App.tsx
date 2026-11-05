@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, on } from "./api/client";
+import type { AgentStatusDto } from "./ipc/AgentStatusDto";
+import type { AgentTaskDto } from "./ipc/AgentTaskDto";
 import type { Phase } from "./ipc/Phase";
 import type { LastRequestDto } from "./ipc/LastRequestDto";
 import type { Settings } from "./ipc/Settings";
@@ -7,10 +9,17 @@ import type { SettingsIssue } from "./ipc/SettingsIssue";
 import type { SettingsPatch } from "./ipc/SettingsPatch";
 import { ModelsPanel } from "./models/ModelsPanel";
 import { RequestFields } from "./request/RequestView";
+import { AuditLogPanel } from "./settings/AuditLogPanel";
 import { DenyListPanel } from "./settings/DenyListPanel";
 import type { Status } from "./ipc/Status";
 import {
+  AGENT_ENABLED_NOTE,
+  AGENT_MODE_NOTE,
   LOCAL_ONLY_OFF_NOTE,
+  OBSERVE_MODE_NOTE,
+  agentOutcomeText,
+  agentStartErrorText,
+  agentStatusText,
   PROFILES,
   PROVIDERS,
   VISION_MODES,
@@ -19,6 +28,7 @@ import {
   errorText,
   hotkeyHint,
   hotkeyProblem,
+  killHotkeyProblem,
   isEmptyPatch,
   issueText,
   keyErrorText,
@@ -56,6 +66,10 @@ export default function App() {
     null,
   );
   const [modelsRefresh, setModelsRefresh] = useState(0);
+  const [agent, setAgent] = useState<AgentStatusDto | null>(null);
+  const [lastTask, setLastTask] = useState<AgentTaskDto | null>(null);
+  const [taskText, setTaskText] = useState("");
+  const [taskError, setTaskError] = useState<string | null>(null);
 
   useEffect(() => {
     void api.getSettings().then((s) => {
@@ -75,13 +89,18 @@ export default function App() {
     const unFw = on("firewall:status", (f) =>
       setStatus((s) => (s ? { ...s, firewall: f } : s)),
     );
+    void api.agentStatus().then(setAgent).catch(() => setAgent(null));
+    const unTask = on("agent:task_done", (t) => {
+      setLastTask(t);
+      void api.agentStatus().then(setAgent).catch(() => setAgent(null));
+    });
     const unSwap = [
       on("engine_swap_requested", (e) => setSwaps((s) => applySwap(s, "requested", e))),
       on("engine_swap_done", (e) => setSwaps((s) => applySwap(s, "done", e))),
       on("engine_swap_failed", (e) => setSwaps((s) => applySwap(s, "failed", e))),
     ];
     return () => {
-      for (const u of [un, unErr, unListen, unFw, ...unSwap]) void u.then((f) => f());
+      for (const u of [un, unErr, unListen, unFw, unTask, ...unSwap]) void u.then((f) => f());
     };
   }, []);
 
@@ -94,6 +113,7 @@ export default function App() {
       setCurrent(res.settings);
       setDraft(res.settings);
       setError(null);
+      void api.agentStatus().then(setAgent).catch(() => setAgent(null));
       setIssues(res.issues.length > 0 ? { list: res.issues, patch } : null);
       if (res.settings.models_dir !== current.models_dir || res.models_dir_changed) {
         setModelsRefresh((n) => n + 1);
@@ -112,6 +132,10 @@ export default function App() {
   if (!draft || !current) return <main className="p-4">Loading…</main>;
   const dirty = !isEmptyPatch(buildPatch(current, draft));
   const hkProblem = draft.hotkey.trim() === current.hotkey ? null : hotkeyProblem(draft.hotkey);
+  const killProblem =
+    draft.kill_hotkey.trim() === current.kill_hotkey
+      ? null
+      : killHotkeyProblem(draft.kill_hotkey, draft.hotkey);
   const note = visionNote(draft.profile);
   const missing = cloudMissing(draft);
 
@@ -193,6 +217,32 @@ export default function App() {
           Must include Ctrl, Alt or Super, for example Ctrl+Alt+Space. The microphone is only
           open while you hold it.
         </div>
+
+        <label className="block">
+          Stop-everything hotkey
+          <input
+            className="ml-2 w-48 rounded border px-1"
+            value={draft.kill_hotkey}
+            aria-invalid={killProblem !== null}
+            onChange={(e) => setDraft({ ...draft, kill_hotkey: e.target.value })}
+          />
+          {killProblem && (
+            <span role="status" className="ml-2 text-amber-700">
+              {hotkeyHint(killProblem)}
+            </span>
+          )}
+        </label>
+        <div className="text-neutral-500">
+          Needs at least two modifiers (for example Ctrl+Alt+Shift+K) and must differ from
+          push-to-talk. It stops the agent at once, whatever it is doing.
+        </div>
+        <button
+          type="button"
+          className="rounded border border-red-600 px-3 py-1 text-red-700"
+          onClick={() => void api.killAgent()}
+        >
+          Stop agent
+        </button>
       </Section>
 
       <Section title="Models folder">
@@ -261,6 +311,83 @@ export default function App() {
         </div>
       </Section>
 
+      <Section title="Agent">
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={draft.observe_mode}
+            onChange={(e) => setDraft({ ...draft, observe_mode: e.target.checked })}
+          />
+          Observe mode: dry run first
+        </label>
+        <div className="text-neutral-500">{OBSERVE_MODE_NOTE}</div>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={draft.agent_enabled}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                agent_enabled: e.target.checked,
+                agent_mode: e.target.checked && draft.agent_mode,
+              })
+            }
+          />
+          Enable the agent
+        </label>
+        <div className="text-neutral-500">{AGENT_ENABLED_NOTE}</div>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={draft.agent_enabled && draft.agent_mode}
+            disabled={!draft.agent_enabled}
+            onChange={(e) => setDraft({ ...draft, agent_mode: e.target.checked })}
+          />
+          Send what I say to the agent instead of the chat
+        </label>
+        <div className="text-neutral-500">{AGENT_MODE_NOTE}</div>
+        <div role="status">{agentStatusText(agent)}</div>
+        {current.agent_enabled && (
+          <div className="flex items-center gap-2">
+            <input
+              className="w-96 rounded border px-1"
+              placeholder="e.g. open Notepad and type hello"
+              aria-label="Agent task"
+              value={taskText}
+              onChange={(e) => setTaskText(e.target.value)}
+            />
+            <button
+              type="button"
+              className="rounded border px-3 py-1 disabled:opacity-40"
+              disabled={!agent?.ready || agent.running || taskText.trim() === ""}
+              onClick={() => {
+                setTaskError(null);
+                api.agentStartTask(taskText).catch((e) => setTaskError(agentStartErrorText(e)));
+              }}
+            >
+              Start task
+            </button>
+          </div>
+        )}
+        {taskError && (
+          <div role="alert" className="text-red-600">
+            {taskError}
+          </div>
+        )}
+        {lastTask && (
+          <div role="status">
+            Last task: {agentOutcomeText(lastTask)}
+            {lastTask.answers.map((a, i) => (
+              <div key={i}>
+                {a.matches === 0
+                  ? "Found nothing on the screen."
+                  : `Found ${a.matches}; first: ${a.first_role} "${a.first_label}"`}
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+
       <div className="flex items-center gap-3">
         <button
           className="rounded bg-neutral-800 px-3 py-1 text-white disabled:opacity-40"
@@ -282,10 +409,16 @@ export default function App() {
 
       <DenyListPanel />
 
+      <AuditLogPanel ready={status?.audit_ready ?? false} />
+
       <section className="border-t pt-3 text-neutral-700">
         <div>Status: {phaseText(phase)}</div>
         <div>
           Hotkey: {status?.hotkey_registered ? "registered" : "not registered"}
+        </div>
+        <div>
+          Stop hotkey: {status?.kill_hotkey_registered ? "registered" : "not registered"}
+          {status && !status.agent_enabled ? " (the agent is off until it can be stopped and logged)" : ""}
         </div>
         {(status?.notices ?? []).map((n) => (
           <div key={n} role="status" className="text-amber-700">

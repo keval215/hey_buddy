@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { badgeText, clipRaw, isCloud, previewSrc, secondsLeft, shortDigest } from "./logic";
+import {
+  badgeText,
+  clipRaw,
+  isCloud,
+  previewSrc,
+  purposeNotice,
+  purposeText,
+  secondsLeft,
+  shortDigest,
+} from "./logic";
 
 describe("previewSrc", () => {
   it("keeps preview:// on macOS/Linux", () => {
@@ -25,6 +34,14 @@ describe("misc", () => {
     expect(badgeText({ locality: "Cloud" })).toBe("CLOUD");
     expect(badgeText({ locality: "Local" })).toBe("LOCAL");
     expect(isCloud({ locality: "Cloud" })).toBe(true);
+  });
+  it("purpose text", () => {
+    expect(purposeText({ purpose: "AgentPlan" })).toBe("Agent planning");
+    expect(purposeText({ purpose: "Turn" })).toBeNull();
+  });
+  it("agent planning notice says the spoken task text is in the request", () => {
+    expect(purposeNotice({ purpose: "AgentPlan" })).toMatch(/task you spoke/);
+    expect(purposeNotice({ purpose: "Turn" })).toBeNull();
   });
   it("shortDigest", () => expect(shortDigest("0123456789abcdef0123")).toBe("0123456789ab"));
   it("secondsLeft rounds up and never goes negative", () => {

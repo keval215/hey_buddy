@@ -32,6 +32,8 @@ export function denyErrorText(e: unknown): string {
       return "That app is not on the list.";
     case "needs_confirm":
       return "Please confirm first.";
+    case "busy":
+      return "The agent is working. Stop it first, then change the list.";
     case "would_be_empty":
       return "The list can never be empty, so the last entry has to stay.";
     case "io_error":

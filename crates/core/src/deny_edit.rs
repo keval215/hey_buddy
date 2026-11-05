@@ -42,6 +42,10 @@ pub enum DenyEditError {
     /// The shell has not told the core where the config folder is.
     #[error("unavailable")]
     Unavailable,
+    /// An agent task is active or an intent / action is outstanding: removals and the reset
+    /// (which loosen the list) wait (S2-13).
+    #[error("busy")]
+    Busy,
 }
 
 /// `[A-Za-z0-9._-]{1,128}`, returned lowercase.

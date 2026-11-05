@@ -973,3 +973,156 @@ async fn anthropic_real() {
         "{out:?}"
     );
 }
+
+// ------------------------------------------------- output schema (ADR 0003 section 12)
+
+fn schema(name: &'static str) -> OutputSchema {
+    OutputSchema::new(
+        name,
+        serde_json::json!({"type":"object","additionalProperties":false,"required":["steps"],
+            "properties":{"steps":{"type":"array","maxItems":12}}}),
+    )
+}
+
+fn plan_request(transcript: &str) -> LlmRequest {
+    plain_request(transcript).with_output_schema(schema("plan_v1"))
+}
+
+#[test]
+fn ollama_body_gains_format_after_stream_and_plans_deterministically() {
+    let t = Arc::new(FakeTransport::responding(200, vec![]));
+    let p = ollama(&t);
+    let prep = p.prepare(&plan_request("open notepad")).unwrap();
+    let v = json(prep.body());
+    assert_eq!(v["format"], *schema("plan_v1").schema());
+    assert_eq!(v["stream"], true);
+    assert_eq!(v["think"], false);
+    assert_eq!(v["options"]["temperature"].as_f64().unwrap(), 0.0);
+    assert_eq!(v["options"]["num_ctx"], 4096);
+    assert_eq!(v["options"]["num_predict"], 1024);
+    let s = std::str::from_utf8(prep.body()).unwrap();
+    let pos = |k: &str| s.find(&format!("\"{k}\":")).unwrap();
+    assert!(pos("messages") < pos("stream") && pos("stream") < pos("format"));
+    assert!(pos("format") < pos("think") && pos("think") < pos("keep_alive"));
+    // Without a schema the body has no `format` and keeps the speech settings.
+    let plain = p.prepare(&plain_request("open notepad")).unwrap();
+    let pv = json(plain.body());
+    assert!(pv.get("format").is_none());
+    assert!((pv["options"]["temperature"].as_f64().unwrap() - 0.6).abs() < 1e-6);
+    assert_eq!(pv["options"]["num_predict"], 512);
+}
+
+#[test]
+fn the_schema_is_part_of_the_digest() {
+    let t = Arc::new(FakeTransport::responding(200, vec![]));
+    let p = ollama(&t);
+    let a = p.prepare(&plan_request("x")).unwrap();
+    let same = p.prepare(&plan_request("x")).unwrap();
+    let plain = p.prepare(&plain_request("x")).unwrap();
+    let other = p
+        .prepare(&plain_request("x").with_output_schema(OutputSchema::new(
+            "plan_v1",
+            serde_json::json!({"type":"object"}),
+        )))
+        .unwrap();
+    assert_eq!(a.digest(), same.digest());
+    assert_ne!(a.digest(), plain.digest());
+    assert_ne!(a.digest(), other.digest());
+    assert_eq!(
+        a.digest(),
+        reference_digest("ollama", a.endpoint(), a.model(), a.body())
+    );
+    // Anthropic too.
+    let c = creds();
+    let pa = anthropic(&t, &c);
+    assert_ne!(
+        pa.prepare(&plan_request("x")).unwrap().digest(),
+        pa.prepare(&plain_request("x")).unwrap().digest()
+    );
+}
+
+#[test]
+fn purpose_follows_the_schema_and_reaches_the_preview() {
+    let t = Arc::new(FakeTransport::responding(200, vec![]));
+    let c = creds();
+    for prep in [
+        ollama(&t).prepare(&plan_request("x")).unwrap(),
+        anthropic(&t, &c).prepare(&plan_request("x")).unwrap(),
+    ] {
+        assert_eq!(prep.purpose(), RequestPurpose::AgentPlan);
+        assert_eq!(prep.preview().purpose, RequestPurpose::AgentPlan);
+        assert!(format!("{:?}", prep.preview()).contains("AgentPlan"));
+    }
+    for prep in [
+        ollama(&t).prepare(&plain_request("x")).unwrap(),
+        anthropic(&t, &c).prepare(&text_request("x", "a")).unwrap(),
+    ] {
+        assert_eq!(prep.preview().purpose, RequestPurpose::Turn);
+    }
+    assert_eq!(plan_request("x").purpose(), RequestPurpose::AgentPlan);
+    assert_eq!(plain_request("x").purpose(), RequestPurpose::Turn);
+    assert!(format!("{:?}", schema("plan_v1")).contains("plan_v1"));
+}
+
+#[tokio::test]
+async fn preview_bytes_equal_sent_bytes_including_the_schema() {
+    let t = Arc::new(FakeTransport::responding(200, ndjson(&["{}"])));
+    let p = ollama(&t);
+    let prep = p.prepare(&plan_request("open notepad")).unwrap();
+    let prev = prep.preview();
+    let _ = collect(p.stream(prep.clone(), None).await.unwrap()).await;
+    let calls = t.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].body, prev.body);
+    assert!(std::str::from_utf8(&calls[0].body)
+        .unwrap()
+        .contains("\"maxItems\":12"));
+    assert_eq!(
+        reference_digest(
+            &prev.provider_id,
+            &prev.endpoint,
+            &prev.model,
+            &calls[0].body
+        ),
+        prev.digest
+    );
+}
+
+#[tokio::test]
+async fn anthropic_carries_the_schema_in_the_system_text_and_still_needs_opt_in() {
+    let t = Arc::new(FakeTransport::responding(200, sse(&["{}"])));
+    let c = creds();
+    let p = anthropic(&t, &c);
+    let prep = p.prepare(&plan_request("open notepad")).unwrap();
+    let v = json(prep.body());
+    let system = v["system"].as_str().unwrap();
+    assert!(system.starts_with(SYSTEM));
+    assert!(system.contains("plan_v1"));
+    assert!(system.contains("\"maxItems\":12"));
+    assert_eq!(v["temperature"].as_f64().unwrap(), 0.0);
+    assert!(v.get("format").is_none());
+    // No schema: system text unchanged and no temperature.
+    let plain = json(p.prepare(&plain_request("x")).unwrap().body());
+    assert_eq!(plain["system"], SYSTEM);
+    assert!(plain.get("temperature").is_none());
+
+    // Cloud still needs the opt-in: none, or one minted for a different request (the same
+    // transcript WITHOUT the schema has another digest), makes zero transport calls.
+    assert_eq!(
+        err_of(p.stream(prep.clone(), None).await),
+        LlmError::NotOptedIn
+    );
+    let other = p.prepare(&plain_request("open notepad")).unwrap();
+    let wrong = CloudOptIn::for_request(&other, ConsentSource::PreviewSend { request_id: 1 });
+    assert_eq!(
+        err_of(p.stream(prep.clone(), Some(wrong)).await),
+        LlmError::NotOptedIn
+    );
+    assert!(t.calls().is_empty());
+    // With the right opt-in exactly one call is made, with the previewed bytes.
+    let ok = CloudOptIn::for_request(&prep, ConsentSource::PreviewSend { request_id: 2 });
+    let _ = collect(p.stream(prep.clone(), Some(ok)).await.unwrap()).await;
+    let calls = t.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].body, *prep.body());
+}

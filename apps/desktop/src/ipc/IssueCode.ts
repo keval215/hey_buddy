@@ -3,4 +3,4 @@
 /**
  * Why a value was not accepted. Fixed tokens; they never contain the rejected text.
  */
-export type IssueCode = "unknown" | "needs_modifier" | "invalid_format" | "too_long" | "control_chars" | "not_absolute" | "traversal" | "network_path" | "device_name" | "system_dir" | "not_a_directory" | "not_creatable" | "symlink" | "unavailable" | "corrupt";
+export type IssueCode = "unknown" | "needs_modifier" | "needs_two_modifiers" | "duplicate" | "invalid_format" | "too_long" | "control_chars" | "not_absolute" | "traversal" | "network_path" | "device_name" | "system_dir" | "not_a_directory" | "not_creatable" | "symlink" | "unavailable" | "corrupt";

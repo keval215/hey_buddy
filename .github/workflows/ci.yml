@@ -37,6 +37,8 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: Red-team suite (S2-22, fails closed on every attack case; not vacuous)
+        run: bash tools/check-redteam.sh
       - name: ts-rs generated IPC types are up to date (cargo test regenerates them)
         run: |
           if [ -n "$(git status --porcelain -- apps/desktop/src/ipc)" ]; then
@@ -50,6 +52,168 @@ jobs:
         run: |
           if cargo tree -p llm --all-features | grep -E '(^|[^a-z_-])(capture|voice) '; then
             echo "llm depends on capture or voice"; exit 1
+          fi
+      - name: ADR 0004 - firewall must not depend on driver, llm, capture or voice
+        run: |
+          if cargo tree -p firewall -e normal | grep -E '(^|[^a-z_-])(driver|llm|capture|voice) v'; then
+            echo "firewall depends on driver, llm, capture or voice"; exit 1
+          fi
+      - name: ADR 0004 - action must stay pure (no platform, llm, capture, voice, tokio, reqwest)
+        run: |
+          if cargo tree -p action -e normal | grep -E '(^|[^a-z_-])(windows|objc2|core-foundation|llm|capture|voice|tokio|reqwest) '; then
+            echo "action crate has a forbidden dependency"; exit 1
+          fi
+      - name: ADR 0003 - policy must stay pure and sync (no platform, llm, capture, voice, driver, tokio, async runtimes, reqwest)
+        run: |
+          if cargo tree -p policy -e normal | grep -E '(^|[^a-z_-])(windows|objc2|core-foundation|llm|capture|voice|driver|tokio|async-std|async-trait|futures|smol|reqwest|hyper|mio) '; then
+            echo "policy crate has a forbidden dependency"; exit 1
+          fi
+          # Sync only: no async fn, no .await in the policy sources.
+          if grep -rnE '(^|[^a-z_])async[[:space:]]+(fn|move|\{)|\.await' --include='*.rs' crates/policy/src; then
+            echo "policy must stay synchronous"; exit 1
+          fi
+          # The mirror rule (agent must not depend on policy etc., and nothing below core may depend
+          # on agent) is the step "ADR 0003 section 11 - the engine has no path to the gate" below.
+      - name: ADR 0003 section 11 - the engine has no path to the gate (agent crate isolation, S2-10/15)
+        run: |
+          # 1. agent depends on none of the gate, driver, firewall, model or network crates.
+          #    Both the host tree and the all-targets tree (target-gated deps, e.g. Windows-only).
+          cargo tree -p agent -e normal | grep -qE '(^|[^a-z_-])serde ' # not vacuous
+          for tree in "cargo tree -p agent -e normal" "cargo tree -p agent -e normal --target all"; do
+            if $tree | grep -E '(^|[^a-z_-])(policy|driver|action|capture|firewall|llm|voice|reqwest|tauri|buddy-core) '; then
+              echo "agent crate has a forbidden dependency ($tree)"; exit 1
+            fi
+          done
+          cargo tree -p agent -e normal --target all | grep -qE '(^|[^a-z_-])windows ' # not vacuous
+          # 2. Mirror: nothing below core depends on agent (only core, and the desktop app via core).
+          for c in policy driver action firewall audit capture llm voice frame; do
+            if cargo tree -p "$c" -e normal | grep -E '(^|[^a-z_-])agent '; then
+              echo "$c depends on agent"; exit 1
+            fi
+          done
+          #    Also renamed dependencies (`package = "agent"`) and path dependencies on the crate.
+          hits=$(grep -rlE '^[[:space:]]*agent[[:space:]]*=|package[[:space:]]*=[[:space:]]*"agent"|path[[:space:]]*=[[:space:]]*"[^"]*(crates/|\.\./)agent/?"' --include=Cargo.toml apps crates tools \
+            | grep -vE '^(crates/core|crates/agent|apps/desktop/src-tauri)/Cargo.toml$' || true)
+          if [ -n "$hits" ]; then
+            echo "agent listed in Cargo.toml outside crates/core and apps/desktop:"; echo "$hits"; exit 1
+          fi
+          # 3. No file, network or process code in the engine except the sandbox module (which also
+          #    holds the test sandbox).
+          #    main.rs may name `windows::Win32::System::LibraryLoader` (DLL search hardening) and
+          #    nothing else from `windows::`.
+          hits=$(grep -rnE 'std::net|TcpStream|TcpListener|UdpSocket|reqwest|std::fs|File::|Command::new|std::process::Command|fs::read|fs::write|tokio::net|tokio::process|tokio::fs|windows::|libc' \
+            --include='*.rs' crates/agent/src | grep -vE '^crates/agent/src/sandbox/' \
+            | grep -vE '^crates/agent/src/main\.rs:[0-9]+:.*windows::Win32::System::LibraryLoader' || true)
+          if [ -n "$hits" ]; then
+            echo "file/network/process code in crates/agent/src outside the sandbox module:"; echo "$hits"; exit 1
+          fi
+          test -f crates/agent/src/sandbox/test.rs # the grep above is not vacuous
+          # 4. The test sandbox and the doubles never reach the shipped app tree.
+          if cargo tree -p desktop -e features | grep -E 'fakes|test-support'; then
+            echo "fakes/test-support feature enabled in desktop tree"; exit 1
+          fi
+      - name: ADR 0003 section 13 - audit log stays std-only (no async runtime, network, llm, capture, voice, driver, platform crates)
+        run: |
+          if cargo tree -p audit -e normal | grep -E '(^|[^a-z_-])(tokio|reqwest|llm|capture|voice|driver|windows) '; then
+            echo "audit crate has a forbidden dependency"; exit 1
+          fi
+      - name: ADR 0004 - driver dependency graph (no llm, capture, voice, core, engine, network, tauri, platform crates) and nothing below it depends on it
+        run: |
+          # The Windows actuator (S2-14d) sits behind cfg(windows), so the Linux tree never lists it.
+          cargo tree -p driver -e normal | grep -qE '(^|[^a-z_-])policy ' # not vacuous
+          if cargo tree -p driver -e normal | grep -E '(^|[^a-z_-])(llm|capture|voice|buddy-core|agent|engine|harness|reqwest|tauri|tokio|windows|objc2) '; then
+            echo "driver crate has a forbidden dependency"; exit 1
+          fi
+          for c in policy action firewall; do
+            if cargo tree -p "$c" -e normal | grep -E '(^|[^a-z_-])driver '; then
+              echo "$c depends on driver"; exit 1
+            fi
+          done
+      - name: ADR 0004 section 4.6 - driver READ-BAN (the driver never reads OS content)
+        run: |
+          # Forbidden tokens in crates/driver/src/**; `.Current*` is allowed only as CurrentIsReadOnly.
+          if grep -rnE 'CurrentName|CurrentValue|GetCurrentPropertyValue|TextPattern|FindAll|FindFirst|ElementFromHandle|ElementFromPoint|GetRootElement|GetFocusedElement|OpenClipboard|GetClipboardData|IsClipboardFormatAvailable|GetWindowText|BitBlt|GraphicsCapture' --include='*.rs' crates/driver/src; then
+            echo "driver reads OS content (read-ban token)"; exit 1
+          fi
+          if grep -rnE '\.Current[A-Z]' --include='*.rs' crates/driver/src | grep -vE '\.CurrentIsReadOnly'; then
+            echo "driver uses a UIA Current* property other than CurrentIsReadOnly"; exit 1
+          fi
+          test -f crates/driver/src/lib.rs # the grep above is not vacuous
+      - name: ADR 0004 section 7 - driver injects KEYBOARD input only (no mouse, no coordinates, no window messages, no shell) and only in platform/windows.rs
+        run: |
+          # No mouse input of any kind and no coordinate or message-based injection anywhere in the driver.
+          if grep -rnE 'MOUSEEVENTF|mouse_event|SetCursorPos|INPUT_MOUSE|MOUSEINPUT|SendMessage|PostMessage|keybd_event|ShellExecute' --include='*.rs' crates/driver/src \
+            | grep -vE '^crates/driver/src/platform/windows\.rs:'; then
+            echo "driver uses a forbidden input API"; exit 1
+          fi
+          # windows.rs may only MENTION the shell API in a comment that says it is never used.
+          if grep -nE 'MOUSEEVENTF|mouse_event|SetCursorPos|INPUT_MOUSE|MOUSEINPUT|SendMessage|PostMessage|keybd_event' crates/driver/src/platform/windows.rs; then
+            echo "windows.rs uses a forbidden input API"; exit 1
+          fi
+          if grep -nE 'ShellExecute' crates/driver/src/platform/windows.rs | grep -vE '^[0-9]+:[[:space:]]*(//|///|//!)'; then
+            echo "windows.rs calls the shell API"; exit 1
+          fi
+          # The keyboard batch API and its struct type appear ONLY in crates/driver/src/platform/windows.rs
+          # (tests.rs, a #[cfg(test)] module that never ships, may contain ONLY these two tokens).
+          hits=$(grep -rnE 'SendInput|INPUT_KEYBOARD' --include='*.rs' apps crates tools \
+            | grep -vE '^crates/driver/src/(platform/windows|tests)\.rs:' || true)
+          if [ -n "$hits" ]; then
+            echo "SendInput / INPUT_KEYBOARD outside crates/driver/src/platform/windows.rs:"; echo "$hits"; exit 1
+          fi
+          grep -q 'SendInput' crates/driver/src/platform/windows.rs # not vacuous
+          # tests.rs is exempt only because it is test-only: lib.rs must declare it under cfg(test).
+          grep -qE '^#\[cfg\(test\)\]$' crates/driver/src/lib.rs
+          grep -A1 -E '^#\[cfg\(test\)\]$' crates/driver/src/lib.rs | grep -qE '^mod tests;$'
+      - name: ADR 0004 section 6 - LiveTarget::uia_element is used only by the Windows actuator
+        run: |
+          hits=$(grep -rnE 'uia_element' --include='*.rs' apps crates tools \
+            | grep -vE '^crates/(firewall/src/target|driver/src/platform/windows)\.rs:' || true)
+          if [ -n "$hits" ]; then
+            echo "uia_element used outside crates/driver/src/platform/windows.rs:"; echo "$hits"; exit 1
+          fi
+          grep -q 'pub fn uia_element' crates/firewall/src/target.rs # not vacuous
+          grep -q 'uia_element' crates/driver/src/platform/windows.rs
+      - name: ADR 0004 section 3 - the Windows actuator type stays pub(crate)
+        run: |
+          grep -q 'pub(crate) struct WinActuator' crates/driver/src/platform/windows.rs
+          if grep -rnE 'pub[[:space:]]+struct[[:space:]]+WinActuator|WinActuator' --include='*.rs' apps crates tools \
+            | grep -vE '^crates/driver/src/(platform/windows|tests)\.rs:'; then
+            echo "WinActuator named outside the driver's Windows module"; exit 1
+          fi
+      - name: ADR 0004 section 4.7 - nothing reads the clipboard
+        run: |
+          if grep -rnE 'GetClipboardData|OpenClipboard' --include='*.rs' crates/firewall crates/driver crates/action crates/policy; then
+            echo "clipboard read found"; exit 1
+          fi
+      - name: compile_fail doctests report the pinned error codes (policy, driver)
+        run: bash tools/check-doctest-codes.sh
+      - name: ADR 0003 - ApprovedAction is minted only in crates/policy/src/gate.rs
+        run: |
+          # Tripwire (the real control is review): the sealed type, its constructor and every
+          # `fn mint` live in the one file; nothing else may build or define them.
+          hits=$(grep -rnE 'ApprovedAction[[:space:]]*\{|ApprovedAction::mint|fn[[:space:]]+mint' --include='*.rs' apps crates tools \
+            | grep -v '^crates/policy/src/gate.rs:' || true)
+          if [ -n "$hits" ]; then
+            echo "ApprovedAction constructed or minted outside crates/policy/src/gate.rs:"
+            echo "$hits"; exit 1
+          fi
+          # ... and the file does define it (the tripwire is not vacuous).
+          grep -q 'pub struct ApprovedAction' crates/policy/src/gate.rs
+          grep -q 'pub(crate) fn mint' crates/policy/src/gate.rs
+      - name: policy test helper stays test-only (assume_benign_environment, test-support feature)
+        run: |
+          # The helper may appear only in crates/policy (its cfg-gated definition and its tests).
+          if grep -rn "assume_benign_environment" --include='*.rs' --include='*.toml' . --exclude-dir=target --exclude-dir=.git | grep -v '^\./crates/policy/'; then
+            echo "assume_benign_environment used outside crates/policy"; exit 1
+          fi
+          # Definition must be cfg-gated.
+          grep -B2 "pub fn assume_benign_environment" crates/policy/src/facts.rs | grep -q 'cfg(any(test, feature = "test-support"))'
+          # No other crate may enable the feature.
+          if grep -rn "test-support" --include=Cargo.toml . --exclude-dir=target | grep -v '^\./crates/policy/Cargo.toml'; then
+            echo "test-support enabled outside crates/policy"; exit 1
+          fi
+          if cargo tree --workspace -e normal,build,features | grep "test-support"; then
+            echo "policy test-support feature is active in the normal graph"; exit 1
           fi
       - name: ADR 0002 - CloudOptIn::for_request only in core/src/consent.rs and crates/llm
         run: |

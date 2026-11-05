@@ -24,10 +24,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
-use llm::{CloudOptIn, ConsentSource, Locality, PreparedRequest, RequestPreview};
+use llm::{CloudOptIn, ConsentSource, Locality, PreparedRequest, RequestPreview, RequestPurpose};
 use tokio::sync::oneshot;
 
-use crate::api::{Decision, LastRequestDto, LocalityDto, PreviewDto, Settings};
+use crate::api::{Decision, LastRequestDto, LocalityDto, PreviewDto, PurposeDto, Settings};
 use crate::error::CoreError;
 
 /// How long a preview waits for a decision before it is cancelled.
@@ -222,6 +222,13 @@ fn locality_dto(l: Locality) -> LocalityDto {
     }
 }
 
+fn purpose_dto(p: RequestPurpose) -> PurposeDto {
+    match p {
+        RequestPurpose::Turn => PurposeDto::Turn,
+        RequestPurpose::AgentPlan => PurposeDto::AgentPlan,
+    }
+}
+
 fn urls(key: &str, p: &RequestPreview) -> (Option<String>, String) {
     (
         p.image_png.as_ref().map(|_| format!("preview://{key}")),
@@ -237,6 +244,7 @@ pub fn preview_dto(request_id: u64, p: &RequestPreview, timeout: Duration) -> Pr
         provider_id: p.provider_id.to_string(),
         model: p.model.to_string(),
         locality: locality_dto(p.locality),
+        purpose: purpose_dto(p.purpose),
         digest_hex: p.digest_hex(),
         transcript: p.transcript.to_string(),
         screen_text: p.screen_text.as_ref().map(|t| t.to_string()),
@@ -255,6 +263,7 @@ pub fn last_request_dto(turn_id: u32, p: &RequestPreview) -> LastRequestDto {
         provider_id: p.provider_id.to_string(),
         model: p.model.to_string(),
         locality: locality_dto(p.locality),
+        purpose: purpose_dto(p.purpose),
         digest_hex: p.digest_hex(),
         transcript: p.transcript.to_string(),
         screen_text: p.screen_text.as_ref().map(|t| t.to_string()),

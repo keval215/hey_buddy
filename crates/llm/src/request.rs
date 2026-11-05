@@ -48,6 +48,49 @@ pub enum ScreenContext {
     },
 }
 
+/// A closed JSON schema the reply must follow (ADR 0003 section 12, additive to ADR 0002).
+/// Ollama gets it as the request's `format`; Anthropic gets it as text in the system prompt.
+/// It is part of the request body, hence of the digest and of what the preview shows.
+#[derive(Clone, PartialEq)]
+pub struct OutputSchema {
+    name: &'static str,
+    schema: Arc<serde_json::Value>,
+}
+
+impl OutputSchema {
+    pub fn new(name: &'static str, schema: serde_json::Value) -> Self {
+        Self {
+            name,
+            schema: Arc::new(schema),
+        }
+    }
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+    pub fn schema(&self) -> &serde_json::Value {
+        &self.schema
+    }
+    /// Compact JSON text of the schema.
+    pub(crate) fn text(&self) -> String {
+        self.schema.to_string()
+    }
+}
+
+impl fmt::Debug for OutputSchema {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "OutputSchema({})", self.name)
+    }
+}
+
+/// What a request is for. The preview panel shows it ("Agent planning" for `AgentPlan`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestPurpose {
+    /// A normal voice turn.
+    Turn,
+    /// The agent engine asking for a plan (a request with an output schema).
+    AgentPlan,
+}
+
 /// Provider-neutral request.
 ///
 /// ```compile_fail,E0308
@@ -69,6 +112,7 @@ pub struct LlmRequest {
     pub(crate) screen_text: Option<Arc<str>>,
     pub(crate) image: Option<EncodedImage>,
     pub(crate) secure_hidden: u32,
+    pub(crate) output_schema: Option<OutputSchema>,
 }
 
 impl LlmRequest {
@@ -96,7 +140,28 @@ impl LlmRequest {
             screen_text: text.map(|t| Arc::clone(t.text())),
             image,
             secure_hidden,
+            output_schema: None,
         })
+    }
+
+    /// Require the reply to follow `schema` (agent planning). Makes the request's purpose
+    /// [`RequestPurpose::AgentPlan`]: the schema is in the body, the digest and the preview.
+    pub fn with_output_schema(mut self, schema: OutputSchema) -> Self {
+        self.output_schema = Some(schema);
+        self
+    }
+
+    pub fn output_schema(&self) -> Option<&OutputSchema> {
+        self.output_schema.as_ref()
+    }
+
+    /// `AgentPlan` exactly when an output schema is set.
+    pub fn purpose(&self) -> RequestPurpose {
+        if self.output_schema.is_some() {
+            RequestPurpose::AgentPlan
+        } else {
+            RequestPurpose::Turn
+        }
     }
 
     /// Geometry of the attached image, if any.
@@ -122,7 +187,8 @@ impl fmt::Debug for LlmRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "LlmRequest(system {} B, transcript {} B, screen_text {} B, image {})",
+            "LlmRequest({:?}, system {} B, transcript {} B, screen_text {} B, image {})",
+            self.purpose(),
             self.system.len(),
             self.transcript.len(),
             self.screen_text.as_ref().map_or(0, |t| t.len()),
@@ -175,6 +241,7 @@ pub struct PreparedRequest {
     image_png: Option<Arc<[u8]>>,
     image_geometry: Option<ImageGeometry>,
     secure_hidden: u32,
+    purpose: RequestPurpose,
 }
 
 impl PreparedRequest {
@@ -200,6 +267,7 @@ impl PreparedRequest {
             image_png: req.image.as_ref().map(|i| Arc::clone(&i.png)),
             image_geometry: req.image.as_ref().map(|i| i.geometry),
             secure_hidden: req.secure_hidden,
+            purpose: req.purpose(),
         }
     }
 
@@ -222,6 +290,9 @@ impl PreparedRequest {
     pub fn digest(&self) -> [u8; 32] {
         self.digest
     }
+    pub fn purpose(&self) -> RequestPurpose {
+        self.purpose
+    }
     /// Shares the same `Bytes` / `Arc`s as the body (no copies).
     pub fn preview(&self) -> RequestPreview {
         RequestPreview {
@@ -237,6 +308,7 @@ impl PreparedRequest {
             image_png: self.image_png.clone(),
             image_geometry: self.image_geometry,
             secure_fields_hidden: self.secure_hidden,
+            purpose: self.purpose,
         }
     }
 }
@@ -271,6 +343,8 @@ pub struct RequestPreview {
     pub image_png: Option<Arc<[u8]>>,
     pub image_geometry: Option<ImageGeometry>,
     pub secure_fields_hidden: u32,
+    /// `AgentPlan` for the agent engine's planning calls (the panel says "Agent planning").
+    pub purpose: RequestPurpose,
 }
 
 impl RequestPreview {
@@ -283,8 +357,9 @@ impl fmt::Debug for RequestPreview {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "RequestPreview({} {:?} model {} digest {} body {} B, transcript {} B, \
+            "RequestPreview({:?} {} {:?} model {} digest {} body {} B, transcript {} B, \
              screen_text {} B, image {} B, {} secure hidden)",
+            self.purpose,
             self.provider_id,
             self.locality,
             self.model,

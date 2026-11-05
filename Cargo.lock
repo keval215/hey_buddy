@@ -3,10 +3,33 @@
 version = 4
 
 [[package]]
+name = "action"
+version = "0.1.0"
+dependencies = [
+ "firewall",
+ "frame",
+ "sha2",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+
+[[package]]
+name = "agent"
+version = "0.1.0"
+dependencies = [
+ "agent",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "windows",
+]
 
 [[package]]
 name = "ahash"
@@ -148,6 +171,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "audit"
+version = "0.1.0"
+dependencies = [
+ "policy",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -284,16 +318,21 @@ dependencies = [
 name = "buddy-core"
 version = "0.1.0"
 dependencies = [
+ "agent",
  "async-trait",
+ "audit",
  "base64 0.23.1",
  "bytes",
  "capture",
+ "driver",
  "firewall",
  "frame",
  "futures",
+ "getrandom 0.3.4",
  "libc",
  "llm",
  "png",
+ "policy",
  "reqwest",
  "rustls",
  "secrecy",
@@ -968,6 +1007,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-global-shortcut",
+ "windows",
 ]
 
 [[package]]
@@ -1075,6 +1115,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "driver"
+version = "0.1.0"
+dependencies = [
+ "action",
+ "driver",
+ "firewall",
+ "frame",
+ "policy",
+ "serde",
+ "thiserror 1.0.69",
+ "windows",
 ]
 
 [[package]]
@@ -1253,6 +1307,8 @@ dependencies = [
  "core-foundation-sys",
  "frame",
  "futures",
+ "getrandom 0.3.4",
+ "sha2",
  "thiserror 1.0.69",
  "windows",
 ]
@@ -3254,6 +3310,23 @@ dependencies = [
  "fdeflate",
  "flate2",
  "miniz_oxide 0.8.9",
+]
+
+[[package]]
+name = "policy"
+version = "0.1.0"
+dependencies = [
+ "action",
+ "audit",
+ "firewall",
+ "frame",
+ "getrandom 0.3.4",
+ "policy",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

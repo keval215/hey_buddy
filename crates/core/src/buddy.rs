@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use capture::CaptureSource;
@@ -21,11 +21,15 @@ use secrecy::SecretString;
 use voice::registry::{Device, Registry, Task};
 use voice::{SttProvider, TtsProvider};
 
+use crate::activity::ActivityProbe;
+use crate::agent::AgentTrigger;
 use crate::api::{
-    Decision, DenyListDto, DisplayDto, DownloadDone, DownloadFailed, DownloadProgress,
-    EngineSlotName, EngineSwapEvent, FirewallStatus, LastRequestDto, ModelRow, Phase, PointEvent,
-    Settings, SettingsPatch, SettingsResult, Status, SwapTarget, TurnState,
+    AuditClearDto, AuditExportDto, AuditPageDto, Decision, DenyListDto, DisplayDto, DownloadDone,
+    DownloadFailed, DownloadProgress, EngineSlotName, EngineSwapEvent, FirewallStatus,
+    LastRequestDto, ModelRow, Phase, PointEvent, Settings, SettingsPatch, SettingsResult, Status,
+    SwapTarget, TurnState,
 };
+use crate::audit_log::{page_dto, validate_export_path, AuditCmdError, DEFAULT_PAGE};
 use crate::consent::{
     last_request_dto, provider_allowed, ConsentError, ConsentGate, PreviewSink, PreviewStore,
     LAST_KEY,
@@ -50,6 +54,8 @@ pub struct SettingsUpdate {
     pub settings: Settings,
     /// `(old, new)` canonical shortcut strings when the hotkey changed.
     pub hotkey_changed: Option<(String, String)>,
+    /// `(old, new)` canonical kill-switch shortcut strings when it changed.
+    pub kill_hotkey_changed: Option<(String, String)>,
     /// Values that were not accepted and fell back to the safest value.
     pub issues: Vec<crate::api::SettingsIssue>,
     /// The effective models directory changed (refresh the table, request an engine swap).
@@ -73,6 +79,8 @@ struct Inner {
     phase: Phase,
     firewall: FirewallStatus,
     hotkey_registered: bool,
+    /// The kill-switch shortcut (or another kill trigger) is registered with the OS.
+    kill_hotkey_registered: bool,
 }
 
 /// Why `request_engine_swap` refused. Fixed tokens (the `Display` text), no content.
@@ -110,6 +118,13 @@ fn failure_notice(slot: EngineSlotName, id: &str, f: &SwapFailure) -> String {
     }
 }
 
+/// Shown when the activity log could not be set up or written.
+const KILL_NOTICE: &str =
+    "The stop shortcut could not be registered, so the agent stays off until it can be.";
+
+const AUDIT_NOTICE: &str =
+    "The activity log is not working, so the agent stays off until it can be written.";
+
 /// Longest accepted API key (bytes).
 const MAX_KEY_LEN: usize = 512;
 
@@ -146,6 +161,17 @@ pub struct Buddy {
     notices: Mutex<Vec<String>>,
     /// Why there is no engine (reported on a hotkey press): `(code, message)`.
     engine_unavailable: Mutex<Option<(String, String)>>,
+    /// The append-only agent activity log (S2-12). The future gate is built with this sink; until
+    /// `set_data_dir` succeeds every `intent` fails (fail closed: no audit, no agent).
+    audit: Arc<audit::FileAuditSink>,
+    audit_attempted: AtomicBool,
+    /// The shell has said whether the kill trigger registered (so the notice is not shown
+    /// before it tried).
+    kill_registration_reported: AtomicBool,
+    /// What the agent is doing (S2-13); `None` = no agent = idle.
+    activity: Mutex<Option<Arc<dyn ActivityProbe>>>,
+    /// Where `agent_mode` voice requests go (S2-23b); `None` = no agent runtime.
+    agent_trigger: Mutex<Option<Arc<dyn AgentTrigger>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -205,6 +231,7 @@ impl Buddy {
                 phase: Phase::Idle,
                 firewall: FirewallStatus::default(),
                 hotkey_registered: false,
+                kill_hotkey_registered: false,
             }),
             capture: Arc::from(capture),
             store,
@@ -225,6 +252,11 @@ impl Buddy {
             current: Mutex::new(None),
             notices: Mutex::new(Vec::new()),
             engine_unavailable: Mutex::new(None),
+            audit: Arc::new(audit::FileAuditSink::unattached()),
+            audit_attempted: AtomicBool::new(false),
+            kill_registration_reported: AtomicBool::new(false),
+            activity: Mutex::new(None),
+            agent_trigger: Mutex::new(None),
         }
     }
 
@@ -364,6 +396,11 @@ impl Buddy {
         *lock(&self.engine_unavailable) = Some((code.to_string(), message.to_string()));
     }
 
+    /// The attached turn engine's dependencies (the kill speaker uses the audio output).
+    pub(crate) fn engine_deps(&self) -> Option<Arc<EngineDeps>> {
+        lock(&self.engine).clone()
+    }
+
     pub fn has_engine(&self) -> bool {
         lock(&self.engine).is_some()
     }
@@ -422,12 +459,15 @@ impl Buddy {
     /// Only a failed write is an error.
     pub fn update_settings(&self, patch: &SettingsPatch) -> Result<SettingsUpdate, SettingsError> {
         let old_dir = self.models_dir();
-        let (mut settings, hotkey_changed, issues) = {
+        let (mut settings, hotkey_changed, kill_hotkey_changed, issues) = {
             let mut store = lock(&self.settings);
             let old = store.settings().hotkey;
+            let old_kill = store.settings().kill_hotkey;
             let (settings, issues) = store.apply_with_issues(patch)?;
             let hotkey_changed = (settings.hotkey != old).then(|| (old, settings.hotkey.clone()));
-            (settings, hotkey_changed, issues)
+            let kill_hotkey_changed = (settings.kill_hotkey != old_kill)
+                .then(|| (old_kill, settings.kill_hotkey.clone()));
+            (settings, hotkey_changed, kill_hotkey_changed, issues)
         };
         // Mirror local_only into the consent gate (turning it on cancels pending previews).
         // Turning it OFF changes nothing else: every cloud request still needs its preview.
@@ -442,6 +482,7 @@ impl Buddy {
         Ok(SettingsUpdate {
             settings,
             hotkey_changed,
+            kill_hotkey_changed,
             issues,
             models_dir_changed,
         })
@@ -545,13 +586,94 @@ impl Buddy {
         id: &str,
         confirm_remove_default: bool,
     ) -> Result<DenyListDto, DenyEditError> {
+        if self.agent_busy() {
+            return Err(DenyEditError::Busy);
+        }
         self.edit_deny(|e| e.remove(id, confirm_remove_default))
     }
 
     /// `reset_deny_list_to_defaults` command: restores removed built-in entries (`confirm`
     /// required); the user's own additions stay.
     pub fn reset_deny_list_to_defaults(&self, confirm: bool) -> Result<DenyListDto, DenyEditError> {
+        if self.agent_busy() {
+            return Err(DenyEditError::Busy);
+        }
         self.edit_deny(|e| e.reset_to_defaults(confirm))
+    }
+
+    // ------------------------------------------------------------ agent activity log (S2-12)
+
+    /// Tell the core the app data directory; the log lives in `<dir>/audit`. If it cannot be
+    /// created or written (or is a symlink) the log stays unavailable: `Status.audit_ready` is
+    /// `false` and the sink fails every `intent`, so the agent cannot act (fail closed).
+    pub fn set_data_dir(&self, dir: PathBuf) {
+        self.audit_attempted.store(true, Ordering::SeqCst);
+        let _ = self.audit.attach(&dir);
+    }
+
+    /// The sink the policy gate must be built with (the same file for the whole run).
+    pub fn audit_sink(&self) -> Arc<audit::FileAuditSink> {
+        self.audit.clone()
+    }
+
+    /// Installs the probe that says whether the agent is busy (the wiring passes
+    /// `GateProbe(gate)`). Until then the agent is considered idle (there is none).
+    pub fn set_activity_probe(&self, probe: Arc<dyn ActivityProbe>) {
+        *lock(&self.activity) = Some(probe);
+    }
+
+    /// Installs where `agent_mode` voice requests are handed (`AgentRuntime::install`).
+    pub fn set_agent_trigger(&self, t: Arc<dyn AgentTrigger>) {
+        *lock(&self.agent_trigger) = Some(t);
+    }
+
+    pub(crate) fn agent_trigger(&self) -> Option<Arc<dyn AgentTrigger>> {
+        lock(&self.agent_trigger).clone()
+    }
+
+    /// An activity probe is installed (the agent supervisor refuses to run without one: with no
+    /// probe the audit-clear and deny-list guards would treat a running agent as idle).
+    pub fn has_activity_probe(&self) -> bool {
+        lock(&self.activity).is_some()
+    }
+
+    /// True while a task is active or an intent / action is outstanding.
+    fn agent_busy(&self) -> bool {
+        let probe = lock(&self.activity).clone();
+        probe.is_some_and(|p| !p.activity().is_idle())
+    }
+
+    /// `get_audit_entries` command: newest first, `limit` defaults to 50 (1..=500).
+    pub fn get_audit_entries(
+        &self,
+        cursor: Option<u32>,
+        limit: Option<u32>,
+    ) -> Result<AuditPageDto, AuditCmdError> {
+        let cursor = cursor.unwrap_or(0);
+        let page = self
+            .audit
+            .read_page(u64::from(cursor), limit.unwrap_or(DEFAULT_PAGE) as usize)?;
+        let st = self.audit.stats();
+        Ok(page_dto(page, st.over_limit, st.ready))
+    }
+
+    /// `export_audit_log` command (explicit user action): copy the log into a NEW file at
+    /// `dest_path`. Never overwrites; nothing leaves the device.
+    pub fn export_audit_log(&self, dest_path: &str) -> Result<AuditExportDto, AuditCmdError> {
+        let dest = validate_export_path(dest_path)?;
+        let segments = self.audit.export_to(&dest)?;
+        Ok(AuditExportDto { segments })
+    }
+
+    /// `clear_audit_log` command (explicit user action, `confirm` must be `true`): starts a new
+    /// log file whose first line records the clear, then removes the old files. Cancels nothing.
+    pub fn clear_audit_log(&self, confirm: bool) -> Result<AuditClearDto, AuditCmdError> {
+        // Refused while a task is active or an intent / action is outstanding (code `busy`).
+        if self.agent_busy() {
+            return Err(AuditCmdError::Busy);
+        }
+        let removed = self.audit.clear(confirm)?;
+        Ok(AuditClearDto { removed })
     }
 
     // ------------------------------------------------------------ consent / preview
@@ -651,10 +773,21 @@ impl Buddy {
             phase: i.phase,
             firewall: i.firewall.clone(),
             hotkey_registered: i.hotkey_registered,
+            kill_hotkey_registered: i.kill_hotkey_registered,
+            agent_enabled: self.audit.ready() && i.kill_hotkey_registered,
             settings_error,
             settings_issues,
+            audit_ready: self.audit.ready(),
             notices: {
                 let mut n = lock(&self.notices).clone();
+                if self.audit_attempted.load(Ordering::SeqCst) && !self.audit.ready() {
+                    n.push(AUDIT_NOTICE.to_string());
+                }
+                if self.kill_registration_reported.load(Ordering::SeqCst)
+                    && !i.kill_hotkey_registered
+                {
+                    n.push(KILL_NOTICE.to_string());
+                }
                 n.extend(deny_notices);
                 n.extend(lock(&self.swap_failures).values().cloned());
                 n
@@ -665,6 +798,19 @@ impl Buddy {
     /// The glue reports whether the global shortcut could be registered.
     pub fn set_hotkey_registered(&self, ok: bool) {
         lock(&self.inner).hotkey_registered = ok;
+    }
+
+    /// The glue reports whether the kill shortcut could be registered. `false` disables the
+    /// agent (`Status.agent_enabled`): no way to stop it means no agent (fail closed).
+    pub fn set_kill_hotkey_registered(&self, ok: bool) {
+        self.kill_registration_reported
+            .store(true, Ordering::SeqCst);
+        lock(&self.inner).kill_hotkey_registered = ok;
+    }
+
+    /// The agent may start: the activity log is writable AND a kill trigger is registered.
+    pub fn agent_enabled(&self) -> bool {
+        self.audit.ready() && lock(&self.inner).kill_hotkey_registered
     }
 
     /// Displays in the capture crate's coordinates. Empty when the platform cannot list them
@@ -1186,5 +1332,200 @@ mod tests {
         assert!(notices.iter().any(|n| n == BANKING_NOTICE));
         b.reset_deny_list_to_defaults(true).unwrap();
         assert!(!b.get_status().notices.iter().any(|n| n.contains("cmd.exe")));
+    }
+
+    #[test]
+    fn the_agent_is_disabled_until_a_kill_trigger_is_registered() {
+        let (d, b) = buddy();
+        b.set_data_dir(d.path().join("data"));
+        assert!(b.get_status().audit_ready);
+        // Nothing reported yet: off, but no scary notice before the shell tried.
+        let st = b.get_status();
+        assert!(!st.kill_hotkey_registered && !st.agent_enabled && !b.agent_enabled());
+        assert!(!st.notices.iter().any(|n| n == KILL_NOTICE));
+        // Registration failed: off, with a notice.
+        b.set_kill_hotkey_registered(false);
+        let st = b.get_status();
+        assert!(!st.agent_enabled && !b.agent_enabled());
+        assert!(st.notices.iter().any(|n| n == KILL_NOTICE));
+        // Registered: on, as long as the activity log works.
+        b.set_kill_hotkey_registered(true);
+        let st = b.get_status();
+        assert!(st.kill_hotkey_registered && st.agent_enabled && b.agent_enabled());
+        assert!(!st.notices.iter().any(|n| n == KILL_NOTICE));
+        // Registered but no activity log: still off.
+        let (_d2, b2) = buddy();
+        b2.set_kill_hotkey_registered(true);
+        assert!(!b2.get_status().agent_enabled);
+    }
+
+    #[test]
+    fn a_kill_hotkey_change_is_reported_to_the_glue() {
+        let (_d, b) = buddy();
+        let u = b
+            .update_settings(&SettingsPatch {
+                kill_hotkey: Some("alt+shift+f9".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            u.kill_hotkey_changed,
+            Some(("Ctrl+Alt+Shift+K".into(), "Alt+Shift+F9".into()))
+        );
+        assert!(u.hotkey_changed.is_none() && u.issues.is_empty());
+    }
+
+    #[test]
+    fn audit_clear_and_deny_loosening_are_refused_while_the_agent_is_busy() {
+        use crate::activity::FixedProbe;
+        use policy::{Activity, BusyState};
+        let (d, b) = buddy();
+        b.set_config_dir(d.path().join("cfg"));
+        b.set_data_dir(d.path().join("data"));
+        assert!(b.get_status().audit_ready);
+        let probe = Arc::new(FixedProbe::idle());
+        b.set_activity_probe(probe.clone());
+        let busy = [
+            Activity {
+                task_live: true,
+                busy_state: BusyState::Idle,
+            },
+            Activity {
+                task_live: false,
+                busy_state: BusyState::Pending,
+            },
+            Activity {
+                task_live: false,
+                busy_state: BusyState::Reserving,
+            },
+            Activity {
+                task_live: false,
+                busy_state: BusyState::Outstanding,
+            },
+        ];
+        for a in busy {
+            probe.set(a);
+            assert_eq!(b.clear_audit_log(true).unwrap_err(), AuditCmdError::Busy);
+            assert_eq!(
+                b.remove_deny_entry("cmd.exe", true).unwrap_err(),
+                DenyEditError::Busy
+            );
+            assert_eq!(
+                b.reset_deny_list_to_defaults(true).unwrap_err(),
+                DenyEditError::Busy
+            );
+            // Adding to the deny list only tightens: allowed.
+            b.add_deny_entry("mine.exe").ok();
+            assert_eq!(AuditCmdError::Busy.to_string(), "busy");
+            assert_eq!(DenyEditError::Busy.to_string(), "busy");
+        }
+        // The cmd.exe entry was not touched.
+        assert!(b.current_deny().unwrap().matches("cmd.exe"));
+        probe.set(Activity {
+            task_live: false,
+            busy_state: BusyState::Idle,
+        });
+        b.remove_deny_entry("cmd.exe", true).unwrap();
+        b.reset_deny_list_to_defaults(true).unwrap();
+        b.clear_audit_log(true).unwrap();
+    }
+
+    #[test]
+    fn audit_log_is_not_ready_until_the_data_dir_works_and_commands_are_content_free() {
+        use policy::AuditSink;
+        let (d, b) = buddy();
+        assert!(!b.get_status().audit_ready);
+        assert!(!b.get_status().notices.iter().any(|n| n == AUDIT_NOTICE));
+        assert_eq!(
+            b.get_audit_entries(None, None).unwrap_err(),
+            AuditCmdError::Unavailable
+        );
+        assert_eq!(
+            b.clear_audit_log(true).unwrap_err(),
+            AuditCmdError::Unavailable
+        );
+        assert!(b.audit_sink().intent(&audit_rec("intent")).is_err());
+
+        // A data dir below a regular file: not ready, the user is told, still fail closed.
+        let f = d.path().join("file");
+        std::fs::write(&f, b"x").unwrap();
+        b.set_data_dir(f.join("data"));
+        assert!(!b.get_status().audit_ready);
+        assert!(b.get_status().notices.iter().any(|n| n == AUDIT_NOTICE));
+        assert!(b.audit_sink().intent(&audit_rec("intent")).is_err());
+
+        b.set_data_dir(d.path().join("data"));
+        assert!(b.get_status().audit_ready);
+        assert!(!b.get_status().notices.iter().any(|n| n == AUDIT_NOTICE));
+        b.audit_sink().intent(&audit_rec("intent")).unwrap();
+        b.audit_sink().record(&audit_rec("result"));
+        let page = b.get_audit_entries(None, Some(1)).unwrap();
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(page.entries[0].event, "result");
+        assert_eq!(page.next_cursor, Some(1));
+        assert!(page.ready && !page.over_limit && page.corrupt_lines == 0);
+        let older = b.get_audit_entries(page.next_cursor, Some(1)).unwrap();
+        assert_eq!(older.entries[0].event, "intent");
+        assert_eq!(older.next_cursor, None);
+
+        // Export: validated path, new file only.
+        let dest = d.path().join("out.jsonl");
+        let dest_s = dest.to_string_lossy().into_owned();
+        assert_eq!(b.export_audit_log(&dest_s).unwrap().segments, 1);
+        assert_eq!(std::fs::read_to_string(&dest).unwrap().lines().count(), 2);
+        assert_eq!(
+            b.export_audit_log(&dest_s).unwrap_err(),
+            AuditCmdError::Exists
+        );
+        assert_eq!(
+            b.export_audit_log("../x.jsonl").unwrap_err(),
+            AuditCmdError::InvalidPath
+        );
+
+        // Clear needs the explicit confirm.
+        assert_eq!(
+            b.clear_audit_log(false).unwrap_err(),
+            AuditCmdError::NeedsConfirm
+        );
+        assert_eq!(b.get_audit_entries(None, None).unwrap().entries.len(), 2);
+        assert_eq!(b.clear_audit_log(true).unwrap().removed, 1);
+        let after = b.get_audit_entries(None, None).unwrap();
+        assert_eq!(after.entries.len(), 1);
+        assert_eq!(after.entries[0].event, "cleared");
+        assert_eq!(after.entries[0].segments_removed, Some(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_audit_dir_keeps_the_log_off() {
+        let (d, b) = buddy();
+        let real = d.path().join("elsewhere");
+        std::fs::create_dir(&real).unwrap();
+        let data = d.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        std::os::unix::fs::symlink(&real, data.join("audit")).unwrap();
+        b.set_data_dir(data);
+        assert!(!b.get_status().audit_ready);
+        assert!(std::fs::read_dir(&real).unwrap().next().is_none());
+    }
+
+    fn audit_rec(event: &'static str) -> policy::AuditRecord {
+        policy::AuditRecord {
+            ts_ms: 1,
+            task: Some(1),
+            seq: 1,
+            event,
+            plan_digest8: None,
+            action_digest8: None,
+            step: Some(0),
+            op: Some("click"),
+            target_role: None,
+            target_label: Some("Save".into()),
+            app_id: None,
+            tier: Some("reversible"),
+            decision: None,
+            result_code: None,
+            text_len: None,
+        }
     }
 }

@@ -1,11 +1,13 @@
 // Pure helpers shared by the preview panel and the settings "Last request" view (unit-tested).
 import type { LocalityDto } from "../ipc/LocalityDto";
+import type { PurposeDto } from "../ipc/PurposeDto";
 
 /** What both `PreviewDto` and `LastRequestDto` carry. */
 export interface RequestView {
   provider_id: string;
   model: string;
   locality: LocalityDto;
+  purpose: PurposeDto;
   digest_hex: string;
   transcript: string;
   screen_text: string | null;
@@ -41,6 +43,21 @@ export function isCloud(r: Pick<RequestView, "locality">): boolean {
 
 export function badgeText(r: Pick<RequestView, "locality">): string {
   return isCloud(r) ? "CLOUD" : "LOCAL";
+}
+
+/** What the request is for: "Agent planning" for the agent engine's calls, else null. */
+export function purposeText(r: Pick<RequestView, "purpose">): string | null {
+  return r.purpose === "AgentPlan" ? "Agent planning" : null;
+}
+
+/**
+ * One-line notice for agent planning requests: the request carries the spoken task text
+ * (S2-10 follow-up). Null for ordinary turns.
+ */
+export function purposeNotice(r: Pick<RequestView, "purpose">): string | null {
+  return r.purpose === "AgentPlan"
+    ? "This request contains the task you spoke (shown under \"What you said\")."
+    : null;
 }
 
 /** Whole seconds left until `deadlineMs`, never negative. */

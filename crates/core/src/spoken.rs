@@ -45,6 +45,16 @@ pub enum Notice {
     LlmFailed,
     /// Speech recognition failed.
     SttFailed,
+    /// The kill switch fired (S2-13), or a limit stopped an agent task.
+    Stopped,
+    /// An agent task completed and has nothing to read out.
+    AgentDone,
+    /// An agent task could not start or could not finish (refused, failed, blocked).
+    AgentCouldNot,
+    /// An unattended agent task stopped at a step only the user may approve.
+    AgentNeedsYou,
+    /// The user said no (or the approval timed out).
+    AgentDeclined,
 }
 
 fn pause_token(r: PauseReason) -> &'static str {
@@ -159,6 +169,11 @@ pub fn notice(n: Notice, l: Locale) -> &'static str {
         }
         Notice::LlmFailed => "Sorry, I could not get an answer from the language model.",
         Notice::SttFailed => "Sorry, I could not understand the audio.",
+        Notice::Stopped => "Stopped.",
+        Notice::AgentDone => "Done.",
+        Notice::AgentCouldNot => "I couldn't do that.",
+        Notice::AgentNeedsYou => "I need you to take a look.",
+        Notice::AgentDeclined => "Okay, I won't.",
     }
 }
 
@@ -224,6 +239,15 @@ mod tests {
             Notice::SttFailed,
         ] {
             assert!(notice(n, Locale::En).len() > 10);
+        }
+        assert_eq!(notice(Notice::Stopped, Locale::En), "Stopped.");
+        for (n, t) in [
+            (Notice::AgentDone, "Done."),
+            (Notice::AgentCouldNot, "I couldn't do that."),
+            (Notice::AgentNeedsYou, "I need you to take a look."),
+            (Notice::AgentDeclined, "Okay, I won't."),
+        ] {
+            assert_eq!(notice(n, Locale::En), t);
         }
     }
 }

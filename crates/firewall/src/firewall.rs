@@ -7,15 +7,30 @@ use std::time::{Duration, Instant};
 use frame::{AppDenyPolicy, Frame, Rect};
 
 use crate::blackout::{blackout, DEFAULT_PADDING_PX};
+use crate::builtin::{self, WithAuthSurfaces};
 use crate::error::*;
+use crate::observe::{
+    AppId, LabelFlags, Observation, ObservationFlags, ObservationId, ObserveVerdict, Slot,
+    TargetSlot, WindowIdentity,
+};
 use crate::redacted::RedactedFrame;
+use crate::target::{
+    FocusGuard, FocusState, ForegroundFacts, LiveTarget, ObservationSource, ObservedWindow,
+    ResolveRequest, ResolvedTarget, TargetKind, TargetRefusal, TargetResolver, TargetSel,
+    UnsupportedObservationSource, UnsupportedTargetResolver, WindowFacts,
+};
 use crate::text::{
-    redact_tree, RawWindowTree, ScreenTextSource, TextVerdict, UnsupportedTextSource,
+    redact_tree, redact_tree_indexed, RawWindowTree, ScreenTextSource, TextVerdict,
+    UnsupportedTextSource, WithheldReason,
 };
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_millis(200);
 /// Default deadline for the foreground-window tree read of `check_text`.
 pub const DEFAULT_TEXT_TIMEOUT: Duration = Duration::from_millis(1500);
+/// Default deadline for one target re-resolution / focus query of `revalidate`.
+pub const DEFAULT_TARGET_TIMEOUT: Duration = Duration::from_millis(1000);
+/// Maximum number of app ids listed in an observation.
+const MAX_OBSERVED_APPS: usize = 32;
 /// Default maximum age of a preflight record (and maximum gap between record and capture).
 pub const DEFAULT_MAX_RECORD_AGE: Duration = Duration::from_secs(2);
 
@@ -66,6 +81,27 @@ pub trait Firewall: Send + Sync {
     /// Default: fail closed, so a firewall without text support never yields text.
     fn check_text(&self, _deny: &dyn AppDenyPolicy) -> TextVerdict {
         TextVerdict::Blocked(BlockReason::Unsupported)
+    }
+    /// Agent observation (ADR 0004): the same pipeline as `check_text` (screen-text v1) plus a
+    /// private target table and an `apps:` line. Consumes the preflight record like `check` and
+    /// `check_text`: ONE preflight authorises exactly ONE of the three.
+    ///
+    /// Default: fail closed.
+    fn observe(&self, _deny: &dyn AppDenyPolicy) -> ObserveVerdict {
+        ObserveVerdict::Blocked(BlockReason::Unsupported)
+    }
+    /// Re-resolve one target of `obs` immediately before acting (ADR 0004 §6). Needs NO
+    /// preflight: it returns no screen content, only a sealed, `!Send` handle. Every mismatch is
+    /// a typed refusal; nothing is guessed or searched for.
+    ///
+    /// Default: fail closed.
+    fn revalidate<'o>(
+        &self,
+        _obs: &'o Observation,
+        _sel: TargetSel,
+        _deny: &dyn AppDenyPolicy,
+    ) -> Result<LiveTarget<'o>, TargetRefusal> {
+        Err(TargetRefusal::Unsupported)
     }
 }
 
@@ -127,18 +163,157 @@ fn normalize(mut v: Vec<Rect>) -> Vec<Rect> {
     v
 }
 
+fn probe_state_of(
+    probe: &Arc<dyn SessionProbe>,
+    busy: &Arc<AtomicBool>,
+    timeout: Duration,
+) -> Result<SessionProbeState, BlockReason> {
+    let p = Arc::clone(probe);
+    match with_deadline(busy, timeout, move || p.state()) {
+        Deadline::Done(Ok(s)) => Ok(s),
+        Deadline::Done(Err(e)) => Err(e.into()),
+        Deadline::TimedOut | Deadline::Busy => Err(BlockReason::DetectionTimeout),
+        Deadline::Panicked => Err(BlockReason::detection("session probe failed")),
+    }
+}
+
+fn session_of(
+    probe: &Arc<dyn SessionProbe>,
+    busy: &Arc<AtomicBool>,
+    timeout: Duration,
+) -> Result<(), SessionState> {
+    match probe_state_of(probe, busy, timeout) {
+        Ok(SessionProbeState::Normal) => Ok(()),
+        Ok(SessionProbeState::LockScreen) => Err(SessionState::Paused(PauseReason::LockScreen)),
+        Ok(SessionProbeState::AuthPrompt) => Err(SessionState::Paused(PauseReason::AuthPrompt)),
+        Ok(SessionProbeState::SecureInputActive) => {
+            Err(SessionState::Paused(PauseReason::SecureInputActive))
+        }
+        Err(b) => Err(SessionState::Blocked(b)),
+    }
+}
+
+fn refusal_of(s: SessionState) -> TargetRefusal {
+    match s {
+        SessionState::Paused(p) => TargetRefusal::SessionPaused(p),
+        SessionState::Blocked(b) => TargetRefusal::Blocked(b),
+        SessionState::Active => {
+            TargetRefusal::Blocked(BlockReason::detection("firewall internal error"))
+        }
+    }
+}
+
+/// One resolver call on a deadline worker (timeout / busy / panic / error all fail closed).
+fn resolver_call<T: Send + 'static>(
+    resolver: &Arc<dyn TargetResolver>,
+    busy: &Arc<AtomicBool>,
+    timeout: Duration,
+    f: impl FnOnce(&dyn TargetResolver) -> Result<T, FirewallError> + Send + 'static,
+) -> Result<T, TargetRefusal> {
+    let r = Arc::clone(resolver);
+    match with_deadline(busy, timeout, move || f(&*r)) {
+        Deadline::Done(Ok(v)) => Ok(v),
+        Deadline::Done(Err(e)) => Err(TargetRefusal::Blocked(e.into())),
+        Deadline::TimedOut | Deadline::Busy => {
+            Err(TargetRefusal::Blocked(BlockReason::DetectionTimeout))
+        }
+        Deadline::Panicked => Err(TargetRefusal::Blocked(BlockReason::detection(
+            "target resolver failed",
+        ))),
+    }
+}
+
+/// The foreground window must be the observed one (hwnd, then pid and process creation time,
+/// then image path).
+fn same_window(now: &WindowFacts, obs: &WindowFacts) -> Result<(), TargetRefusal> {
+    if now.hwnd != obs.hwnd {
+        return Err(TargetRefusal::ForegroundChanged);
+    }
+    if now.pid != obs.pid || now.process_creation_time != obs.process_creation_time {
+        return Err(TargetRefusal::StaleRef);
+    }
+    if now.exe_path != obs.exe_path {
+        return Err(TargetRefusal::TargetChanged { field: "app" });
+    }
+    Ok(())
+}
+
+/// Backs `LiveTarget::verify_focus`: session, foreground and focus checks on deadline workers.
+struct FocusCtx {
+    probe: Arc<dyn SessionProbe>,
+    probe_busy: Arc<AtomicBool>,
+    probe_timeout: Duration,
+    resolver: Arc<dyn TargetResolver>,
+    resolver_busy: Arc<AtomicBool>,
+    target_timeout: Duration,
+}
+
+impl FocusGuard for FocusCtx {
+    fn verify(
+        &self,
+        window: &WindowFacts,
+        runtime_id: &[i32],
+        within: bool,
+    ) -> Result<(), TargetRefusal> {
+        catch_unwind(AssertUnwindSafe(|| {
+            session_of(&self.probe, &self.probe_busy, self.probe_timeout).map_err(refusal_of)?;
+            let facts = resolver_call(
+                &self.resolver,
+                &self.resolver_busy,
+                self.target_timeout,
+                |r| r.foreground(),
+            )?;
+            if !facts.on_user_desktop {
+                return Err(TargetRefusal::SessionPaused(PauseReason::AuthPrompt));
+            }
+            same_window(&facts.window, window)?;
+            let hwnd = window.hwnd;
+            let rid = runtime_id.to_vec();
+            let state = resolver_call(
+                &self.resolver,
+                &self.resolver_busy,
+                self.target_timeout,
+                move |r| r.focus_state(hwnd, &rid),
+            )?;
+            match state {
+                FocusState::Secure => Err(TargetRefusal::SecureTarget),
+                // A focused OTP / PIN field that is not IsPassword: nothing may land in it.
+                FocusState::Sensitive => Err(TargetRefusal::SensitiveTarget),
+                FocusState::Target => Ok(()),
+                FocusState::Descendant if within => Ok(()),
+                _ => Err(TargetRefusal::FocusLost),
+            }
+        }))
+        .unwrap_or(Err(TargetRefusal::Blocked(BlockReason::detection(
+            "firewall internal error",
+        ))))
+    }
+}
+
 struct Record {
     rects: Vec<Rect>,
     taken: Instant,
 }
 
 /// Real firewall logic, generic over the detector, session probe and (optional) text source.
-pub struct PrivacyFirewall<D: SecureFieldDetector, S: SessionProbe, T = UnsupportedTextSource> {
+pub struct PrivacyFirewall<
+    D: SecureFieldDetector,
+    S: SessionProbe,
+    T = UnsupportedTextSource,
+    O = UnsupportedObservationSource,
+    R = UnsupportedTargetResolver,
+> {
     detector: Arc<D>,
     probe: Arc<S>,
     text_source: Arc<T>,
     text_timeout: Duration,
     text_busy: Arc<AtomicBool>,
+    observation_source: Arc<O>,
+    observe_busy: Arc<AtomicBool>,
+    resolver: Arc<R>,
+    resolver_busy: Arc<AtomicBool>,
+    target_timeout: Duration,
+    own_pid: u32,
     padding_px: u32,
     timeout: Duration,
     detector_timeout: Option<Duration>,
@@ -161,6 +336,12 @@ impl<D: SecureFieldDetector + 'static, S: SessionProbe + 'static>
             text_source: Arc::new(UnsupportedTextSource),
             text_timeout: DEFAULT_TEXT_TIMEOUT,
             text_busy: Arc::new(AtomicBool::new(false)),
+            observation_source: Arc::new(UnsupportedObservationSource),
+            observe_busy: Arc::new(AtomicBool::new(false)),
+            resolver: Arc::new(UnsupportedTargetResolver),
+            resolver_busy: Arc::new(AtomicBool::new(false)),
+            target_timeout: DEFAULT_TARGET_TIMEOUT,
+            own_pid: std::process::id(),
             padding_px: DEFAULT_PADDING_PX,
             timeout: DEFAULT_TIMEOUT,
             detector_timeout: None,
@@ -176,19 +357,27 @@ impl<
         D: SecureFieldDetector + 'static,
         S: SessionProbe + 'static,
         T: ScreenTextSource + 'static,
-    > PrivacyFirewall<D, S, T>
+        O: ObservationSource + 'static,
+        R: TargetResolver + 'static,
+    > PrivacyFirewall<D, S, T, O, R>
 {
     /// Install the foreground-tree reader used by `check_text`.
     pub fn with_text_source<T2: ScreenTextSource + 'static>(
         self,
         source: T2,
-    ) -> PrivacyFirewall<D, S, T2> {
+    ) -> PrivacyFirewall<D, S, T2, O, R> {
         PrivacyFirewall {
             detector: self.detector,
             probe: self.probe,
             text_source: Arc::new(source),
             text_timeout: self.text_timeout,
             text_busy: Arc::new(AtomicBool::new(false)),
+            observation_source: self.observation_source,
+            observe_busy: self.observe_busy,
+            resolver: self.resolver,
+            resolver_busy: self.resolver_busy,
+            target_timeout: self.target_timeout,
+            own_pid: self.own_pid,
             padding_px: self.padding_px,
             timeout: self.timeout,
             detector_timeout: self.detector_timeout,
@@ -197,6 +386,48 @@ impl<
             probe_busy: self.probe_busy,
             preflight_record: self.preflight_record,
         }
+    }
+
+    /// Install the readers used by `observe` (identity-carrying tree read, deadline
+    /// `with_text_timeout`) and `revalidate` (deadline `with_target_timeout`).
+    pub fn with_observation<O2: ObservationSource + 'static, R2: TargetResolver + 'static>(
+        self,
+        source: O2,
+        resolver: R2,
+    ) -> PrivacyFirewall<D, S, T, O2, R2> {
+        PrivacyFirewall {
+            detector: self.detector,
+            probe: self.probe,
+            text_source: self.text_source,
+            text_timeout: self.text_timeout,
+            text_busy: self.text_busy,
+            observation_source: Arc::new(source),
+            observe_busy: Arc::new(AtomicBool::new(false)),
+            resolver: Arc::new(resolver),
+            resolver_busy: Arc::new(AtomicBool::new(false)),
+            target_timeout: self.target_timeout,
+            own_pid: self.own_pid,
+            padding_px: self.padding_px,
+            timeout: self.timeout,
+            detector_timeout: self.detector_timeout,
+            max_record_age: self.max_record_age,
+            detector_busy: self.detector_busy,
+            probe_busy: self.probe_busy,
+            preflight_record: self.preflight_record,
+        }
+    }
+
+    /// Deadline for one target re-resolution or focus query (default 1000 ms).
+    pub fn with_target_timeout(mut self, t: Duration) -> Self {
+        self.target_timeout = t;
+        self
+    }
+
+    /// Pretend our own process id is `pid` (tests only).
+    #[cfg(any(test, feature = "fakes"))]
+    pub fn with_own_pid(mut self, pid: u32) -> Self {
+        self.own_pid = pid;
+        self
     }
 
     /// Deadline for the foreground-tree read (default 1500 ms).
@@ -239,14 +470,8 @@ impl<
         *g = None;
     }
 
-    fn probe_state(&self) -> Result<SessionProbeState, BlockReason> {
-        let p = Arc::clone(&self.probe);
-        match with_deadline(&self.probe_busy, self.timeout, move || p.state()) {
-            Deadline::Done(Ok(s)) => Ok(s),
-            Deadline::Done(Err(e)) => Err(e.into()),
-            Deadline::TimedOut | Deadline::Busy => Err(BlockReason::DetectionTimeout),
-            Deadline::Panicked => Err(BlockReason::detection("session probe failed")),
-        }
+    fn probe_dyn(&self) -> Arc<dyn SessionProbe> {
+        Arc::clone(&self.probe) as Arc<dyn SessionProbe>
     }
 
     fn query(&self) -> Result<Vec<Rect>, BlockReason> {
@@ -267,15 +492,7 @@ impl<
     }
 
     fn session(&self) -> Result<(), SessionState> {
-        match self.probe_state() {
-            Ok(SessionProbeState::Normal) => Ok(()),
-            Ok(SessionProbeState::LockScreen) => Err(SessionState::Paused(PauseReason::LockScreen)),
-            Ok(SessionProbeState::AuthPrompt) => Err(SessionState::Paused(PauseReason::AuthPrompt)),
-            Ok(SessionProbeState::SecureInputActive) => {
-                Err(SessionState::Paused(PauseReason::SecureInputActive))
-            }
-            Err(b) => Err(SessionState::Blocked(b)),
-        }
+        session_of(&self.probe_dyn(), &self.probe_busy, self.timeout)
     }
 
     fn preflight_inner(&self) -> SessionState {
@@ -343,6 +560,301 @@ impl<
         }
     }
 
+    fn read_observed(&self) -> Result<ObservedWindow, BlockReason> {
+        let src = Arc::clone(&self.observation_source);
+        match with_deadline(&self.observe_busy, self.text_timeout, move || {
+            src.observe_foreground()
+        }) {
+            Deadline::Done(Ok(t)) => Ok(t),
+            Deadline::Done(Err(e)) => Err(e.into()),
+            Deadline::TimedOut | Deadline::Busy => Err(BlockReason::DetectionTimeout),
+            Deadline::Panicked => Err(BlockReason::detection("observation read failed")),
+        }
+    }
+
+    fn observe_inner(&self, deny: &dyn AppDenyPolicy) -> ObserveVerdict {
+        // 1. One preflight authorises exactly one check / check_text / observe.
+        let record = self
+            .preflight_record
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        // 2. Session probe.
+        match self.session() {
+            Ok(()) => {}
+            Err(SessionState::Paused(p)) => return ObserveVerdict::Paused(p),
+            Err(SessionState::Blocked(b)) => return ObserveVerdict::Blocked(b),
+            Err(SessionState::Active) => {
+                return ObserveVerdict::Blocked(BlockReason::detection("firewall internal error"))
+            }
+        }
+        let Some(record) = record else {
+            return ObserveVerdict::Blocked(BlockReason::UnstableLayout);
+        };
+        // 3. Foreground tree + identity on a deadline worker.
+        let observed = match self.read_observed() {
+            Ok(o) => o,
+            Err(b) => return ObserveVerdict::Blocked(b),
+        };
+        if Instant::now().saturating_duration_since(record.taken) > self.max_record_age {
+            return ObserveVerdict::Blocked(BlockReason::UnstableLayout);
+        }
+        let ObservedWindow {
+            tree,
+            identities,
+            window,
+            visible_apps,
+        } = observed;
+        if identities.len() != tree.nodes.len() {
+            return ObserveVerdict::Blocked(BlockReason::detection("identity table mismatch"));
+        }
+        // Our own window is never observed; the user's deny list plus the built-in
+        // authentication surfaces make an app invisible.
+        let deny = WithAuthSurfaces(deny);
+        let Some(app_id) = AppId::parse(&tree.app_id) else {
+            return ObserveVerdict::Withheld(WithheldReason::DeniedApp);
+        };
+        if window.pid == self.own_pid {
+            return ObserveVerdict::Withheld(WithheldReason::DeniedApp);
+        }
+        // Visible apps: app ids only, none denied / auth / ours.
+        let mut apps: Vec<AppId> = Vec::new();
+        for a in &visible_apps {
+            if a.pid == self.own_pid || deny.is_denied(&a.app_id) {
+                continue;
+            }
+            if let Some(id) = AppId::parse_visible(&a.app_id) {
+                if !apps.contains(&id) && apps.len() < MAX_OBSERVED_APPS {
+                    apps.push(id);
+                }
+            }
+        }
+        let apps_line = (!apps.is_empty()).then(|| {
+            let names: Vec<&str> = apps.iter().map(AppId::as_str).collect();
+            format!("apps: {}\n", names.join(", "))
+        });
+        // 4-11: the same pass as check_text.
+        let (verdict, index) =
+            redact_tree_indexed(tree, &record.rects, &deny, apps_line.as_deref());
+        let text = match verdict {
+            TextVerdict::Clear(t) => t,
+            TextVerdict::Withheld(w) => return ObserveVerdict::Withheld(w),
+            TextVerdict::Paused(p) => return ObserveVerdict::Paused(p),
+            TextVerdict::Blocked(b) => return ObserveVerdict::Blocked(b),
+        };
+        // Target table: secure nodes get NO slot; nodes without identity are not addressable;
+        // ambiguous runtime ids are not addressable.
+        let mut identities = identities;
+        let mut counts = std::collections::HashMap::<Vec<i32>, u32>::new();
+        for e in index.emitted.iter().filter(|e| !e.secure) {
+            if let Some(Some(i)) = identities.get(e.idx) {
+                *counts.entry(i.runtime_id.clone()).or_default() += 1;
+            }
+        }
+        let slots: Vec<Slot> = index
+            .emitted
+            .into_iter()
+            .map(|e| {
+                if e.secure {
+                    return Slot::Secure;
+                }
+                let ident = identities.get_mut(e.idx).and_then(Option::take);
+                match (ident, e.rect) {
+                    (Some(identity), Some(rect))
+                        if !identity.runtime_id.is_empty()
+                            && counts.get(&identity.runtime_id) == Some(&1) =>
+                    {
+                        Slot::Target(TargetSlot {
+                            identity,
+                            role: e.role,
+                            editable: e.editable,
+                            label: e.label.map(Arc::from),
+                            rect,
+                            sensitive_label: e.sensitive_label,
+                            flags: LabelFlags {
+                                destructive_label: e.destructive_label,
+                                purchase_label: e.purchase_label,
+                                submit_label: e.submit_label,
+                            },
+                        })
+                    }
+                    _ => Slot::Unaddressable,
+                }
+            })
+            .collect();
+        let Some(id) = ObservationId::fresh() else {
+            return ObserveVerdict::Blocked(BlockReason::detection("observation id unavailable"));
+        };
+        let flags = ObservationFlags {
+            payment_suspected: index.payment_suspected,
+            secure_fields: text.secure_fields_hidden(),
+        };
+        ObserveVerdict::Clear(Observation::new(
+            id,
+            text,
+            slots.into_boxed_slice(),
+            WindowIdentity { facts: window },
+            app_id,
+            Arc::from(apps),
+            flags,
+        ))
+    }
+
+    fn revalidate_inner<'o>(
+        &self,
+        obs: &'o Observation,
+        sel: TargetSel,
+        deny: &dyn AppDenyPolicy,
+    ) -> Result<LiveTarget<'o>, TargetRefusal> {
+        let probe = self.probe_dyn();
+        let resolver = Arc::clone(&self.resolver) as Arc<dyn TargetResolver>;
+        let timeout = self.target_timeout;
+
+        // 0. Which target? (No OS access.)
+        let (kind, element, slot) = match sel {
+            TargetSel::Element(r) => {
+                if r.observation != obs.id() {
+                    return Err(TargetRefusal::StaleRef);
+                }
+                match obs.slot(r.node) {
+                    Some(Slot::Target(t)) => (TargetKind::Element, Some(r), Some(t)),
+                    Some(Slot::Secure) => return Err(TargetRefusal::SecureTarget),
+                    Some(Slot::Unaddressable) => return Err(TargetRefusal::NoSemanticPath),
+                    None => return Err(TargetRefusal::StaleRef),
+                }
+            }
+            TargetSel::ScrollRoot => (TargetKind::ScrollRoot, None, None),
+            TargetSel::Window => (TargetKind::Window, None, None),
+        };
+
+        // 1. Session Normal.
+        session_of(&probe, &self.probe_busy, self.probe_timeout()).map_err(refusal_of)?;
+
+        // 2. Foreground window is the observed one; input desktop is the user's.
+        let facts: ForegroundFacts =
+            resolver_call(&resolver, &self.resolver_busy, timeout, |r| r.foreground())?;
+        if !facts.on_user_desktop {
+            return Err(TargetRefusal::SessionPaused(PauseReason::AuthPrompt));
+        }
+        let observed = &obs.window().facts;
+        same_window(&facts.window, observed)?;
+        if AppId::parse(&facts.app_id).as_ref() != Some(obs.app_id()) {
+            return Err(TargetRefusal::TargetChanged { field: "app" });
+        }
+
+        // 3. Not ours, not an auth surface, not denied, not restricted, not elevated.
+        if facts.window.pid == self.own_pid {
+            return Err(TargetRefusal::OwnWindow);
+        }
+        if builtin::is_auth_surface(&facts.app_id) {
+            return Err(TargetRefusal::AuthSurface);
+        }
+        if deny.is_denied(&facts.app_id) {
+            return Err(TargetRefusal::DeniedApp);
+        }
+        if builtin::is_restricted(&facts.app_id) {
+            return Err(TargetRefusal::RestrictedApp);
+        }
+        if facts.integrity > facts.own_integrity {
+            return Err(TargetRefusal::ElevatedTarget);
+        }
+
+        // 4-6. Re-resolve inside that hwnd only; is_password first; identity must match exactly.
+        let mut runtime_id = Vec::new();
+        let handle = if let Some(t) = slot {
+            runtime_id = t.identity.runtime_id.clone();
+            let req = ResolveRequest {
+                hwnd: observed.hwnd,
+                runtime_id: runtime_id.clone(),
+            };
+            let found = match resolver_call(&resolver, &self.resolver_busy, timeout, move |r| {
+                r.resolve(&req)
+            })? {
+                ResolvedTarget::Gone => return Err(TargetRefusal::StaleRef),
+                ResolvedTarget::Secure => return Err(TargetRefusal::SecureTarget),
+                ResolvedTarget::Found(f) => f,
+            };
+            if found.control_type != t.identity.control_type {
+                return Err(TargetRefusal::TargetChanged {
+                    field: "control_type",
+                });
+            }
+            if found.automation_id_hash != t.identity.automation_id_hash {
+                return Err(TargetRefusal::TargetChanged {
+                    field: "automation_id",
+                });
+            }
+            if found.label_hash != t.identity.label_hash {
+                return Err(TargetRefusal::TargetChanged { field: "label" });
+            }
+            if found.rect != t.rect {
+                return Err(TargetRefusal::TargetChanged { field: "rect" });
+            }
+            found.handle
+        } else {
+            // Window targets (Windows): the window / scroll-container element, resolved by the
+            // firewall so the driver never searches for it.
+            #[cfg(target_os = "windows")]
+            {
+                let (hwnd, scroll) = (observed.hwnd, kind == TargetKind::ScrollRoot);
+                resolver_call(&resolver, &self.resolver_busy, timeout, move |r| {
+                    r.resolve_window(hwnd, scroll)
+                })?
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                crate::target::ElementHandle::default()
+            }
+        };
+
+        // 6b. Cheap second foreground check AFTER the resolve: the user (or an app) may have
+        // switched windows while the element was being re-resolved.
+        let again: ForegroundFacts =
+            resolver_call(&resolver, &self.resolver_busy, timeout, |r| r.foreground())?;
+        if !again.on_user_desktop {
+            return Err(TargetRefusal::SessionPaused(PauseReason::AuthPrompt));
+        }
+        same_window(&again.window, observed)?;
+
+        // Heuristic refusals (lexicons): payment pages allow only scrolling; secret-named text
+        // targets are never typed into.
+        if kind != TargetKind::ScrollRoot && obs.flags().payment_suspected {
+            return Err(TargetRefusal::PaymentSuspected);
+        }
+        if let Some(t) = slot {
+            let text_target = t.editable
+                || matches!(
+                    t.role,
+                    crate::text::NodeRole::TextField | crate::text::NodeRole::ComboBox
+                );
+            if text_target && t.sensitive_label {
+                return Err(TargetRefusal::SensitiveTarget);
+            }
+        }
+
+        let guard = Arc::new(FocusCtx {
+            probe,
+            probe_busy: Arc::clone(&self.probe_busy),
+            probe_timeout: self.probe_timeout(),
+            resolver,
+            resolver_busy: Arc::clone(&self.resolver_busy),
+            target_timeout: timeout,
+        });
+        Ok(LiveTarget::new(
+            obs,
+            element,
+            kind,
+            observed.clone(),
+            runtime_id,
+            guard,
+            handle,
+        ))
+    }
+
+    fn probe_timeout(&self) -> Duration {
+        self.timeout
+    }
+
     fn read_tree(&self) -> Result<RawWindowTree, BlockReason> {
         let src = Arc::clone(&self.text_source);
         match with_deadline(&self.text_busy, self.text_timeout, move || {
@@ -392,7 +904,9 @@ impl<
         D: SecureFieldDetector + 'static,
         S: SessionProbe + 'static,
         T: ScreenTextSource + 'static,
-    > Firewall for PrivacyFirewall<D, S, T>
+        O: ObservationSource + 'static,
+        R: TargetResolver + 'static,
+    > Firewall for PrivacyFirewall<D, S, T, O, R>
 {
     fn preflight(&self) -> SessionState {
         catch_unwind(AssertUnwindSafe(|| self.preflight_inner())).unwrap_or_else(|_| {
@@ -410,5 +924,22 @@ impl<
         catch_unwind(AssertUnwindSafe(|| self.check_text_inner(deny))).unwrap_or_else(|_| {
             TextVerdict::Blocked(BlockReason::detection("firewall internal error"))
         })
+    }
+
+    fn observe(&self, deny: &dyn AppDenyPolicy) -> ObserveVerdict {
+        catch_unwind(AssertUnwindSafe(|| self.observe_inner(deny))).unwrap_or_else(|_| {
+            ObserveVerdict::Blocked(BlockReason::detection("firewall internal error"))
+        })
+    }
+
+    fn revalidate<'o>(
+        &self,
+        obs: &'o Observation,
+        sel: TargetSel,
+        deny: &dyn AppDenyPolicy,
+    ) -> Result<LiveTarget<'o>, TargetRefusal> {
+        catch_unwind(AssertUnwindSafe(|| self.revalidate_inner(obs, sel, deny))).unwrap_or(Err(
+            TargetRefusal::Blocked(BlockReason::detection("firewall internal error")),
+        ))
     }
 }

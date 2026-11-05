@@ -15,6 +15,11 @@ provider: ProviderChoice,
  */
 hotkey: string, 
 /**
+ * Kill-switch shortcut (S2-13), default `Ctrl+Alt+Shift+K`: at least two modifiers, one of
+ * them Ctrl/Alt/Super, and never the push-to-talk chord.
+ */
+kill_hotkey: string, 
+/**
  * Whether an API key is stored in the OS keychain (best effort); never persisted here and
  * the key itself is never returned.
  */
@@ -31,4 +36,20 @@ models_dir: string,
  * The default models directory, for display (filled by `Buddy`; empty before the shell
  * has set it). Never persisted.
  */
-default_models_dir: string, };
+default_models_dir: string, 
+/**
+ * Observe mode (dry run first), default ON: every agent task starts as a dry run that shows
+ * what it WOULD do and executes nothing; going live is a separate "Run it for real?" answer
+ * for that one task. Turning it off only skips that dry-run-first question: every approval
+ * and every gate check still applies.
+ */
+observe_mode: boolean, 
+/**
+ * The user allows the agent to run at all (default OFF). The agent also needs a writable
+ * activity log and a registered stop shortcut (`Status.agent_enabled`).
+ */
+agent_enabled: boolean, 
+/**
+ * Voice requests go to the agent instead of the chat (default OFF; needs `agent_enabled`).
+ */
+agent_mode: boolean, };
