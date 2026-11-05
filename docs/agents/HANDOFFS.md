@@ -6,6 +6,10 @@ _Owner: orch. Newest first. Max 60 entries; archive older ones to
 Format:
 
 ```
+## H-S3-5..8 2026-11-05 S3-5/6/7/8 -> coder x4, reviewer x2
+Asked: registry tooling, data paths/delete, release pipeline, exit test.
+Result: both APPROVED/CHANGES REQUESTED -> round 2 accepted by orch. Flake root cause: test-rig clock helper advanced at the wrong request.
+
 ## H-S3-4 2026-11-04 S3-4 -> coder x2 (+resume after container restart), reviewer
 Asked: first-run wizard.
 Result: round 1 CHANGES REQUESTED (MAJOR vision Off->Auto loosened), round 2 accepted (exhaustive monotonic property test).
