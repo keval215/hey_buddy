@@ -125,7 +125,7 @@ fn the_gate_binds_the_digest_and_keeps_the_500_ms_guard() {
         rig.gate.decide(id, &hex, Decision::Approve).err(),
         Some(GateError::UnknownApproval)
     );
-    let _grant = pending.wait().unwrap();
+    let _grant = guarded(move || pending.wait()).unwrap();
 
     // The digest of a finished approval cannot approve the next plan.
     let plan2 = rig.propose(&steps_json(&[SCROLL]));
@@ -170,7 +170,7 @@ fn the_origin_tier_cap_refuses_steps_even_with_a_plan_grant() {
         rig.gate
             .decide(pending.id(), &pending.digest_hex(), Decision::Approve)
             .unwrap();
-        let mut grant = pending.wait().expect("granted");
+        let mut grant = guarded(move || pending.wait()).expect("granted");
         rig.advance(300);
         let s = rig.bind(&plan, 0);
         match rig.gate.evaluate(&s, Some(&grant)) {

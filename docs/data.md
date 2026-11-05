@@ -29,7 +29,10 @@ Not in these folders:
 
 Off by default (`diagnostic_logs` setting). When on, it starts at the next app start, writes to `logs/hey_buddy.log`
 and rotates (oldest file deleted) so it never grows past 10 MiB. Only our own crates are logged; libraries that could
-log hosts or URLs are filtered out. If `logs` or the file is a link, nothing is written. Never uploaded.
+log hosts or URLs are filtered out. If `logs` or the file is a link, nothing is written. The `logs` folder is created readable by you only (mode 0700 on
+macOS/Linux). On macOS/Linux, if you delete the log files by hand while the app is logging, the app keeps writing to the
+deleted file until the next start (the space is freed when the app exits); on Windows the delete fails while the file is
+open. Use "Delete my data" and restart for a clean log. Never uploaded.
 
 ## Delete my data (Settings, "Your data")
 
@@ -41,6 +44,10 @@ Rules (code: `crates/core/src/data_paths.rs`):
 
 - Refused with `busy` while a task, voice turn or update operation is running (a model download is stopped first when
   you delete the models; for any other kind a running download also makes it `busy`).
+- While a deletion runs, starting a model download, an agent task or an update operation is refused with `busy`
+  (a flag is set before the busy checks). A start that passed its own check in the instant before the flag was set can
+  still slip in; deletion only ever removes fixed names, so the worst case is a file that is counted as "could not be
+  removed".
 - Only the fixed names above are removed, inside the config or data folder. Extra files you put there stay.
 - Symlinks, junctions and other reparse points are never followed or deleted through; they are skipped and counted as
   "could not be removed".

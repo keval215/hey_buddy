@@ -101,6 +101,15 @@ impl Drop for MicProbeGuard<'_> {
     }
 }
 
+/// Clears `Buddy::deleting` when a data deletion ends, however it ends.
+struct DeletingGuard<'a>(&'a AtomicBool);
+
+impl Drop for DeletingGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Why `request_engine_swap` refused. Fixed tokens (the `Display` text), no content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SwapError {
@@ -147,6 +156,9 @@ const AUDIT_NOTICE: &str =
 const MAX_KEY_LEN: usize = 512;
 
 pub struct Buddy {
+    /// A "Your data" deletion is running: downloads, agent tasks and update operations are
+    /// refused (`busy`) until it ends (set before the busy checks, cleared by `DeletingGuard`).
+    deleting: AtomicBool,
     settings: Mutex<SettingsStore>,
     inner: Mutex<Inner>,
     pub(crate) capture: Arc<dyn CaptureSource>,
@@ -256,6 +268,7 @@ impl Buddy {
             EngineSlot::new(observer(EngineSlotName::Tts)),
         );
         Self {
+            deleting: AtomicBool::new(false),
             settings: Mutex::new(settings),
             inner: Mutex::new(Inner {
                 turn_id: 0,
@@ -389,6 +402,9 @@ impl Buddy {
         id: &str,
         accept_unknown_checksum: bool,
     ) -> Result<(), DownloadError> {
+        if self.is_deleting() {
+            return Err(DownloadError::Busy);
+        }
         self.model_manager()
             .ok_or(DownloadError::Unavailable)?
             .start(id, accept_unknown_checksum)
@@ -755,6 +771,14 @@ impl Buddy {
         if confirm != kind.confirm_token() {
             return Err(DataError::NeedsConfirm);
         }
+        // Claim the deletion FIRST so a download, task or update operation that starts from now
+        // on is refused; whatever started before is caught by the checks below. (A start that
+        // passed its own check just before this flag was set can still slip in: the window is a
+        // few instructions, and its files are only ever removed by name, never followed.)
+        if self.deleting.swap(true, Ordering::SeqCst) {
+            return Err(DataError::Busy);
+        }
+        let _deleting = DeletingGuard(&self.deleting);
         if self.agent_busy() || lock(&self.current).is_some() || update_busy {
             return Err(DataError::Busy);
         }
@@ -786,6 +810,12 @@ impl Buddy {
             },
             _ => self.data_locations().delete(kind, builtin_registry()),
         }
+    }
+
+    /// True while a "Your data" deletion runs (starts of downloads, tasks and update operations
+    /// are refused meanwhile).
+    pub fn is_deleting(&self) -> bool {
+        self.deleting.load(Ordering::SeqCst)
     }
 
     fn downloading(&self) -> bool {

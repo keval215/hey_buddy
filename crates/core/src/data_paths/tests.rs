@@ -320,6 +320,24 @@ mod links {
     }
 
     #[test]
+    fn remove_tree_refuses_a_link_as_its_own_entry_dir() {
+        let d = tempfile::tempdir().unwrap();
+        let outside = d.path().join("outside");
+        put(&outside.join("precious.txt"), "keep");
+        let link = d.path().join("swapped");
+        symlink(&outside, &link).unwrap();
+        let t = remove_tree(&link, 0);
+        assert_eq!((t.removed, t.failed), (0, 1));
+        assert!(exists(&outside.join("precious.txt")));
+        assert!(exists(&link));
+        // A plain file is not a folder either.
+        let f = d.path().join("file");
+        put(&f, "x");
+        assert_eq!(remove_tree(&f, 0).failed, 1);
+        assert!(exists(&f));
+    }
+
+    #[test]
     fn a_linked_root_below_the_data_dir_is_not_walked() {
         // `data/models` is a real folder but `data` itself being reached through a link is the
         // shell's business; a link BELOW the root is what we refuse (covered above). Here the
@@ -402,6 +420,57 @@ fn delete_is_refused_while_busy_and_nothing_is_touched() {
         busy_state: BusyState::Idle,
     });
     assert!(b.data_delete(DataKind::Logs, tok, false).is_ok());
+}
+
+#[test]
+fn a_download_start_during_a_deletion_is_refused_and_the_flag_clears_after() {
+    use crate::activity::{Activity, ActivityProbe};
+    use crate::download::DownloadError;
+    use std::sync::{Mutex, Weak};
+
+    /// Asks the buddy to start a download while the deletion is running (the probe is called
+    /// from inside `data_delete`, after the deletion flag is set).
+    struct Prober {
+        b: Mutex<Weak<Buddy>>,
+        seen: Mutex<Vec<(bool, Result<(), DownloadError>)>>,
+    }
+    impl ActivityProbe for Prober {
+        fn activity(&self) -> Activity {
+            if let Some(b) = self.b.lock().unwrap().upgrade() {
+                let r = b.start_download("no-such-model", false);
+                self.seen.lock().unwrap().push((b.is_deleting(), r));
+            }
+            Activity {
+                task_live: false,
+                busy_state: policy::BusyState::Idle,
+            }
+        }
+    }
+
+    let d = tempfile::tempdir().unwrap();
+    let b = Arc::new(buddy(d.path()));
+    let p = Arc::new(Prober {
+        b: Mutex::new(Arc::downgrade(&b)),
+        seen: Mutex::new(Vec::new()),
+    });
+    b.set_activity_probe(p.clone());
+    assert!(!b.is_deleting());
+    assert!(b
+        .data_delete(DataKind::Logs, DataKind::Logs.confirm_token(), false)
+        .is_ok());
+    let seen = p.seen.lock().unwrap().clone();
+    assert!(!seen.is_empty());
+    for (deleting, r) in seen {
+        assert!(deleting);
+        assert_eq!(r, Err(DownloadError::Busy));
+    }
+    // The flag is gone: the same call is now judged on its merits.
+    assert!(!b.is_deleting());
+    *p.b.lock().unwrap() = Weak::new();
+    assert_eq!(
+        b.start_download("no-such-model", false),
+        Err(DownloadError::UnknownModel)
+    );
 }
 
 #[test]

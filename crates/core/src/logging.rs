@@ -89,7 +89,16 @@ impl State {
         if is_link(&self.dir) {
             return Err(std::io::ErrorKind::PermissionDenied.into());
         }
-        fs::create_dir_all(&self.dir)?;
+        {
+            let mut b = fs::DirBuilder::new();
+            b.recursive(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                b.mode(0o700);
+            }
+            b.create(&self.dir)?;
+        }
         if is_link(&self.dir) {
             return Err(std::io::ErrorKind::PermissionDenied.into());
         }
@@ -226,6 +235,25 @@ mod tests {
             .collect();
         v.sort();
         v
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_logs_dir_is_created_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join(LOG_DIR);
+        let log = RotatingLog::new(dir.clone(), 1000, 5);
+        let mut w = tracing_subscriber::fmt::MakeWriter::make_writer(&log);
+        w.write_all(b"x\n").unwrap();
+        let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        let f = fs::metadata(dir.join(LOG_BASE))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(f, 0o600);
     }
 
     #[test]

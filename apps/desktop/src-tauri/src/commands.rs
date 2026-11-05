@@ -224,9 +224,13 @@ pub fn clear_audit_log(b: B, confirm: Option<bool>) -> Result<AuditClearDto, Str
 /// Settings window only, read-only: counts and sizes of what the app has stored (no names, no
 /// paths, no content). Takes no parameter.
 #[tauri::command]
-pub fn data_overview(window: tauri::Window, b: B) -> Result<DataOverviewDto, String> {
+pub async fn data_overview(window: tauri::Window, b: B<'_>) -> Result<DataOverviewDto, String> {
     only_main_window(&window)?;
-    Ok(b.data_overview())
+    let b = b.inner().clone();
+    // Walks the folders (sizes): off the main thread.
+    tauri::async_runtime::spawn_blocking(move || b.data_overview())
+        .await
+        .map_err(|_| "io_error".to_string())
 }
 
 /// Settings window only, explicit and confirmed ("Your data"): erase one kind of stored data.
@@ -330,6 +334,15 @@ pub fn agent_status(window: tauri::Window, app: AppHandle, b: B) -> Result<Agent
     })
 }
 
+/// Update operations that start something are refused (`busy`) while a "Your data" deletion runs.
+fn refuse_while_deleting(b: &Buddy) -> Result<(), String> {
+    if b.is_deleting() {
+        Err("busy".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 /// Settings window only: what the Updates section shows. Local only: reads the session and two
 /// small files, never the network.
 #[tauri::command]
@@ -351,9 +364,11 @@ pub async fn update_status(
 #[tauri::command]
 pub async fn update_check(
     window: tauri::Window,
+    b: B<'_>,
     mgr: State<'_, UpdateManager>,
 ) -> Result<UpdateStatusDto, String> {
     only_main_window(&window)?;
+    refuse_while_deleting(&b)?;
     mgr.check().await.map_err(|e| e.code().to_string())
 }
 
@@ -361,8 +376,13 @@ pub async fn update_check(
 /// background (needs a successful check). Progress arrives as `update_progress`, then
 /// `update_done` or `update_failed`.
 #[tauri::command]
-pub fn update_download(window: tauri::Window, mgr: State<UpdateManager>) -> Result<(), String> {
+pub fn update_download(
+    window: tauri::Window,
+    b: B,
+    mgr: State<UpdateManager>,
+) -> Result<(), String> {
     only_main_window(&window)?;
+    refuse_while_deleting(&b)?;
     mgr.start_download().map_err(|e| e.code().to_string())
 }
 
@@ -384,11 +404,13 @@ pub fn update_cancel(window: tauri::Window, mgr: State<UpdateManager>) -> Result
 pub async fn update_install(
     window: tauri::Window,
     app: AppHandle,
+    b: B<'_>,
     mgr: State<'_, UpdateManager>,
     expected_version: String,
     allow_downgrade: bool,
 ) -> Result<(), String> {
     only_main_window(&window)?;
+    refuse_while_deleting(&b)?;
     // Re-hashing and launching the installer is heavy: off the main thread.
     let mgr = mgr.inner().clone();
     tauri::async_runtime::spawn_blocking(move || mgr.install(&expected_version, allow_downgrade))

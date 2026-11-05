@@ -283,6 +283,15 @@ fn remove_tree(dir: &Path, depth: u32) -> Tally {
         t.failed = 1;
         return t;
     }
+    // Re-check at entry that `dir` itself is a real folder, not a link swapped in since the
+    // caller looked (fail closed: do not even list it).
+    match fs::symlink_metadata(dir) {
+        Ok(md) if !link_like(&md) && md.is_dir() => {}
+        _ => {
+            t.failed = 1;
+            return t;
+        }
+    }
     let Ok(rd) = fs::read_dir(dir) else {
         t.failed = 1;
         return t;

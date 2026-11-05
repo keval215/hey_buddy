@@ -75,6 +75,17 @@ pub fn wait_until(mut c: impl FnMut() -> bool) {
     }
 }
 
+/// Run a blocking call on its own thread and panic if it has not returned within 30 s, so a
+/// removed defence that blocks forever FAILS instead of hanging the suite silently.
+pub fn guarded<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(Duration::from_secs(30))
+        .expect("timed out: a blocking wait never returned")
+}
+
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -731,13 +742,6 @@ impl Env {
         thread::spawn(move || {
             wait_until(|| b.pending_count() > 0);
             c.trip(KillReason::Hotkey);
-        })
-    }
-    pub fn advance_when_pending(&self, by: Duration) -> thread::JoinHandle<()> {
-        let (b, clock) = (self.broker.clone(), self.rig.clock.clone());
-        thread::spawn(move || {
-            wait_until(|| b.pending_count() > 0);
-            clock.advance(by);
         })
     }
     pub fn events(&self) -> Vec<&'static str> {
