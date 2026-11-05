@@ -12,7 +12,7 @@ asks before it acts.**
 Early development (Step 1: voice + screen-aware buddy). The whole push-to-talk turn is wired
 (hotkey, firewall, screen text, speech to text, local LLM, text to speech, overlay pointing) and
 tested end to end on fakes; running it for real needs the `real-voice` build below and is still
-being verified on macOS and Windows. See `docs/STEP1.md` for the plan and `docs/adr/` for
+being verified on Windows (macOS support is deferred). See `docs/STEP1.md` for the plan and `docs/adr/` for
 architecture decisions.
 
 ## Principles

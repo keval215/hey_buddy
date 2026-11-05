@@ -1056,6 +1056,8 @@ async fn blocked_paused_withheld_and_unsupported_screens_are_voice_only() {
         state: FirewallState,
         token: &'static str,
     }
+    // The unsupported-platform case below is only pushed on non-macOS/Windows targets.
+    #[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(unused_mut))]
     let mut cases = vec![
         Case {
             name: "detector error",

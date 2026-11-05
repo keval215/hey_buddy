@@ -2,8 +2,11 @@
 
 _Owner: orch. Keep under 150 lines._
 
+## Scope note (D-005)
+Windows only for now; macOS CI removed, macOS code frozen (kept behind cfg, unsupported).
+
 ## Current step
-Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
+Step 1 code complete (PR pending); Step 2 loaded (`docs/STEP2.md`)
 
 ## Branch
 `claude/trusting-pascal-ie39fj` (user decision: keep for all of Step 1; open PR to `main` when Step 1 is done)
@@ -29,11 +32,41 @@ Step 1 — Foreground buddy, privacy-first (`docs/STEP1.md`)
 
 Statuses: TODO · ARCH-PENDING · IN PROGRESS · IN REVIEW · CHANGES · DONE · BLOCKED · SKIPPED
 
+
+## Step 2 (plan: `docs/STEP2.md`; branches step2a/hardening then step2b/agent-harness)
+Gate G1 before any 2B coding: [ ] Step 1 PR CI green (Linux+Windows; macOS deferred D-005, user to confirm) [ ] user ran Step 1 exit test on Windows [ ] ADR 0003 + 0004 approved [ ] tier table signed off.
+
+| Ticket | Title | Status | Rounds | Notes |
+|---|---|---|---|---|
+| S2-1 | Real-machine fix pass (user findings) | BLOCKED | 0 | waiting on user: run docs/manual-tests.md on Windows, send findings |
+| S2-2 | Reload voice engines without restart (EngineSlot) | TODO | 0 |  |
+| S2-3 | Kokoro text frontend | TODO | 0 | hard stop if only copyleft phonemizer (espeak-ng is GPL) |
+| S2-4 | Model download screen | TODO | 0 |  |
+| S2-5 | Title and URL leak hardening | TODO | 0 |  |
+| S2-6 | Real hardware bench and CI | BLOCKED | 0 | needs user's bench JSON; CI = Linux+Windows (D-005) |
+| S2-7 | Settings polish | TODO | 0 |  |
+| S2-8 | [ARCH] Agent engine and approval model -> ADR 0003 | ARCH-PENDING | 0 | draft only (docs); user approval = hard stop |
+| S2-9 | [ARCH] Desktop driver and observation -> ADR 0004 | ARCH-PENDING | 0 | draft only (docs) |
+| S2-10 | Harness server crate | TODO | 0 | after G1 |
+| S2-11 | Policy gate and permission broker | TODO | 0 | HARD STOP: user signs off tier table first; after G1 |
+| S2-12 | Audit log | TODO | 0 | after G1 |
+| S2-13 | Kill switch | TODO | 0 | after G1 |
+| S2-14 | Driver trait, fake driver, Windows UIA adapter | TODO | 0 | after G1 |
+| S2-15 | Engine adapter | TODO | 0 | after G1 |
+| S2-16 | Approval UI | TODO | 0 | after G1 |
+| S2-17 | Plan-then-execute and injection defences | TODO | 0 | after G1 |
+| S2-18 | First agent task: read-only | TODO | 0 | after G1 |
+| S2-19 | Reversible actions: dry run then live | TODO | 0 | after G1 |
+| S2-20 | Consequential demo: fill form, stop before submit | TODO | 0 | after G1 |
+| S2-21 | Background agents and triggers | TODO | 0 | after G1 |
+| S2-22 | Red-team test suite | TODO | 0 | after G1 |
+| S2-23 | End-to-end wiring and Step 2 exit test | TODO | 0 | after G1 |
+
 ## In progress
 none - Step 1 complete; waiting for user go-ahead to open PR to `main`
 
 ## Blockers / waiting on user
-- User go-ahead to push/open the PR to `main` (branch is already pushed)
+- User go-ahead to open/merge the PR to `main` (branch is already pushed; check first CI run on Linux + Windows)
 - Definition of done still needs: CI green on GitHub (first run ever of macOS/Windows jobs) and the manual exit test on at least one real machine
 
 ## User must verify locally (macOS / Windows)

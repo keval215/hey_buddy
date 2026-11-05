@@ -80,6 +80,8 @@ fn downscale_rgb(src: &[u8], w: u32, h: u32, stride: u32, tw: u32, th: u32) -> V
             let (mut r, mut g, mut b) = (0u64, 0u64, 0u64);
             for y in y0..y1 {
                 let row = &src[y * stride + x0 * 4..y * stride + x1 * 4];
+                #[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
+                // as_chunks needs Rust 1.88 (MSRV 1.85)
                 for px in row.chunks_exact(4) {
                     r += u64::from(px[0]);
                     g += u64::from(px[1]);

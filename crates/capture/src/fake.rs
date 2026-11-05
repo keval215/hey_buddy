@@ -215,6 +215,7 @@ mod tests {
         }
     }
 
+    #[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)] // as_chunks needs Rust 1.88 (MSRV 1.85)
     fn has_color(f: &Frame, c: [u8; 4]) -> bool {
         f.pixels().chunks_exact(4).any(|p| p == c)
     }
