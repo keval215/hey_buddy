@@ -11,11 +11,11 @@ of these files. Folders:
 | Kind (UI name) | Path | What it holds | Can it hold content? |
 |---|---|---|---|
 | Settings | `settings.json` (config folder; `settings.json.tmp` only during a save) | Your choices (hotkeys, profile, provider, flags) and first-run wizard progress. | No content. No API key (that lives in the OS keychain, see below). |
-| Deny list | `deny_list.json` (config folder) | Apps you added to / removed from the built-in deny list (exe names, bundle ids). | App identifiers you typed. |
+| Deny list | `deny_list.json` (config folder; `deny_list.json.tmp` only during a save) | Apps you added to / removed from the built-in deny list (exe names, bundle ids). | App identifiers you typed. |
 | Activity log | `audit/` (data folder), files `audit-000001.jsonl`, `audit-000002.jsonl`, ... | Append-only record of what the agent was allowed to do: times, decisions, result codes, short digests, text LENGTHS. | Names of target apps and short control labels; never typed text, screen text, screenshots or audio. |
 | Models | `models/` (data folder), including `models/.downloads` | Model files you downloaded (`<id>.bin`, `<id>.onnx`, folders such as `phonon-31m`), partial downloads and "unverified" markers. | No personal content (public model weights). |
-| Update files | `updates/` (data folder): `installer.exe`, `envelope.json`, `kept/`, `run/`, `.downloads`, and `state.json` | A downloaded, signature-checked installer and its manifest; `state.json` remembers the highest manifest number seen (anti-rollback). | No personal content. |
-| Logs | `logs/` (data folder): `hey_buddy.log`, `hey_buddy.log.1` .. `.4` | Only when you switch on "Diagnostic log file": timestamps, event names and fixed codes from our own code. 5 files x 2 MiB at most. | None by rule: no screen text, audio, transcripts, replies, typed values, URLs or keys. |
+| Update files | `updates/` (data folder): `installer.exe`, `envelope.json` (`envelope.json.tmp` only while writing), `kept/`, `run/`, `.downloads`, and `state.json` | A downloaded, signature-checked installer and its manifest; `state.json` remembers the highest manifest number seen (anti-rollback). | No personal content. |
+| Logs | `logs/` (data folder): `hey_buddy.log`, `hey_buddy.log.1`, `hey_buddy.log.2`, `hey_buddy.log.3`, `hey_buddy.log.4` | Only when you switch on "Diagnostic log file": timestamps, event names and fixed codes from our own code. 5 files x 2 MiB at most. | None by rule: no screen text, audio, transcripts, replies, typed values, URLs or keys. |
 
 Not in these folders:
 
@@ -49,8 +49,8 @@ Rules (code: `crates/core/src/data_paths.rs`):
   the settings file also restarts the first-run wizard on the next start.
 - **Activity log**: the log is append-only by design, so erasing it is a deliberate user action that is itself
   recorded: a new file is started whose only line is a `cleared` record (with how many files were removed), made
-  durable, and only then the old files are removed. The writer also notices if its current file vanished (for example
-  deleted by hand) and starts a new file instead of writing into nothing. Not allowed while the agent is busy.
+  durable, and only then the old files are removed. The writer keeps writing into the new file, so the log keeps working after
+  an erase. Not allowed while the agent is busy.
 - **Update files**: `state.json` is NOT removed. It only holds the highest manifest number seen; erasing it would let
   an old, signed manifest be replayed. Delete it by hand if you really want to (it is two numbers, no content).
 

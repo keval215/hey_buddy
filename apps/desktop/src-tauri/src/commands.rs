@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use buddy_core::agent::{AgentRuntime, AgentStatusDto};
 use buddy_core::api::{
-    AuditClearDto, AuditExportDto, AuditPageDto, Decision, DenyListDto, DisplayDto, IssueCode,
-    LastRequestDto, ModelRow, PreviewDto, Settings, SettingsField, SettingsIssue, SettingsPatch,
-    SettingsResult, Status, SwapTarget,
+    AuditClearDto, AuditExportDto, AuditPageDto, DataDeleteDto, DataKind, DataOverviewDto,
+    Decision, DenyListDto, DisplayDto, IssueCode, LastRequestDto, ModelRow, PreviewDto, Settings,
+    SettingsField, SettingsIssue, SettingsPatch, SettingsResult, Status, SwapTarget,
 };
 use buddy_core::approval::{
     ApprovalBroker, ApprovalDecisionDto, ApprovalRequestDto, APPROVAL_WINDOW,
@@ -218,6 +218,36 @@ pub fn export_audit_log(b: B, dest_path: String) -> Result<AuditExportDto, Strin
 #[tauri::command]
 pub fn clear_audit_log(b: B, confirm: Option<bool>) -> Result<AuditClearDto, String> {
     b.clear_audit_log(confirm.unwrap_or(false))
+        .map_err(|e| e.to_string())
+}
+
+/// Settings window only, read-only: counts and sizes of what the app has stored (no names, no
+/// paths, no content). Takes no parameter.
+#[tauri::command]
+pub fn data_overview(window: tauri::Window, b: B) -> Result<DataOverviewDto, String> {
+    only_main_window(&window)?;
+    Ok(b.data_overview())
+}
+
+/// Settings window only, explicit and confirmed ("Your data"): erase one kind of stored data.
+/// `confirm` must be exactly the kind's token (`delete-audit-log`, ...), else `needs_confirm`.
+/// `busy` while a task, turn, download or update is running. No path parameter exists: the
+/// folders come from the shell. Fixed-token errors.
+#[tauri::command]
+pub async fn data_delete(
+    window: tauri::Window,
+    b: B<'_>,
+    mgr: State<'_, UpdateManager>,
+    kind: DataKind,
+    confirm: String,
+) -> Result<DataDeleteDto, String> {
+    only_main_window(&window)?;
+    let b = b.inner().clone();
+    let busy = mgr.is_busy();
+    // File work and the wait for a stopped download: off the main thread.
+    tauri::async_runtime::spawn_blocking(move || b.data_delete(kind, &confirm, busy))
+        .await
+        .map_err(|_| "io_error".to_string())?
         .map_err(|e| e.to_string())
 }
 
@@ -491,6 +521,8 @@ mod tests {
         "get_audit_entries",
         "export_audit_log",
         "clear_audit_log",
+        "data_overview",
+        "data_delete",
         "agent_start_task",
         "agent_status",
         "update_status",
@@ -772,6 +804,37 @@ mod tests {
             include_str!("../capabilities/preview.json"),
         ] {
             assert!(!cap.contains("wizard"));
+        }
+    }
+
+    #[test]
+    fn data_commands_check_the_label_and_take_no_path() {
+        let src = include_str!("commands.rs");
+        let prod = src.split("#[cfg(test)]\nmod tests").next().unwrap();
+        for name in ["data_overview", "data_delete"] {
+            let at = prod
+                .find(&format!("pub fn {name}("))
+                .or_else(|| prod.find(&format!("pub async fn {name}(")))
+                .expect("command");
+            let body = &prod[at..at + 700];
+            let first = body
+                .find("only_main_window(&window)?")
+                .expect("label check");
+            // The label check comes before anything else happens.
+            assert!(!body[..first].contains("b."), "{name}: check must be first");
+            let sig = &body[..body.find(") ->").expect("signature")];
+            for banned in ["path", "url", "Path", "PathBuf", "args"] {
+                assert!(!sig.contains(banned), "{name} takes {banned}: {sig}");
+            }
+        }
+        // The kind is the typed enum and the confirmation is a plain string token.
+        assert!(prod.contains("kind: DataKind,\n    confirm: String,"));
+        for cap in [
+            include_str!("../capabilities/approval.json"),
+            include_str!("../capabilities/overlay.json"),
+            include_str!("../capabilities/preview.json"),
+        ] {
+            assert!(!cap.contains("data-delete") && !cap.contains("data-overview"));
         }
     }
 

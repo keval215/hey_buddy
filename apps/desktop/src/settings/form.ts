@@ -47,6 +47,9 @@ export function buildPatch(current: Settings, draft: Settings): SettingsPatch {
   // Voice routing needs the agent: turning the agent off turns the routing off with it.
   const mode = draft.agent_enabled && draft.agent_mode;
   if (mode !== current.agent_mode) patch.agent_mode = mode;
+  if (draft.diagnostic_logs !== current.diagnostic_logs) {
+    patch.diagnostic_logs = draft.diagnostic_logs;
+  }
   return patch;
 }
 
@@ -322,6 +325,8 @@ export const AGENT_ENABLED_NOTE =
   "Off by default. The agent also needs the activity log to be writable and the stop shortcut " +
   "to be registered. It asks before it acts and can be stopped at any time.";
 
+export const DIAGNOSTIC_LOGS_NOTE =
+  "Writes a small log of what the app did (never what you said, saw or typed) to a local folder, at most 10 MB, never sent anywhere. Takes effect the next time the app starts. Off by default.";
 export const AGENT_MODE_NOTE =
   "Off by default. When on, what you say with push-to-talk goes to the agent as a task " +
   "instead of to the chat. Needs the agent to be enabled.";

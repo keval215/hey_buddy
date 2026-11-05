@@ -49,6 +49,8 @@ fn main() {
             if let Ok(data) = app.path().app_data_dir() {
                 buddy.set_models_dir(buddy_core::download::models_dir(&data));
                 // The activity log (<data>/audit). If it cannot be written the agent stays off.
+                // Local diagnostic log: only when the user switched it on (default OFF).
+                buddy_core::logging::init(&data, buddy.get_settings().diagnostic_logs);
                 buddy.set_data_dir(data);
             }
             shell::setup(app.handle(), &buddy)?;
@@ -83,6 +85,8 @@ fn main() {
         commands::get_audit_entries,
         commands::export_audit_log,
         commands::clear_audit_log,
+        commands::data_overview,
+        commands::data_delete,
         commands::kill_agent,
         commands::approval_ready,
         commands::approval_displayed,
@@ -123,6 +127,8 @@ fn main() {
         commands::get_audit_entries,
         commands::export_audit_log,
         commands::clear_audit_log,
+        commands::data_overview,
+        commands::data_delete,
         commands::kill_agent,
         commands::approval_ready,
         commands::approval_displayed,

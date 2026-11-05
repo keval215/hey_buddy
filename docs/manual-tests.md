@@ -943,3 +943,24 @@ Use a fresh user profile (or delete the `wizard` entry from `settings.json`). Bu
   were, or at Welcome after edits to the file).
 - [ ] Edit `settings.json`, set `"wizard": {"step": "Nope"}` and turn local-only to false: on the
   next start the wizard is back at Welcome and local-only is ON again.
+
+## Data and deletion (S3-5/S3-6)
+
+Windows UNTESTED (the logic is covered on Linux by `cargo test -p buddy-core` and `pnpm test`; these steps check the real
+folders, junctions and the installer). The folders are `%APPDATA%\dev.heybuddy.desktop` (VERIFY the exact name).
+
+- [ ] Fresh install, first start: no `logs` folder exists. Settings, "Your data": every row is listed with a size, and
+  nothing was deleted by opening the screen.
+- [ ] Turn on "Keep a local diagnostic log", Save, restart: `logs\hey_buddy.log` appears, holds only timestamps and event
+  names (no text you said, no window titles, no URLs). Turn it off and restart: no new lines are added.
+- [ ] Click "Delete..." on any row: nothing happens until "Yes, delete ..." is clicked; "Cancel" disarms it. Do this for
+  Settings (restart afterwards: defaults and the wizard come back), App deny list changes, Update files, Logs, Downloaded
+  models (files gone, a custom models folder untouched) and Agent activity log (a new log with one `cleared` line).
+- [ ] While a download is running, delete the models: the download stops, then the files go. While an agent task or an
+  update step is running, any delete answers "Something is running".
+- [ ] Make a junction inside the data folder (`mklink /J %APPDATA%\dev.heybuddy.desktop\logs C:\Temp\keep`) and click
+  Delete logs: `C:\Temp\keep` and its files are untouched and the result says one item could not be removed.
+- [ ] Uninstall without the checkbox: your data stays. Uninstall with the checkbox: compare what is left against
+  `docs/installer.md` (VERIFY) and note any difference.
+- [ ] Registry tool (maintainer, needs network): `cargo run -p registry-verify -- --id <id> --url <https url>` prints size,
+  sha256 and the licence hint and changes no file; an `http://` URL or one with `user:pass@` is refused.

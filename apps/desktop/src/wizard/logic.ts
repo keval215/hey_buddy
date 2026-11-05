@@ -165,7 +165,7 @@ export function modelsForProfile(rows: ModelRow[], ids: string[]): ModelRow[] {
 }
 
 export const NO_SOURCE_NOTE =
-  "A model marked \"no download source yet\" has no verified download address in this version, so it cannot be downloaded here. Nothing is guessed or fetched from elsewhere; you can place the file in the models folder yourself.";
+  "A model marked \"no download source yet\" has no verified download address in this version, so it cannot be downloaded here. Nothing is guessed or fetched from elsewhere; you can place the file in the models folder yourself (see docs/models.md in the project).";
 
 /** The hotkey step passes when the core accepted the chord and the OS registered it. */
 export function hotkeyAccepted(res: SettingsResult, status: Status): boolean {

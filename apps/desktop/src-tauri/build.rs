@@ -25,6 +25,8 @@ const COMMANDS: &[&str] = &[
     "get_audit_entries",
     "export_audit_log",
     "clear_audit_log",
+    "data_overview",
+    "data_delete",
     "kill_agent",
     "approval_ready",
     "approval_displayed",

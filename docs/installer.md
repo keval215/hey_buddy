@@ -83,5 +83,19 @@ manifest plus SHA-256 of ADR 0005, not Authenticode.
 
 The uninstaller removes the install dir and its registry entry. User data (settings, models, audit log) is LEFT by
 default. Tauri's uninstaller page has a "delete the application data" checkbox that is OFF by default; we keep it
-off and our `NSIS_HOOK_PREUNINSTALL` deletes nothing. S3-6 owns real data deletion and must re-check what Tauri's
-checkbox removes (the `dev.heybuddy.desktop` folders under AppData) against the data-path list before relying on it.
+off and our `NSIS_HOOK_PREUNINSTALL` deletes nothing. S3-6 compared the two (below).
+
+### Tauri's "delete the application data" checkbox vs our data list (S3-6)
+
+Tauri's NSIS uninstaller, when the user ticks the checkbox, removes the app's folders named after the bundle identifier
+(`dev.heybuddy.desktop`) under `%APPDATA%` and `%LOCALAPPDATA%`. VERIFY on Windows: which of the two folders it removes
+and whether it follows junctions inside them.
+
+Our own data (`docs/data.md`) lives in `app_config_dir` and `app_data_dir`, which on Windows are the same
+`%APPDATA%\dev.heybuddy.desktop` folder: `settings.json`, `deny_list.json`, `audit/`, `models/`, `updates/`, `logs/`.
+So the checkbox covers all of our files (VERIFY), plus anything Tauri or the webview keep there (the webview cache lives
+under `%LOCALAPPDATA%\dev.heybuddy.desktop\EBWebView`). Not covered by either: the API key in Windows Credential
+Manager (use "Remove key" in Settings first) and a custom models folder you chose.
+
+We do NOT change this: `hooks.nsh` still deletes nothing (installer-check forbids `Delete`/`RMDir` there). The in-app
+"Your data" section is the way to erase data while keeping the app; the checkbox is the way to erase it all on uninstall.

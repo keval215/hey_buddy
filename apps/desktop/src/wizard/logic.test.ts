@@ -41,6 +41,7 @@ const safe = {
   observe_mode: true,
   agent_enabled: false,
   agent_mode: false,
+  diagnostic_logs: false,
   vision_mode: "Auto",
   profile: "default",
 } as Settings;

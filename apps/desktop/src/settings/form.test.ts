@@ -47,6 +47,7 @@ const base: Settings = {
   observe_mode: true,
   agent_enabled: false,
   agent_mode: false,
+  diagnostic_logs: false,
 };
 
 describe("buildPatch", () => {
@@ -284,6 +285,12 @@ describe("agent settings", () => {
     expect(buildPatch(base, { ...base, agent_enabled: true, agent_mode: true })).toEqual({
       agent_enabled: true,
       agent_mode: true,
+    });
+  });
+  it("sends the diagnostic log switch only when it changed", () => {
+    expect(base.diagnostic_logs).toBe(false);
+    expect(buildPatch(base, { ...base, diagnostic_logs: true })).toEqual({
+      diagnostic_logs: true,
     });
   });
   it("never sends agent_mode on without the agent enabled", () => {

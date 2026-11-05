@@ -30,6 +30,9 @@ import type { SettingsPatch } from "../ipc/SettingsPatch";
 import type { Status } from "../ipc/Status";
 import type { TurnError } from "../ipc/TurnError";
 import type { TurnState } from "../ipc/TurnState";
+import type { DataDeleteDto } from "../ipc/DataDeleteDto";
+import type { DataKind } from "../ipc/DataKind";
+import type { DataOverviewDto } from "../ipc/DataOverviewDto";
 import type { UpdateStatusDto } from "../ipc/UpdateStatusDto";
 import type { MicProbeDto } from "../ipc/MicProbeDto";
 import type { WizardEvent } from "../ipc/WizardEvent";
@@ -171,6 +174,14 @@ export const api = {
    */
   updateInstall: (expectedVersion: string, allowDowngrade: boolean) =>
     invoke<void>("update_install", { expectedVersion, allowDowngrade }),
+  /** Settings window only. Read-only counts and sizes of what the app stored locally. */
+  dataOverview: () => invoke<DataOverviewDto>("data_overview"),
+  /**
+   * Settings window only, explicit and confirmed (see `data/logic.ts`): erase one kind of data.
+   * `confirm` must equal the kind's token or the core refuses (`needs_confirm`). No path.
+   */
+  dataDelete: (kind: DataKind, confirm: string) =>
+    invoke<DataDeleteDto>("data_delete", { kind, confirm }),
   /** Settings window only. First-run wizard progress; local read, runs no probe. */
   wizardState: () => invoke<WizardView>("wizard_state"),
   /** A wizard button (Next, Back, Skip, Retry, Finish, Rerun, or the hotkey result). Runs nothing. */

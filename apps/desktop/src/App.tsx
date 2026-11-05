@@ -10,6 +10,7 @@ import type { SettingsPatch } from "./ipc/SettingsPatch";
 import { ModelsPanel } from "./models/ModelsPanel";
 import { RequestFields } from "./request/RequestView";
 import { AuditLogPanel } from "./settings/AuditLogPanel";
+import { DataPanel } from "./data/DataPanel";
 import { DenyListPanel } from "./settings/DenyListPanel";
 import { UpdatePanel } from "./updates/UpdatePanel";
 import { Wizard } from "./wizard/Wizard";
@@ -18,6 +19,7 @@ import type { Status } from "./ipc/Status";
 import {
   AGENT_ENABLED_NOTE,
   AGENT_MODE_NOTE,
+  DIAGNOSTIC_LOGS_NOTE,
   LOCAL_ONLY_OFF_NOTE,
   OBSERVE_MODE_NOTE,
   agentOutcomeText,
@@ -397,6 +399,15 @@ export default function App() {
           Send what I say to the agent instead of the chat
         </label>
         <div className="text-neutral-500">{AGENT_MODE_NOTE}</div>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={draft.diagnostic_logs}
+            onChange={(e) => setDraft({ ...draft, diagnostic_logs: e.target.checked })}
+          />
+          Keep a local diagnostic log
+        </label>
+        <div className="text-neutral-500">{DIAGNOSTIC_LOGS_NOTE}</div>
         <div role="status">{agentStatusText(agent)}</div>
         {current.agent_enabled && (
           <div className="flex items-center gap-2">
@@ -463,6 +474,8 @@ export default function App() {
       <AuditLogPanel ready={status?.audit_ready ?? false} />
 
       <UpdatePanel />
+
+      <DataPanel />
 
       <section className="border-t pt-3 text-neutral-700">
         <div>Status: {phaseText(phase)}</div>

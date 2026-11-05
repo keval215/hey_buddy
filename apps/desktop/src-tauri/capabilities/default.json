@@ -26,6 +26,8 @@
     "allow-get-audit-entries",
     "allow-export-audit-log",
     "allow-clear-audit-log",
+    "allow-data-overview",
+    "allow-data-delete",
     "allow-kill-agent",
     "allow-debug-fake-task",
     "allow-agent-start-task",
