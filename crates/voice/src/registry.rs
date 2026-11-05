@@ -15,6 +15,12 @@ pub enum RegistryError {
     Bundled(String),
     #[error("model `{id}`: invalid sha256 `{value}` (expected TODO or 64 lowercase hex)")]
     BadSha256 { id: String, value: String },
+    #[error("model `{id}`: unsafe file path `{path}`")]
+    UnsafePath { id: String, path: String },
+    #[error(
+        "model `{0}`: `files` must be non-empty, unique, and url/sha256 must be TODO next to it"
+    )]
+    BadFiles(String),
     #[error("duplicate model id `{0}`")]
     DuplicateId(String),
     #[error("more than one default model for task {0:?}")]
@@ -71,6 +77,54 @@ pub struct ModelEntry {
     /// Ollama model tag (llm/vlm entries), `TODO-verify` where unsure.
     #[serde(default)]
     pub ollama_tag: Option<String>,
+    /// Exact download size in bytes, when known (sanity limit + disk-space display).
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+    /// Directory-shaped or multi-file models (S2-4): every file with its own url and sha256.
+    /// `path` is relative to the models directory (e.g. `phonon-31m/model.safetensors`).
+    /// When present, the entry-level `url` and `sha256` must stay `TODO`.
+    #[serde(default)]
+    pub files: Option<Vec<ModelFile>>,
+}
+
+/// One downloadable file of a multi-file model.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelFile {
+    /// Relative to the models directory; `/` separators only (see [`is_safe_rel_path`]).
+    pub path: String,
+    pub url: String,
+    pub sha256: String,
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+}
+
+const WINDOWS_RESERVED: &[&str] = &[
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
+/// A registry file path is safe when it is relative, uses `/` only and every component is a
+/// plain name of `[A-Za-z0-9._-]` (this rules out absolute paths, `..`, backslashes, drive
+/// letters, `:` alternate streams, UNC prefixes, trailing dots and Windows device names).
+pub fn is_safe_rel_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 200
+        && path.split('/').all(|c| {
+            !c.is_empty()
+                // No dot-prefixed names: keeps `.downloads` (our bookkeeping) and `.git`-likes out.
+                && !c.starts_with('.')
+                && !c.ends_with('.')
+                && c.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+                && !WINDOWS_RESERVED.contains(
+                    &c.split('.')
+                        .next()
+                        .unwrap_or_default()
+                        .to_ascii_lowercase()
+                        .as_str(),
+                )
+        })
 }
 
 /// One task assignment inside a profile.
@@ -138,6 +192,31 @@ impl Registry {
                     id: m.id.clone(),
                     value: m.sha256.clone(),
                 });
+            }
+            if let Some(files) = &m.files {
+                if files.is_empty() || m.url != "TODO" || m.sha256 != "TODO" {
+                    return Err(RegistryError::BadFiles(m.id.clone()));
+                }
+                for (j, f) in files.iter().enumerate() {
+                    if !is_safe_rel_path(&f.path) {
+                        return Err(RegistryError::UnsafePath {
+                            id: m.id.clone(),
+                            path: f.path.clone(),
+                        });
+                    }
+                    if files[..j]
+                        .iter()
+                        .any(|p| p.path.eq_ignore_ascii_case(&f.path))
+                    {
+                        return Err(RegistryError::BadFiles(m.id.clone()));
+                    }
+                    if !sha_ok(&f.sha256) {
+                        return Err(RegistryError::BadSha256 {
+                            id: m.id.clone(),
+                            value: f.sha256.clone(),
+                        });
+                    }
+                }
             }
         }
         for (name, p) in &self.profiles {
@@ -391,6 +470,86 @@ mod tests {
         // profiles section is required.
         let e = Registry::from_json_str(r#"{"schema_version":1,"models":[]}"#).unwrap_err();
         assert!(matches!(e, RegistryError::Parse(_)));
+    }
+
+    #[test]
+    fn files_list_and_size_parse_and_validate() {
+        let hex = "b".repeat(64);
+        let ok = entry(&format!(
+            r#"{{"size_bytes":10,"files":[{{"path":"m/a.bin","url":"TODO","sha256":"{hex}","size_bytes":5}},{{"path":"m/sub/b.json","url":"TODO","sha256":"TODO"}}]}}"#
+        ));
+        let r = Registry::from_json_str(&ok).unwrap();
+        let e = r.get("m").unwrap();
+        assert_eq!(e.size_bytes, Some(10));
+        assert_eq!(e.files.as_ref().unwrap().len(), 2);
+        // Unknown field inside a file entry is rejected.
+        let bad = entry(r#"{"files":[{"path":"a","url":"TODO","sha256":"TODO","x":1}]}"#);
+        assert!(matches!(
+            Registry::from_json_str(&bad).unwrap_err(),
+            RegistryError::Parse(_)
+        ));
+        // Empty list, entry-level url next to files, duplicate path, bad sha.
+        for extra in [
+            r#"{"files":[]}"#,
+            r#"{"url":"https://x.example/a","files":[{"path":"a","url":"TODO","sha256":"TODO"}]}"#,
+            r#"{"files":[{"path":"a","url":"TODO","sha256":"TODO"},{"path":"A","url":"TODO","sha256":"TODO"}]}"#,
+        ] {
+            assert!(matches!(
+                Registry::from_json_str(&entry(extra)).unwrap_err(),
+                RegistryError::BadFiles(_)
+            ));
+        }
+        let e = Registry::from_json_str(&entry(
+            r#"{"files":[{"path":"a","url":"TODO","sha256":"nothex"}]}"#,
+        ))
+        .unwrap_err();
+        assert!(matches!(e, RegistryError::BadSha256 { .. }));
+    }
+
+    #[test]
+    fn unsafe_file_paths_rejected() {
+        for p in [
+            "/etc/passwd",
+            "../x",
+            "a/../x",
+            "a//b",
+            "./a",
+            "a\\b",
+            "C:/x",
+            "C:x",
+            "a:stream",
+            "\\\\srv\\share",
+            "con",
+            "NUL.txt",
+            "a.",
+            ".downloads",
+            ".downloads/work/x",
+            ".git/config",
+            "a/.hidden",
+            "",
+            "a/",
+            "caf\u{e9}",
+        ] {
+            assert!(!is_safe_rel_path(p), "{p}");
+            let j = entry(&format!(
+                r#"{{"files":[{{"path":{},"url":"TODO","sha256":"TODO"}}]}}"#,
+                serde_json::to_string(p).unwrap()
+            ));
+            assert!(
+                matches!(
+                    Registry::from_json_str(&j).unwrap_err(),
+                    RegistryError::UnsafePath { .. }
+                ),
+                "{p}"
+            );
+        }
+        for p in [
+            "a.bin",
+            "kokoro-voices/af_heart.bin",
+            "phonon-31m/w_1.safetensors",
+        ] {
+            assert!(is_safe_rel_path(p), "{p}");
+        }
     }
 
     #[test]

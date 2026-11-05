@@ -40,13 +40,13 @@ Gate G1 before any 2B coding: [ ] Step 1 PR CI green (Linux+Windows; macOS defer
 |---|---|---|---|---|
 | S2-1 | Real-machine fix pass (user findings) | BLOCKED | 0 | waiting on user: run docs/manual-tests.md on Windows, send findings |
 | S2-2 | Reload voice engines without restart (EngineSlot) | TODO | 0 |  |
-| S2-3 | Kokoro text frontend | TODO | 0 | hard stop if only copyleft phonemizer (espeak-ng is GPL) |
-| S2-4 | Model download screen | TODO | 0 |  |
-| S2-5 | Title and URL leak hardening | TODO | 0 |  |
+| S2-3 | Kokoro text frontend | DONE | 2 | round 1 BLOCKER: Unicode case-fold panic (İ) fixed; follow-ups: max-length split in tts_stream for unpunctuated long sentences (affects Kokoro 510-token cap); espeak-ng runtime option = user decision, not built; ascii_base lacks ß/æ/œ |
+| S2-4 | Model download screen | DONE | 2 | round 1 MAJOR: unverified marker written after rename (fail-open) fixed; follow-ups: registry has NO real urls/sha256/size_bytes/files lists yet (user to supply verified values; phonon-31m + kokoro need `files` lists); real_voice notice could point to Models table |
+| S2-5 | Title and URL leak hardening | DONE | 2 | code approved round 1; round 2 doc/test-only fixes accepted by orch (coder ran e2e x5); follow-up: S4-4 blacks out chrome + caption band in images; English-only lexicons documented |
 | S2-6 | Real hardware bench and CI | BLOCKED | 0 | needs user's bench JSON; CI = Linux+Windows (D-005) |
-| S2-7 | Settings polish | TODO | 0 |  |
-| S2-8 | [ARCH] Agent engine and approval model -> ADR 0003 | ARCH-PENDING | 0 | draft only (docs); user approval = hard stop |
-| S2-9 | [ARCH] Desktop driver and observation -> ADR 0004 | ARCH-PENDING | 0 | draft only (docs) |
+| S2-7 | Settings polish | DONE | 1 | follow-ups -> S4-8: core-side confirm gap when hand-edited deny file has built-in in both add+remove; rate-limit/OS confirm for built-in removals (compromised settings webview); invalid hotkey resets to default even if a good custom one existed; `mnt`/`media` in HOME_PARENTS; stale download events after models-dir switch; document models_dir > HEY_BUDDY_MODELS_DIR precedence |
+| S2-8 | [ARCH] Agent engine and approval model -> ADR 0003 | ARCH-PENDING | 0 | ADR 0003 DRAFT written (PROPOSED, docs/adr/0003-agent-engine-and-approvals.md); waiting on user approval + 5 open questions; tier table needs separate sign-off |
+| S2-9 | [ARCH] Desktop driver and observation -> ADR 0004 | ARCH-PENDING | 0 | ADR 0004 DRAFT written (PROPOSED, docs/adr/0004-desktop-driver.md); waiting on user approval + 5 open questions (§18) |
 | S2-10 | Harness server crate | TODO | 0 | after G1 |
 | S2-11 | Policy gate and permission broker | TODO | 0 | HARD STOP: user signs off tier table first; after G1 |
 | S2-12 | Audit log | TODO | 0 | after G1 |
@@ -62,28 +62,55 @@ Gate G1 before any 2B coding: [ ] Step 1 PR CI green (Linux+Windows; macOS defer
 | S2-22 | Red-team test suite | TODO | 0 | after G1 |
 | S2-23 | End-to-end wiring and Step 2 exit test | TODO | 0 | after G1 |
 
+
+## Autonomous mode (D-008) — Steps 3 and 4 (plans: `docs/STEP3.md`, `docs/STEP4.md`)
+Branches: step2a/hardening -> step2b/agent-harness -> step3/packaging -> step4/firewall-v1. One DRAFT PR per step (orch has NO working GitHub credentials in this session: `gh` token fails and no github MCP tool; PR bodies prepared in `docs/pr/`, user opens them). Never merge.
+
+| Ticket | Title | Status | Rounds | Notes |
+|---|---|---|---|---|
+| S3-1 | Windows installer build (unsigned) | TODO | 0 | after Step 2 |
+| S3-2 | [ARCH] Auto-update design -> ADR 0005 | TODO | 0 | provisional |
+| S3-3 | Update manifest parser + signature verifier (no real keys) | TODO | 0 |  |
+| S3-4 | First-run wizard | TODO | 0 |  |
+| S3-5 | Registry data tooling (real urls/checksums) | TODO | 0 | filling values = BLOCKED-ON-USER |
+| S3-6 | Data locations, logs, delete my data | TODO | 0 |  |
+| S3-7 | Release pipeline (draft only) | TODO | 0 |  |
+| S3-8 | Packaging exit test + checklist | TODO | 0 |  |
+| S4-1 | [ARCH] OCR engine + image redaction -> ADR 0006 | TODO | 0 | provisional |
+| S4-2 | PII detector (pure) | TODO | 0 |  |
+| S4-3 | OCR adapters + fakes | TODO | 0 | real adapter BLOCKED-ON-USER to verify |
+| S4-4 | Firewall v1 image pipeline | TODO | 0 |  |
+| S4-5 | PII scrub on text path | TODO | 0 |  |
+| S4-6 | Stronger lock/auth detection | TODO | 0 |  |
+| S4-7 | Threat-model doc | TODO | 0 |  |
+| S4-8 | Internal adversarial review pass | TODO | 0 |  |
+| S4-9 | Deterministic fuzz suite in CI | TODO | 0 |  |
+| S4-10 | Step 4 exit test + checklist | TODO | 0 |  |
+
+## 2B execution order (dependency-driven, branch step2b/agent-harness)
+S2-14b action crate -> S2-14a firewall observe/revalidate -> S2-11 policy gate -> S2-12 audit -> S2-13 kill switch -> S2-14c driver+fake -> S2-14d WinActuator (cfg) -> S2-10 protocol/sandbox -> S2-15 engine adapter -> S2-16 approval UI -> S2-17 plan/injection -> S2-18 -> S2-19 -> S2-20 -> S2-21 -> S2-22 red-team -> S2-23 e2e wiring. Gate G1 items are satisfied provisionally by D-006/D-007/D-008 (user absent).
+
+## Provisional decisions (pending user review)
+D-006 ADR 0003 (agent engine/tiers/approvals), D-007 ADR 0004 (desktop driver), ADR 0005/0006 when drafted. Tier defaults per D-006.
+
+## BLOCKED-ON-USER (needs a real machine or user data)
+S2-1 Windows findings; S2-6 bench JSON; registry urls/sha256/files (S3-5); Windows runtime of every cfg(windows) adapter; signing key for updates (S3-3, offline); real Chrome/Edge/Firefox/Electron UIA trees (S2-5); OCR adapter (S4-3).
+
+## When the user returns — test order
+1. Step 1 exit test (`docs/manual-tests.md` Exit test) 2. 2A: engine swap, Kokoro samples, model download (needs real registry values), title/URL leak checks 3. 2B: observe mode, approvals, kill switch, red-team 4. Step 3: install, wizard, update check (fake) 5. Step 4: OCR/PII image checks, lock/auth signals. Then read provisional ADRs 0003-0006, open the draft PRs.
+
 ## In progress
-none - Step 1 complete; waiting for user go-ahead to open PR to `main`
+2B starting: S2-14b (branch step2b/agent-harness); ADR 0003 + 0004 drafted, waiting on user
 
 ## Blockers / waiting on user
+- ADR 0003 (S2-8) + ADR 0004 (S2-9): read, answer their open questions (5 each), approve; plus tier table sign-off (ADR 0003 §5) = Gate G1 items
+- ADR inconsistency to reconcile at approval: ADR 0003 §6 action digest vs ADR 0004 §7 canonical digest; ADR 0003 sandboxes the engine (planner-only, no observations) while ADR 0004 has one-observation-one-action — compatible but confirm
+- S2-1/S2-6: user's Windows findings + bench JSON
 - User go-ahead to open/merge the PR to `main` (branch is already pushed; check first CI run on Linux + Windows)
 - Definition of done still needs: CI green on GitHub (first run ever of macOS/Windows jobs) and the manual exit test on at least one real machine
 
-## User must verify locally (macOS / Windows)
-- T1: macOS/Windows CI jobs, `tauri build`, icon.ico/icns have never run (check first CI run on GitHub)
-- T2: fill registry URLs/sha256/licences (all TODO); licence gate removed (D-004): download UI must show each model's licence
-- T4 (untested here): real Whisper + Silero inference with model files (`SILERO_VAD_MODEL`, `ORT_DYLIB_PATH`, `HEY_BUDDY_MODELS_DIR`); real mic via cpal; whisper.cpp (cmake, C++, libclang) + cpal builds on macOS/Windows; CI does not build `stt-whisper`/`mic-cpal` features yet
-- T5 (untested here): real Phonon 31m checkpoint (assumed dir layout `<models_dir>/phonon-31m/config.json`), real speakers (cpal), Kokoro model; ptts needs Rust >=1.85 (workspace MSRV bumped); build with --release for latency
-- T6 (untested here): real STT/VAD/TTS bench paths and Apple-silicon target selection; run on your Mac/Windows per README "Latency benchmark"
-- T7 (untested here): all of capture/macos.rs (never compiled; needs swiftc/macOS 14+, Screen Recording permission); Windows WGC runtime (D3D11 readback, exe lookup, foreground re-check); UWP apps can't be deny-listed by exe; unverified deny-list ids (Keeper, NordPass, Enpass, RoboForm, Dashlane exe, bitwarden safari)
-- T8 (untested here): all of firewall/platform/{windows,macos}.rs (UIA IsPassword, AX walk, enable-accessibility poll, lock-screen probes, 1500/2500 ms detector timeouts, system-owner allow-list); test on Safari, Chrome, Electron, native login dialogs
-- DESKTOP TICKET MUST: declare PerMonitorV2 DPI awareness in the Windows manifest (Windows firewall detector blocks every check until it does); Box<dyn Firewall> from platform_firewall() is display-independent now
-- T9 (untested here): KeyringStore real behaviour (mac/Win), real Ollama (`think:false`, num_ctx, keep_alive on your version; qwen3:4b / qwen3-vl:2b tags) and Anthropic calls (#[ignore] manual tests in llm docs), ring/reqwest/rustls builds + rustls-platform-verifier on mac/Windows (need C cross-compiler)
-- T13 (untested here): ALL of macos_text.rs / windows_text.rs (AX/UIA calls, focus resolution, bundle-id/exe-name resolution, Chromium lazy trees, latency vs 1200 ms budget); manual title-leak checks (Safari, Chrome/Edge, Electron, native dialogs) in docs/manual-tests.md
-- T10 (untested here): all macOS/Windows runtime of tray, hotkey, overlay (transparency, click-through, never focus, capture exclusion WDA_EXCLUDEFROMCAPTURE/pid), DPI manifest effect, macOS compile of glue (objc2 cc), webview permissions after dropping core:default; macos-private-api => not eligible for Mac App Store (told user)
-- T11 (untested here): preview window creation/focus/always-on-top, Windows capture exclusion of preview window, preview:// loading on WebKit/WebView2 (http://preview.localhost on Windows), Keychain/Credential Manager read/write, emit_to scoping
-- Follow-ups for desktop/core: core/src/consent.rs is the ONLY place that may mint CloudOptIn (T12); Anthropic model id must come from settings (no default); call `exclude_window_from_capture` for every overlay/panel window (Win); capture before overlay takes focus; show LoadedDenyList.error/removed_defaults and tell user to add banking apps; platform capture() is blocking -> spawn_blocking; confirm per-monitor DPI awareness in Tauri manifest
-- Follow-ups: Kokoro text frontend; shared ort_util module; speaker_cpal should surface stream errors; CI job for tts-phonon/speaker-cpal + `cargo deny --all-features`; real 1024px app icon; tighten CSP `unsafe-inline` later
+## User must verify locally
+See `docs/agents/VERIFY-LOCALLY.md` (full list) and `docs/manual-tests.md` (steps).
 
 ## Done
 T0-T13 (all tickets approved by reviewer)

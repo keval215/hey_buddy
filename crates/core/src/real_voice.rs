@@ -20,29 +20,13 @@ use voice::registry::{Registry, Task};
 use voice::speaker_cpal::CpalSpeaker;
 use voice::stt_whisper::WhisperStt;
 use voice::vad_silero::SileroVad;
-use voice::{tts_phonon, AudioInput, AudioOutput, SttProvider, TtsProvider, Vad, VoiceError};
+use voice::{tts_phonon, SttProvider, TtsProvider, Vad, VoiceError};
 
+use crate::engine_slot::{EngineLoader, SwapFailure, TOKEN_LOAD_FAILED};
 use crate::settings::builtin_registry;
 use crate::turn::VadFactory;
 
-/// Environment variable that overrides the models directory.
-pub const MODELS_DIR_ENV: &str = "HEY_BUDDY_MODELS_DIR";
-
-pub struct RealVoice {
-    pub audio_in: Arc<dyn AudioInput>,
-    pub audio_out: Arc<dyn AudioOutput>,
-    pub vad: VadFactory,
-    pub stt: Arc<dyn SttProvider>,
-    pub tts: Arc<dyn TtsProvider>,
-}
-
-/// `HEY_BUDDY_MODELS_DIR` if set and non-empty, else `<app_data_dir>/models`.
-pub fn models_dir(app_data_dir: &Path) -> PathBuf {
-    match std::env::var_os(MODELS_DIR_ENV) {
-        Some(v) if !v.is_empty() => PathBuf::from(v),
-        _ => app_data_dir.join("models"),
-    }
-}
+pub use crate::download::{models_dir, SharedDir, MODELS_DIR_ENV};
 
 /// One expected model that is not on disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,54 +82,83 @@ pub fn missing_models(profile: &str, dir: &Path) -> Vec<MissingModel> {
     out
 }
 
-/// Load the adapters for `profile` from `dir`. Slow (loads the models): call off the UI
-/// thread. The first failure is returned (`ModelMissing` names the path).
-pub fn build(profile: &str, dir: &Path) -> Result<RealVoice, VoiceError> {
-    let reg = builtin_registry();
-    let p = reg
-        .profile(profile)
-        .ok_or_else(|| VoiceError::Backend("unknown profile".into()))?;
-    let stt = WhisperStt::from_registry(reg, &p.stt.model, dir)?;
-    let tts = tts_phonon::from_registry(reg, dir)?;
-    let vad_model = vad_id(reg);
-    // Load once now so a missing file or onnxruntime library is reported at startup; each
-    // turn gets a fresh detector (it keeps per-utterance state).
-    drop(SileroVad::from_registry(reg, &vad_model, dir)?);
-    let dir = dir.to_path_buf();
-    let vad: VadFactory = Arc::new(move || {
-        Ok(Box::new(SileroVad::from_registry(
-            builtin_registry(),
-            &vad_model,
-            &dir,
-        )?) as Box<dyn Vad>)
-    });
-    Ok(RealVoice {
-        audio_in: Arc::new(CpalMic::new()),
-        audio_out: Arc::new(CpalSpeaker::new()),
-        vad,
-        stt: Arc::new(stt),
-        tts: Arc::new(tts),
-    })
+/// Builds the swappable engines from the models directory (`request_engine_swap`, ticket
+/// S2-2). Startup load is just the first swap. Slow: runs on the swap thread.
+pub struct RealLoader {
+    dir: SharedDir,
 }
 
-/// The whole engine for the real adapters: platform firewall, `deny`, the voice adapters
-/// for `profile` from `dir`, and `providers`. Slow (loads models): call off the UI thread.
-pub fn engine_deps(
-    profile: &str,
-    dir: &Path,
+impl RealLoader {
+    pub fn new(dir: PathBuf) -> Self {
+        Self::shared(Arc::new(std::sync::Mutex::new(dir)))
+    }
+
+    /// A loader that follows the models directory setting (S2-7).
+    pub fn shared(dir: SharedDir) -> Self {
+        Self { dir }
+    }
+
+    fn dir(&self) -> PathBuf {
+        self.dir.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+}
+
+/// Map an adapter error to the fixed token (+ expected path for a missing file).
+fn failure(e: &VoiceError) -> SwapFailure {
+    match e {
+        VoiceError::ModelMissing { path } => SwapFailure::missing(path.display().to_string()),
+        _ => SwapFailure::new(TOKEN_LOAD_FAILED),
+    }
+}
+
+impl EngineLoader for RealLoader {
+    fn load_stt(&self, model_id: &str) -> Result<Arc<dyn SttProvider>, SwapFailure> {
+        let stt = WhisperStt::from_registry(builtin_registry(), model_id, &self.dir())
+            .map_err(|e| failure(&e))?;
+        Ok(Arc::new(stt))
+    }
+
+    fn load_tts(&self, model_id: &str) -> Result<Arc<dyn TtsProvider>, SwapFailure> {
+        // Phonon 31m is the only TTS the real build loads (Kokoro is a later ticket).
+        if model_id != "phonon-31m" {
+            return Err(SwapFailure::new(TOKEN_LOAD_FAILED));
+        }
+        let tts =
+            tts_phonon::from_registry(builtin_registry(), &self.dir()).map_err(|e| failure(&e))?;
+        Ok(Arc::new(tts))
+    }
+}
+
+/// The engine pieces that do not change with the profile: platform firewall, `deny`, cpal
+/// mic and speaker, the Silero VAD factory and `providers`. STT and TTS are not here: they
+/// are loaded into the slots with `Buddy::request_engine_swap`. Slow (loads the VAD): call off
+/// the UI thread.
+pub fn base_deps(
+    dir: SharedDir,
     deny: Arc<capture::DenyList>,
     providers: Arc<dyn crate::turn::ProviderSource>,
     runtime: tokio::runtime::Handle,
 ) -> Result<crate::turn::EngineDeps, VoiceError> {
-    let v = build(profile, dir)?;
+    let reg = builtin_registry();
+    let vad_model = vad_id(reg);
+    // Load once now so a missing file or onnxruntime library is reported at startup; each
+    // turn gets a fresh detector (it keeps per-utterance state).
+    let current = || dir.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    drop(SileroVad::from_registry(reg, &vad_model, &current())?);
+    let vad: VadFactory = Arc::new(move || {
+        let now = dir.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        Ok(Box::new(SileroVad::from_registry(
+            builtin_registry(),
+            &vad_model,
+            &now,
+        )?) as Box<dyn Vad>)
+    });
     Ok(crate::turn::EngineDeps {
         firewall: crate::setup::platform_firewall(),
         deny,
-        audio_in: v.audio_in,
-        audio_out: v.audio_out,
-        vad: v.vad,
-        stt: v.stt,
-        tts: v.tts,
+        audio_in: Arc::new(CpalMic::new()),
+        audio_out: Arc::new(CpalSpeaker::new()),
+        vad,
         providers,
         runtime,
     })
@@ -181,14 +194,17 @@ mod tests {
     }
 
     #[test]
-    fn build_reports_the_missing_stt_file() {
+    fn loader_reports_the_missing_stt_file_with_its_path() {
         let d = tempfile::tempdir().unwrap();
-        match build("default", d.path()) {
-            Err(VoiceError::ModelMissing { path }) => {
-                assert_eq!(path, d.path().join("whisper-small.bin"))
-            }
-            Err(e) => panic!("unexpected error: {e}"),
-            Ok(_) => panic!("must not load anything"),
-        }
+        let l = RealLoader::new(d.path().to_path_buf());
+        let f = l.load_stt("whisper-small").err().expect("must not load");
+        assert_eq!(f.token, "model_missing");
+        assert_eq!(
+            f.path.as_deref(),
+            Some(d.path().join("whisper-small.bin").to_str().unwrap())
+        );
+        let f = l.load_tts("phonon-31m").err().expect("must not load");
+        assert_eq!(f.token, "model_missing");
+        assert_eq!(l.load_tts("kokoro").err().unwrap().token, "load_failed");
     }
 }

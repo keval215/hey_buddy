@@ -9,11 +9,19 @@
     "allow-get-status",
     "allow-get-settings",
     "allow-update-settings",
+    "allow-request-engine-swap",
     "allow-list-displays",
     "allow-cancel-turn",
     "allow-debug-point",
     "allow-get-last-request",
     "allow-set-api-key",
-    "allow-clear-api-key"
+    "allow-clear-api-key",
+    "allow-list-models",
+    "allow-start-download",
+    "allow-cancel-download",
+    "allow-get-deny-list",
+    "allow-add-deny-entry",
+    "allow-remove-deny-entry",
+    "allow-reset-deny-list-to-defaults"
   ]
 }

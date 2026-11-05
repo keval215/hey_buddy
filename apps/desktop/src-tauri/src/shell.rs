@@ -5,9 +5,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use buddy_core::api::{
-    FirewallStatus, Phase, PointEvent, ReplyDelta, TranscriptEvent, TurnError, TurnState,
-    EVT_FIREWALL_STATUS, EVT_TURN_ERROR, EVT_TURN_POINT, EVT_TURN_REPLY_DELTA, EVT_TURN_STATE,
-    EVT_TURN_TRANSCRIPT,
+    DownloadDone, DownloadFailed, DownloadProgress, EngineSwapEvent, FirewallStatus, Phase,
+    PointEvent, ReplyDelta, TranscriptEvent, TurnError, TurnState, EVT_DOWNLOAD_DONE,
+    EVT_DOWNLOAD_FAILED, EVT_DOWNLOAD_PROGRESS, EVT_ENGINE_SWAP_DONE, EVT_ENGINE_SWAP_FAILED,
+    EVT_ENGINE_SWAP_REQUESTED, EVT_FIREWALL_STATUS, EVT_TURN_ERROR, EVT_TURN_POINT,
+    EVT_TURN_REPLY_DELTA, EVT_TURN_STATE, EVT_TURN_TRANSCRIPT,
 };
 use buddy_core::{Buddy, EventSink};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -67,6 +69,27 @@ impl EventSink for TauriEvents {
     }
     fn error(&self, e: TurnError) {
         let _ = self.0.emit(EVT_TURN_ERROR, e);
+    }
+    // Engine swaps: model id, fixed error token and the expected model path only. Settings
+    // window only (the overlays and the preview panel have no use for them).
+    fn engine_swap_requested(&self, ev: EngineSwapEvent) {
+        let _ = self.0.emit_to(MAIN, EVT_ENGINE_SWAP_REQUESTED, ev);
+    }
+    fn engine_swap_done(&self, ev: EngineSwapEvent) {
+        let _ = self.0.emit_to(MAIN, EVT_ENGINE_SWAP_DONE, ev);
+    }
+    fn engine_swap_failed(&self, ev: EngineSwapEvent) {
+        let _ = self.0.emit_to(MAIN, EVT_ENGINE_SWAP_FAILED, ev);
+    }
+    // Model downloads: id, byte counts and fixed error tokens only; settings window only.
+    fn download_progress(&self, ev: DownloadProgress) {
+        let _ = self.0.emit_to(MAIN, EVT_DOWNLOAD_PROGRESS, ev);
+    }
+    fn download_done(&self, ev: DownloadDone) {
+        let _ = self.0.emit_to(MAIN, EVT_DOWNLOAD_DONE, ev);
+    }
+    fn download_failed(&self, ev: DownloadFailed) {
+        let _ = self.0.emit_to(MAIN, EVT_DOWNLOAD_FAILED, ev);
     }
 }
 

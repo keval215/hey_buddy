@@ -32,6 +32,10 @@ fn main() {
             ));
             buddy.set_event_sink(Arc::new(shell::TauriEvents(app.handle().clone())));
             app.manage(buddy.clone());
+            // Enables the models screen. Creates nothing and downloads nothing by itself.
+            if let Ok(data) = app.path().app_data_dir() {
+                buddy.set_models_dir(buddy_core::download::models_dir(&data));
+            }
             shell::setup(app.handle(), &buddy)?;
             engine::start(app.handle(), &buddy, &dir);
             Ok(())
@@ -42,6 +46,7 @@ fn main() {
         commands::get_status,
         commands::get_settings,
         commands::update_settings,
+        commands::request_engine_swap,
         commands::list_displays,
         commands::cancel_turn,
         commands::debug_point,
@@ -50,12 +55,20 @@ fn main() {
         commands::get_pending_preview,
         commands::set_api_key,
         commands::clear_api_key,
+        commands::list_models,
+        commands::start_download,
+        commands::cancel_download,
+        commands::get_deny_list,
+        commands::add_deny_entry,
+        commands::remove_deny_entry,
+        commands::reset_deny_list_to_defaults,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         commands::get_status,
         commands::get_settings,
         commands::update_settings,
+        commands::request_engine_swap,
         commands::list_displays,
         commands::cancel_turn,
         commands::preview_decision,
@@ -63,6 +76,13 @@ fn main() {
         commands::get_pending_preview,
         commands::set_api_key,
         commands::clear_api_key,
+        commands::list_models,
+        commands::start_download,
+        commands::cancel_download,
+        commands::get_deny_list,
+        commands::add_deny_entry,
+        commands::remove_deny_entry,
+        commands::reset_deny_list_to_defaults,
     ]);
 
     builder

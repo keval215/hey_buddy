@@ -55,7 +55,7 @@ Known limitations of the T13 readers:
 - Deeper labelled Groups ARE emitted (e.g. `group "Settings"`), unless they intersect a padded
   secure rect (geometric drop).
 - StaticText/Heading values are emitted at any depth: a page title shown as visible heading text is treated as page content, not as a window title (the D-003 title boundary is by role, not by content).
-- Tab labels are dropped (they are other pages' titles); a tab may show as an unlabeled `tab`.
+- Tabs are dropped with their whole subtree (S2-5; their labels are other pages' titles), so no `tab` line is emitted any more. See "Title and URL leak checks (S2-5)".
 - Labels longer than ~4 KB are dropped.
 - Windows: if a field has no ValuePattern or `CurrentValue` fails, its state is unknown and is
   reported as `[empty]` (privacy-safe, but may be wrong).
@@ -286,6 +286,131 @@ a Windows credential prompt or any desktop app with a password box):
 - [ ] Push-to-talk only: the microphone indicator (macOS orange dot / Windows mic icon) is on
       only while the key is held and a moment after, never at idle.
 
+## Voice engine reload without restart (S2-2) - UNTESTED on this machine (Windows, real models)
+
+Design: `update_settings` only stores the profile. The settings window then calls the
+`request_engine_swap` command (`slot`: `stt`, `tts` or `all`, default `all`); the app also calls it
+once at startup, so the first load is just the first swap. Models come from the current profile
+(validated against the registry; STT never on the GPU), load on a background thread, and are swapped
+in only after the load succeeded and no push-to-talk turn is active. Events (settings window only):
+`engine_swap_requested`, `engine_swap_done`, `engine_swap_failed`. Nothing is downloaded.
+
+Needs `--features real-voice`, models in place (see "Prerequisites" above) for both profiles
+(`whisper-small.bin` and `whisper-base.bin`).
+
+- [ ] Change Profile `default` -> `low-memory` and Save. The settings window shows
+      "Speech recognition: loading whisper-base…" and "Speech synthesis: loading phonon-31m…",
+      then "... ready", without restarting the app. The next push-to-talk turn works. Switch back
+      to `default`: loading -> ready again.
+- [ ] Failure: rename `whisper-base.bin` away, switch to `low-memory`. The status shows
+      "Speech recognition: whisper-base could not load, the model file is missing. Expected at
+      <models dir>\whisper-base.bin". The old (small) engine keeps working: the next turn still
+      transcribes. The same note is in the status notices. Put the file back and switch the
+      profile away and back (there is no retry button yet): loading -> ready, the note disappears.
+- [ ] Swap during a held hotkey: hold the hotkey (do not release), switch the profile in the
+      settings window and Save. The status stays "loading…" until the turn is over; the turn
+      finishes with the old engines (no cut-off or repeated speech); after it returns to idle the
+      status turns to "ready". The next turn uses the new engines.
+- [ ] Two quick profile changes while a turn is active: only the last profile ends up loaded.
+- [ ] Start the app with a model file missing: a press of the hotkey says the voice engines are
+      not loaded; the status names the missing file. After placing it, switch the profile
+      away and back to load without restarting.
+
+## Model download (S2-4) - UNTESTED on this machine (Windows, real download)
+
+CI only exercises the downloader against a fake server on 127.0.0.1. Nothing in the registry has a
+real download URL yet (`url`/`sha256` are `TODO`, never invented), so those rows show "no download
+source yet". To try a real download, put a verified HTTPS `url` and `sha256` (and `size_bytes`) on
+one small entry in `models/registry.json` (e.g. `silero-vad-v5` or `whisper-base`), rebuild, then:
+
+- [ ] Open Settings. The Models table lists every registry model with task, size, licence line
+      ("Licence: X - shown for information", plus a note when not commercial-ok), disk needed vs
+      free and a status. Opening Settings must not start any download (check the network monitor).
+- [ ] A row with a real URL and checksum: Download starts only after the click; progress bar moves;
+      afterwards the file sits in `<app data>/models` (e.g. `silero-vad-v5.onnx`), the row says
+      "ready" and `<models>/.downloads/work` is gone.
+- [ ] Cancel mid-download: the row goes back to "not downloaded"; `<models>/.downloads/work/<id>`
+      is empty or gone (no `.part` left).
+- [ ] Resume: start a large download, kill the app (Task Manager) halfway, restart, click Retry/
+      Download again: it continues from the `.part` size (watch the network speed/bytes) and the
+      final file is accepted. (Only works when the server sends an ETag or Last-Modified.)
+- [ ] Bad checksum: change one hex digit of `sha256` for that entry (or serve a different file),
+      download: error "did not match its checksum and was deleted"; no final file, no `.part`.
+- [ ] Unknown checksum: an entry with a real `url` but `sha256: "TODO"` shows "checksum unknown"
+      and needs a second click ("Download without verification"); afterwards status "unverified".
+- [ ] Disk space: the table shows needed vs free; with a drive that has less free space than the
+      model needs, Download is disabled with "Not enough free disk space".
+- [ ] Only one download at a time (other Download buttons are disabled while one runs).
+- [ ] After a download of a model the active profile uses (e.g. the STT model): "Load now" appears
+      and loads it without restarting. A failed engine load shows "Retry load" under Status.
+- [ ] A redirect or URL that is not https must be refused (edit the registry `url` to `http://...`:
+      the row stays downloadable only if the app rejects it with "HTTPS only").
+
+## Title and URL leak checks (S2-5) - UNTESTED on this machine (Windows browsers / Electron)
+
+Automated Linux tests cover the redactor, the walker and the request path with hostile fixtures;
+the real UIA trees of the browsers below are not checkable here. Contract: only the app id says
+"where you are"; titles, tab names and URLs never reach the request. Repeat on Chrome, Edge,
+Firefox and one Electron app (VS Code, Slack or Discord). Use a throwaway page you control, e.g. a
+local HTML file served at `http://localhost:8000/` with
+`<title>MARKER_TITLE_7731 reset your password</title>` and a link
+`?token=MARKER_RESET_TOKEN_0123456789abcdef` in the URL (add a second tab with another unique
+title, a bookmark named `MARKER_BOOKMARK_55`, and download a file named `MARKER_DOWNLOAD_55.txt`).
+
+- [ ] Hold the hotkey on that page and ask "where am I?"; open Settings -> Last request.
+- [ ] The screen text starts with `app: chrome.exe` / `msedge.exe` / `firefox.exe` / the Electron
+      exe and nothing else about the location: no title, no path, no URL.
+- [ ] `MARKER_TITLE_7731`, `MARKER_RESET_TOKEN_0123456789abcdef`, `localhost:8000`, the second tab's
+      title, `MARKER_BOOKMARK_55` and `MARKER_DOWNLOAD_55` appear nowhere in the screen text, the
+      transcript, the request body (open `preview://last/body`), the console or the log.
+- [ ] There is no `tab` line, no `text field "Address and search bar"` (or similar address / search
+      bar line) and nothing from the bookmarks bar or the downloads shelf / bubble.
+- [ ] Page links whose visible text is a URL show as `link "[link]"`; a long token on the page
+      shows as `[token]`; an e-mail address on the page shows as `[email]`.
+- [ ] Numbering still works: ask "where is the Sign in button?" on a login page and the pointer
+      lands on it (ids are dense, chrome nodes take no number).
+- [ ] Note any browser where the chrome still shows (record the role and name that leaked so the
+      lexicon in `crates/firewall/src/scrub.rs` can be extended) and any ordinary page text wrongly
+      replaced (false positives are listed in `docs/title-url-audit.md`).
+- [ ] Non-English UI: repeat in Chrome / Edge with a non-English browser language. The localised
+      bookmarks bar and downloads shelf may not match the English lexicon and could leak child
+      link names or file names (address bar and tabs are dropped by role and stay safe). Record
+      the role and name of anything that leaks.
+- [ ] Known limitations (`docs/title-url-audit.md`): all-uppercase licence keys, tokens under 24
+      characters, `reset?token=abc`, percent-encoded URLs (path stays), `evil\u{3002}example`,
+      `evil[.]example` and `evil dot example` are not scrubbed; do not file them as new bugs.
+- [ ] Screenshots (VisionMode Auto / Always): the title bar, tabs and address bar are visible in the
+      image until S4-4; check that cloud requests show the image in the preview panel first.
+
+## Settings (S2-7) - UNTESTED on this machine (Windows, real app)
+
+Logic is unit-tested in core (validation tables, fallbacks, deny-list editor, capability files)
+and in vitest; nothing below has been run in the real window. Open Settings from the tray.
+
+Settings and fallbacks (after each Save the page shows what was NOT saved, in plain words):
+- [ ] Profile: switch `default` <-> `low-memory`. On low-memory the Vision select is disabled, shows Off and says why; switching back restores your earlier choice. The voice engines reload (status lines).
+- [ ] Vision: Off / Auto / Always change and persist after a restart (default profile).
+- [ ] Hotkey: change to `Ctrl+Shift+K`; it works at once and after a restart. Then try each of `Space`, `Shift+A`, `Ctrl`, `Ctrl+Ctrl+A`, `Ctrl+F25`: while typing a hint appears; after Save: "Your hotkey '...' was not saved: needs Ctrl/Alt/Super" (or the format hint) and the DEFAULT `Ctrl+Alt+Space` is in the box and works.
+- [ ] Hotkey taken by another app (for example a shortcut another tool already registered): Save reports "another app is already using that shortcut" and the previous hotkey keeps working.
+- [ ] Models folder: empty shows the default path as placeholder and in the text below. Set `D:\hey-models` (create it or let it be creatable): the Models table re-reads (rows now Missing, or Ready if you copied models there) and the engines reload from it (engine status lines; a missing file names the new path). Set it back to empty: default again.
+- [ ] Models folder, invalid: each of `models`, `C:models`, `C:\a\..\b`, `\\host\share`, `C:\CON`, `C:\`, `C:\Windows\x`, a path to a file, a path with a hidden control or right-to-left character: Save says "was not saved" with the reason and the folder is the default. Nothing is created by just saving.
+- [ ] Local only: turn OFF shows the amber explanation that every cloud request still shows a preview and needs your Send; turn ON again hides it. Provider/model id/key: the line under the model id lists what cloud still needs (Anthropic, Local only off, model id, key).
+- [ ] Model id with a space or `/`: not saved, cloud stays unavailable, message names the reason.
+- [ ] Key set/clear and the last-request viewer still work (unchanged).
+- [ ] Corrupt `settings.json` (put `{not json` in it, restart): defaults, Local only on, a red "settings file could not be read" line; the next Save heals it.
+- [ ] `settings.json` never contains an API key (open it and look).
+
+Deny-list editor ("Apps the buddy never looks at"):
+- [ ] Defaults are listed with a `built-in` tag; the banking notice is shown.
+- [ ] Add `Chrome.EXE` (shows as `chrome.exe`, under "Added by you"). Next push-to-talk with Chrome in front: nothing from the screen is read/sent and the spoken explanation says the app is protected. Remove it: the next request reads Chrome again.
+- [ ] Invalid ids (`my app`, `a/b`, 129 characters, empty) cannot be added (button disabled, reason shown).
+- [ ] Removing a built-in (for example `cmd.exe`) asks "Stop protecting this app?" first; "Keep it" changes nothing; "Yes, remove it" removes it, the notice "You removed 1 built-in app" appears and the Status notices list it.
+- [ ] Remove built-ins one by one down to the last entry: the last one cannot be removed ("The list can never be empty") unless you added your own app first.
+- [ ] "Restore built-in apps" asks for a confirm, then brings all removed built-ins back; your own additions stay.
+- [ ] With a cloud preview panel open (Anthropic, Local only off), change the deny list in Settings: the preview closes and nothing is sent.
+- [ ] `deny_list.json` in the config folder is `{"add": [...], "remove": [...]}`; corrupt it by hand and restart: built-in list in use and a red line says so; the first edit rewrites it.
+- [ ] The preview and overlay windows cannot call the deny-list commands (devtools: `invoke("get_deny_list")` from the preview window is refused).
+
 ## Step 2 packaging note
 
 - [ ] macOS bundled builds (not `tauri dev`) need an `Info.plist` with
@@ -304,3 +429,36 @@ Copied from `docs/agents/STATE.md` "User must verify locally"; T7 / T8 items.
 - [ ] T13: all of `firewall/platform/{macos_text,windows_text}.rs` (see "Text path (T13)")
 - [ ] T8: test on Safari, Chrome, Electron and native login dialogs
 - [ ] Desktop ticket must declare PerMonitorV2 DPI awareness in the Windows manifest (the Windows firewall detector blocks every check until it does)
+
+## Kokoro samples to listen to (S2-3, untested on the dev machine)
+
+Kokoro is the optional fallback voice (feature `tts-kokoro`; Phonon stays the default). Needs, in
+`<models dir>`: `kokoro-82m.onnx`, `kokoro-82m.config.json` (the model's `config.json`),
+`cmudict.dict` (CMU Pronouncing Dictionary, BSD-style licence), `kokoro-voices/<voice>.bin`
+(raw little-endian f32 style rows of 256 values; `KOKORO_VOICE`, default `af_heart`), plus
+`ORT_DYLIB_PATH`. A missing file gives a "model file missing: <path>" error naming it.
+`HEY_BUDDY_MODELS_DIR=<dir> ORT_DYLIB_PATH=<lib> cargo test -p voice --features tts-kokoro text_to_speech -- --nocapture`
+runs the synthesis test (it prints SKIP when something is absent). Listen for these:
+
+- [ ] "It costs $5.50 and the book is Rs. 250." (dollars and cents, then "two hundred fifty rupees")
+- [ ] "Send ₹1,00,000 by 15/08/2025." ("one hundred thousand rupees", "August fifteenth twenty twenty five")
+- [ ] "The meeting is on March 5th, 2024 at 3:45 pm." (ordinal, year as "twenty twenty four", "three forty five p m")
+- [ ] "Mr. Rao pays 12.5% tax; e.g. 1st of May." ("mister", "twelve point five percent", "for example")
+- [ ] "Open https://example.com/docs or mail me@example.com." (just "link" and "email address")
+- [ ] "It is 25°C, 5 km away, and a 500 MB download. 🎉" (units spelled, emoji silent)
+- [ ] A made-up word ("Zorblax") and an acronym ("NASA"): dictionary-free rules should be intelligible, not perfect.
+Note: no heteronym handling ("read", "lead") and stress is approximate; compare with Phonon.
+
+Known caveats / VERIFY items for Kokoro (also in the `phonemize_en` module docs):
+
+- Phoneme symbols missing from the model's vocab are silently dropped.
+- Over 510 phoneme tokens the tail is truncated at a word break and NOT spoken. The streaming path
+  only splits sentences at `.`, `!`, `?` or newline, so it does not protect against one very long
+  sentence without terminators.
+- Accented Latin letters are spoken as their base letter ("café" as "cafe"); other non-ASCII
+  letters (Cyrillic, CJK, ß ...) are skipped as word breaks.
+- The `voice` argument to `synth` is ignored; the voice is fixed at load (`KOKORO_VOICE`).
+- [ ] VERIFY voice layout: expects `kokoro-voices/<voice>.bin` = raw little-endian f32, `[510,1,256]`
+  (onnx-community `voices/<name>.bin` style). `.pt` voices and kokoro-onnx `voices-v1.0.bin`/npz do NOT load.
+- [ ] VERIFY the ARPAbet to misaki symbol mapping (listen for wrong vowels) and that the vocab file
+  is really named `kokoro-82m.config.json`.

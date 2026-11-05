@@ -7,8 +7,13 @@
 //!   window; the walker never sees any other window).
 //! - For every node `is_secure` is asked FIRST. A secure node: only its rect is read, it is
 //!   reported with no label/value, and its children are never requested.
-//! - The window root's label is never read; neither is the label of a `WebArea`, a `Tab`, or a
-//!   Group/Other at depth <= 2 (titles, D-003).
+//! - The window root's label is never read; neither is the label of a `WebArea`, a `Tab`, a
+//!   nested `Window` (UIA TitleBar), or a Group/Other at depth <= 2 (titles, D-003). Neither is
+//!   the text value of such nodes (Document / web area value = the URL).
+//! - Browser chrome (S2-5): Tab / nested Window nodes, address-bar-like editable nodes, tab
+//!   strips, bookmark bars and download shelves are dropped WITH their subtree. Below a dropped
+//!   node only `is_secure` (first) and `children` are asked, plus the rect of secure nodes. The
+//!   label of an editable node is read only to decide this and is discarded when dropped.
 //! - Editable fields: only `has_value` (emptiness) is asked, never their text.
 //! - More than `max_nodes` nodes, deeper than `max_depth`, or past the deadline => `Err`.
 // Used by the macOS/Windows sources and tests only.
@@ -21,6 +26,7 @@ use std::time::{Duration, Instant};
 
 use frame::Rect;
 
+use crate::text::drops_subtree;
 use crate::{FirewallError, NodeRole, RawTextNode, RawWindowTree};
 
 pub(crate) const MAX_NODES: usize = 20_000;
@@ -80,10 +86,11 @@ pub(crate) fn walk_tree<C: TreeCursor>(
 ) -> Result<RawWindowTree, FirewallError> {
     let mut nodes: Vec<RawTextNode> = Vec::new();
     let mut window_rect: Option<Rect> = None;
-    let mut stack: Vec<(C::Node, usize)> = vec![(root, 0)];
+    // (node, depth, below a dropped browser-chrome node)
+    let mut stack: Vec<(C::Node, usize, bool)> = vec![(root, 0, false)];
     let mut visited = 0usize;
 
-    while let Some((n, depth)) = stack.pop() {
+    while let Some((n, depth, dropped)) = stack.pop() {
         visited += 1;
         if visited > limits.max_nodes
             || depth > limits.max_depth
@@ -114,6 +121,27 @@ pub(crate) fn walk_tree<C: TreeCursor>(
             continue; // never descend into a secure node
         }
 
+        let kids_of_dropped = |c: &mut C,
+                               n: &C::Node,
+                               stack: &mut Vec<(C::Node, usize, bool)>,
+                               visited: usize|
+         -> Result<(), FirewallError> {
+            let kids = c.children(n)?;
+            let remaining = limits.max_nodes.saturating_sub(visited + stack.len());
+            if kids.len() > remaining {
+                return Err(fail());
+            }
+            for k in kids.into_iter().rev() {
+                stack.push((k, depth + 1, true));
+            }
+            Ok(())
+        };
+        if dropped {
+            // Below dropped browser chrome: nothing is read except the children.
+            kids_of_dropped(c, &n, &mut stack, visited)?;
+            continue;
+        }
+
         let rect = if depth == 0 {
             let r = c.rect(&n)?.filter(|r| !r.is_empty()).ok_or_else(fail)?;
             window_rect = Some(r);
@@ -126,6 +154,11 @@ pub(crate) fn walk_tree<C: TreeCursor>(
         } else {
             c.role(&n)?
         };
+        // Tabs and nested windows (UIA TitleBar) are dropped with their subtree, unread.
+        if depth > 0 && matches!(role, NodeRole::Window | NodeRole::Tab) {
+            kids_of_dropped(c, &n, &mut stack, visited)?;
+            continue;
+        }
         let editable = c.is_editable(&n)?;
         // Labels that can carry a window/page title (D-003) are never read: window, web area,
         // tabs (other pages' titles), and top-level containers (depth <= 2), whose names in
@@ -133,25 +166,30 @@ pub(crate) fn walk_tree<C: TreeCursor>(
         let titleish = matches!(role, NodeRole::Window | NodeRole::WebArea | NodeRole::Tab)
             || (depth <= TOP_LEVEL_DEPTH && matches!(role, NodeRole::Group | NodeRole::Other));
         let label = if titleish { None } else { c.label(&n)? };
-        let (value, has_value) = if editable || role == NodeRole::TextField {
-            (None, c.has_value(&n)?)
-        } else if matches!(role, NodeRole::StaticText | NodeRole::Heading) {
-            let v = c.text_value(&n)?;
-            let has = v.as_deref().is_some_and(|s| !s.trim().is_empty());
-            (v, has)
-        } else {
-            (None, false)
-        };
-        nodes.push(RawTextNode {
+        let mut node = RawTextNode {
             depth: depth as u16,
             role,
             secure: false,
             editable,
             label,
-            value,
-            has_value,
+            value: None,
+            has_value: false,
             rect,
-        });
+        };
+        // Address bars, tab strips, bookmark bars, download shelves: dropped before any value is
+        // asked for (the label read above is discarded with the node).
+        if depth > 0 && drops_subtree(&node) {
+            kids_of_dropped(c, &n, &mut stack, visited)?;
+            continue;
+        }
+        if editable || role == NodeRole::TextField {
+            node.has_value = c.has_value(&n)?;
+        } else if matches!(role, NodeRole::StaticText | NodeRole::Heading) {
+            let v = c.text_value(&n)?;
+            node.has_value = v.as_deref().is_some_and(|s| !s.trim().is_empty());
+            node.value = v;
+        }
+        nodes.push(node);
 
         let kids = c.children(&n)?;
         // Cap before pushing: more children than the remaining node budget can never succeed.
@@ -160,7 +198,7 @@ pub(crate) fn walk_tree<C: TreeCursor>(
             return Err(fail());
         }
         for k in kids.into_iter().rev() {
-            stack.push((k, depth + 1));
+            stack.push((k, depth + 1, false));
         }
     }
 
@@ -497,5 +535,106 @@ mod tests {
         f.nodes[4].rect = None;
         let t = walk_tree(&mut f, 0, "a".into(), &limits()).unwrap();
         assert!(t.nodes[4].rect.is_none());
+    }
+
+    // ---- S2-5 ----
+
+    #[test]
+    fn titles_and_page_values_are_never_read_for_title_roles() {
+        // 0 window -> [1 titlebar(Window) -> [2 text], 3 webarea -> [4 text], 4.. ]
+        let mut f = Fake {
+            nodes: vec![
+                node(NodeRole::Window, vec![1, 3]),
+                node(NodeRole::Window, vec![2]),
+                node(NodeRole::StaticText, vec![]),
+                node(NodeRole::WebArea, vec![4]),
+                node(NodeRole::StaticText, vec![]),
+            ],
+            ..Default::default()
+        };
+        let t = walk_tree(&mut f, 0, "a".into(), &limits()).unwrap();
+        for i in [0usize, 1, 3] {
+            assert!(!f.read(i, "label"), "label of title node {i}");
+            assert!(!f.read(i, "text_value"), "value of title node {i}");
+            assert!(!f.read(i, "has_value"), "has_value of title node {i}");
+        }
+        // The title bar's children are dropped unread; page content is kept.
+        let what: Vec<_> = f.log.iter().filter(|e| e.0 == 2).map(|e| e.1).collect();
+        assert_eq!(what, vec!["secure", "children"]);
+        assert!(f.read(4, "text_value"));
+        let shape: Vec<NodeRole> = t.nodes.iter().map(|n| n.role).collect();
+        assert_eq!(
+            shape,
+            vec![NodeRole::Window, NodeRole::WebArea, NodeRole::StaticText]
+        );
+        assert!(t.nodes.iter().all(|n| n.label.is_none() || n.depth > 0));
+    }
+
+    #[test]
+    fn address_bar_tab_strip_and_shelves_are_dropped_unread_below_the_label() {
+        // 0 win -> [1 group(depth1) -> [2 edit "Address and search bar" -> [3 text],
+        //           4 toolbar "Bookmarks bar" -> [5 button], 6 tab -> [7 button],
+        //           8 group "Tab strip" -> [9 button], 10 button "ok"]]
+        let mut addr = node(NodeRole::TextField, vec![3]);
+        addr.editable = true;
+        addr.label = Some("Address and search bar");
+        addr.value = Some("https://evil.example/?t=SECRET");
+        let mut bm = node(NodeRole::Toolbar, vec![5]);
+        bm.label = Some("Bookmarks bar");
+        let mut strip = node(NodeRole::Group, vec![9]);
+        strip.label = Some("Tab strip");
+        let mut f = Fake {
+            nodes: vec![
+                node(NodeRole::Window, vec![1]),
+                node(NodeRole::Group, vec![11]),
+                addr,
+                node(NodeRole::StaticText, vec![]),
+                bm,
+                node(NodeRole::Button, vec![]),
+                node(NodeRole::Tab, vec![7]),
+                node(NodeRole::Button, vec![]),
+                strip,
+                node(NodeRole::Button, vec![]),
+                node(NodeRole::Button, vec![]),
+                // 11: wrapper at depth 2 (labels of top-level groups are not read at all)
+                node(NodeRole::Group, vec![2, 4, 6, 8, 10]),
+            ],
+            ..Default::default()
+        };
+        let t = walk_tree(&mut f, 0, "a".into(), &limits()).unwrap();
+        // Dropped nodes never reach the output, nor do their descendants.
+        let n_out = t.nodes.len();
+        assert_eq!(n_out, 4, "window, group, wrapper, ok-button: {:?}", t.nodes);
+        // The address bar value/emptiness is never asked for; descendants only get
+        // is_secure + children.
+        assert!(!f.read(2, "text_value") && !f.read(2, "has_value"));
+        for d in [3usize, 5, 7, 9] {
+            let what: Vec<_> = f.log.iter().filter(|e| e.0 == d).map(|e| e.1).collect();
+            assert_eq!(what, vec!["secure", "children"], "descendant {d}");
+        }
+        // Secure is still asked first for every node.
+        for i in 0..=11usize {
+            assert_eq!(f.log.iter().find(|e| e.0 == i).unwrap().1, "secure");
+        }
+    }
+
+    #[test]
+    fn secure_nodes_below_dropped_chrome_are_still_reported_hidden() {
+        // 0 win -> [1 tab -> [2 password]]
+        let mut pw = node(NodeRole::TextField, vec![3]);
+        pw.secure = true;
+        let mut f = Fake {
+            nodes: vec![
+                node(NodeRole::Window, vec![1]),
+                node(NodeRole::Tab, vec![2]),
+                pw,
+                node(NodeRole::StaticText, vec![]),
+            ],
+            ..Default::default()
+        };
+        let t = walk_tree(&mut f, 0, "a".into(), &limits()).unwrap();
+        assert_eq!(t.nodes.len(), 2);
+        assert!(t.nodes[1].secure && t.nodes[1].label.is_none());
+        assert!(!f.touched(3), "child of a secure node must not be visited");
     }
 }

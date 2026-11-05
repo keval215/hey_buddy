@@ -15,6 +15,18 @@ pub const EVT_TURN_ERROR: &str = "turn:error";
 pub const EVT_TURN_TRANSCRIPT: &str = "turn:transcript";
 /// A piece of the reply with `[POINT:..]` tags already removed (sent to the settings window).
 pub const EVT_TURN_REPLY_DELTA: &str = "turn:reply_delta";
+/// A voice-engine swap was accepted and started loading (payload [`EngineSwapEvent`]).
+pub const EVT_ENGINE_SWAP_REQUESTED: &str = "engine_swap_requested";
+/// The new engine is active (payload [`EngineSwapEvent`]).
+pub const EVT_ENGINE_SWAP_DONE: &str = "engine_swap_done";
+/// The load failed; the old engine stays (payload [`EngineSwapEvent`] with `error`).
+pub const EVT_ENGINE_SWAP_FAILED: &str = "engine_swap_failed";
+/// Model download progress (payload [`DownloadProgress`]; settings window only, <= ~5/s).
+pub const EVT_DOWNLOAD_PROGRESS: &str = "download_progress";
+/// A model download finished and is in place (payload [`DownloadDone`]).
+pub const EVT_DOWNLOAD_DONE: &str = "download_done";
+/// A model download ended without a file (payload [`DownloadFailed`]).
+pub const EVT_DOWNLOAD_FAILED: &str = "download_failed";
 /// Sent only to the `preview` window.
 pub const EVT_TURN_PREVIEW: &str = "turn:preview";
 /// Sent only to the `preview` window: the pending preview ended (decided, timed out, cancelled).
@@ -100,6 +112,41 @@ pub struct TurnError {
     pub message: String,
 }
 
+/// Which voice engine a swap is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum EngineSlotName {
+    Stt,
+    Tts,
+}
+
+/// Argument of `request_engine_swap`: one slot or both. Anything else is rejected at the
+/// command boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum SwapTarget {
+    Stt,
+    Tts,
+    #[default]
+    All,
+}
+
+/// Events `engine_swap_requested`, `engine_swap_done`, `engine_swap_failed` (settings window
+/// only). `engine_id` is the registry model id. `error` is a fixed token (`model_missing`,
+/// `load_failed`) and only on failure (the command itself refuses with `invalid_model` /
+/// `loader_unavailable`); `path` is the expected model file for `model_missing`. Never any
+/// user content.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct EngineSwapEvent {
+    pub slot: EngineSlotName,
+    pub engine_id: String,
+    pub error: Option<String>,
+    pub path: Option<String>,
+}
+
 /// A display in the capture crate's units (global points on macOS; physical pixels with
 /// `scale` 1.0 on Windows).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
@@ -181,6 +228,11 @@ pub struct Settings {
     pub has_api_key: bool,
     /// Anthropic model id. Empty = cloud unavailable (no default on purpose).
     pub anthropic_model: String,
+    /// Custom models directory. Empty = the built-in default ([`Settings::default_models_dir`]).
+    pub models_dir: String,
+    /// The default models directory, for display (filled by `Buddy`; empty before the shell
+    /// has set it). Never persisted.
+    pub default_models_dir: String,
 }
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+Space";
@@ -196,6 +248,8 @@ impl Default for Settings {
             hotkey: DEFAULT_HOTKEY.into(),
             has_api_key: false,
             anthropic_model: String::new(),
+            models_dir: String::new(),
+            default_models_dir: String::new(),
         }
     }
 }
@@ -224,6 +278,97 @@ pub struct SettingsPatch {
     pub hotkey: Option<String>,
     #[ts(optional)]
     pub anthropic_model: Option<String>,
+    /// Custom models directory; an empty string goes back to the default.
+    #[ts(optional)]
+    pub models_dir: Option<String>,
+}
+
+/// Which setting an issue is about (`File` = the settings file itself).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SettingsField {
+    File,
+    Profile,
+    Hotkey,
+    AnthropicModel,
+    ModelsDir,
+}
+
+/// Why a value was not accepted. Fixed tokens; they never contain the rejected text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum IssueCode {
+    /// Not one of the known choices.
+    Unknown,
+    /// Hotkey without Ctrl, Alt or Super.
+    NeedsModifier,
+    /// Wrong shape (hotkey grammar, model id characters, forbidden path characters).
+    InvalidFormat,
+    TooLong,
+    /// Control, bidirectional-override or zero-width characters.
+    ControlChars,
+    NotAbsolute,
+    /// A `..` path component.
+    Traversal,
+    /// UNC, `\\?\` or `\\.\` paths.
+    NetworkPath,
+    /// A Windows device name such as `CON`.
+    DeviceName,
+    /// A drive root or a system directory.
+    SystemDir,
+    NotADirectory,
+    NotCreatable,
+    /// The path itself is a symbolic link.
+    Symlink,
+    /// The OS refused the shortcut (taken by another app).
+    Unavailable,
+    /// The settings file could not be read; defaults are in use.
+    Corrupt,
+}
+
+/// One rejected or replaced setting. The UI turns it into text; the value is not echoed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SettingsIssue {
+    pub field: SettingsField,
+    pub code: IssueCode,
+}
+
+/// Result of `update_settings`: what is stored now plus every value that was not accepted
+/// (those fell back to the safest value).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SettingsResult {
+    pub settings: Settings,
+    pub issues: Vec<SettingsIssue>,
+    /// The models directory changed: refresh the models table and request an engine swap.
+    pub models_dir_changed: bool,
+}
+
+/// One effective deny-list entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DenyEntryDto {
+    pub id: String,
+    /// On the built-in list (removing it needs a confirm); otherwise added by the user.
+    pub builtin: bool,
+}
+
+/// The deny-list editor's view (`get_deny_list` and the result of every edit).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DenyListDto {
+    /// Everything that is denied, sorted.
+    pub entries: Vec<DenyEntryDto>,
+    /// Built-in entries the user removed (they can be added back).
+    pub removed_defaults: Vec<String>,
+    /// Always shown: banking apps are not on the default list.
+    pub banking_notice: String,
+    /// Fixed token when `deny_list.json` was unreadable, invalid or would have left the list
+    /// empty (`unreadable`, `invalid`, `would_be_empty`); the built-in list is in use.
+    pub load_issue: Option<String>,
 }
 
 /// Where a request goes.
@@ -299,10 +444,86 @@ pub struct Status {
     pub hotkey_registered: bool,
     /// Fixed token when the settings file was unreadable and defaults are in use.
     pub settings_error: Option<String>,
+    /// Stored values replaced at startup (e.g. a models folder that is gone).
+    pub settings_issues: Vec<SettingsIssue>,
     /// Fixed, display-only notes: voice engines not built, a missing model file (id and the
     /// expected path), deny-list problems, apps removed from the default deny list. Never
     /// transcripts, replies or screen text.
     pub notices: Vec<String>,
+}
+
+/// Local state of one registry model, from the filesystem only (never from the network).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ModelStatus {
+    /// Not on disk; a download source exists.
+    Missing,
+    /// A download is running right now.
+    Downloading,
+    /// All files are in place.
+    Ready,
+    /// In place, but downloaded without a known checksum (the registry has `TODO`).
+    Unverified,
+    /// Not on disk and the registry has no download URL yet.
+    NoSource,
+    /// Served by Ollama (`ollama pull`), not downloaded by this screen.
+    External,
+}
+
+/// One row of the models table (`list_models`). Licence and `commercial_ok` are shown for
+/// information only (D-004); they never gate anything.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ModelRow {
+    pub id: String,
+    /// `stt`, `tts`, `vad`, `llm` or `vlm`.
+    pub task: String,
+    /// Registry size text, e.g. `244M params`.
+    pub size_text: String,
+    pub licence: String,
+    pub commercial_ok: bool,
+    pub status: ModelStatus,
+    /// A download URL exists for every file (the Download button may work).
+    pub has_source: bool,
+    /// Every checksum is known. When false, the download needs the extra confirm click.
+    pub checksum_known: bool,
+    /// Bytes to download when the registry knows the size.
+    #[ts(type = "number | null")]
+    pub disk_needed: Option<u64>,
+    /// Free bytes where the models live (best effort).
+    #[ts(type = "number | null")]
+    pub disk_free: Option<u64>,
+    /// The voice slot the CURRENT profile loads this model into, if any ("Load now").
+    pub swap_slot: Option<EngineSlotName>,
+}
+
+/// Event `download_progress`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DownloadProgress {
+    pub id: String,
+    #[ts(type = "number")]
+    pub bytes: u64,
+    #[ts(type = "number | null")]
+    pub total: Option<u64>,
+}
+
+/// Event `download_done`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DownloadDone {
+    pub id: String,
+}
+
+/// Event `download_failed`. `code` is a fixed token (`cancelled`, `checksum_mismatch`,
+/// `network`, `http_status`, `bad_redirect`, `too_large`, `disk_full`, `io_error`, ...); never a
+/// URL or any server text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DownloadFailed {
+    pub id: String,
+    pub code: String,
 }
 
 #[cfg(test)]

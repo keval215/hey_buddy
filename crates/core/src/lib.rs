@@ -3,8 +3,13 @@
 pub mod api;
 pub mod buddy;
 pub mod consent;
+pub mod deny_edit;
+pub mod download;
+pub mod engine_slot;
 pub mod error;
 pub mod events;
+pub mod leakguard;
+pub mod models_path;
 pub mod point;
 pub mod prompt;
 pub mod providers;
@@ -17,8 +22,10 @@ pub mod spoken;
 pub mod turn;
 
 pub use buddy::Buddy;
+pub use buddy::SwapError;
 /// Re-exported so the app shell can name them without depending on the leaf crates.
 pub use capture::DenyList;
+pub use engine_slot::{EngineLoader, EngineSlot, SwapFailure};
 pub use events::{EventSink, NullSink};
 pub use setup::{load_deny_list, platform_firewall, DenyListSetup};
 pub use turn::{EngineDeps, ProviderSource, VadFactory};

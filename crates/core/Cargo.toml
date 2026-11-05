@@ -31,15 +31,23 @@ serde = { version = "1", features = ["derive"] }
 thiserror = "1"
 bytes = "1"
 secrecy = "0.10"
-tokio = { version = "1", default-features = false, features = ["sync", "time", "rt", "macros"] }
+tokio = { version = "1", default-features = false, features = ["sync", "time", "rt", "macros", "net"] }
 futures = { version = "0.3", default-features = false, features = ["std", "alloc"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
+sha2 = "0.10"
+# Model downloader (S2-4). Same reqwest/rustls(ring) setup as the `llm` crate (L-009: no default
+# features, so no native-tls / openssl); no new crates in the lock file.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
+# Free disk space (statvfs) on unix; Windows uses a one-function kernel32 declaration.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 capture = { path = "../capture", features = ["fakes"] }
 firewall = { path = "../firewall", features = ["fakes"] }
 tempfile = "3"
-sha2 = "0.10"
 # Test doubles only (L-006): never reaches the desktop tree.
 llm = { path = "../llm", features = ["fakes"] }
 voice = { path = "../voice", features = ["fakes"] }

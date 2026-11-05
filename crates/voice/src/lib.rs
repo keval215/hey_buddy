@@ -10,12 +10,15 @@ pub mod playback;
 pub mod registry;
 pub mod segmenter;
 pub mod stt;
+pub mod text_norm;
 pub mod tts;
 pub mod tts_stream;
 pub mod vad;
 
 #[cfg(feature = "mic-cpal")]
 pub mod mic_cpal;
+#[cfg(feature = "tts-kokoro")]
+pub mod phonemize_en;
 #[cfg(feature = "speaker-cpal")]
 pub mod speaker_cpal;
 #[cfg(feature = "stt-whisper")]

@@ -6,6 +6,7 @@ const COMMANDS: &[&str] = &[
     "get_status",
     "get_settings",
     "update_settings",
+    "request_engine_swap",
     "list_displays",
     "cancel_turn",
     "debug_point",
@@ -14,6 +15,13 @@ const COMMANDS: &[&str] = &[
     "get_pending_preview",
     "set_api_key",
     "clear_api_key",
+    "list_models",
+    "start_download",
+    "cancel_download",
+    "get_deny_list",
+    "add_deny_entry",
+    "remove_deny_entry",
+    "reset_deny_list_to_defaults",
 ];
 
 fn main() {

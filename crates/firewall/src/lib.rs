@@ -64,6 +64,7 @@ mod firewall;
 mod platform;
 mod redacted;
 mod redacted_text;
+mod scrub;
 mod text;
 
 #[cfg(any(test, feature = "fakes"))]

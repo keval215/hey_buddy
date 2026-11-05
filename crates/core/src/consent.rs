@@ -814,6 +814,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn every_deny_list_edit_cancels_pending_consent() {
+        let r = rig(false);
+        r.buddy.set_config_dir(r._dir.path().join("cfg"));
+        let prepared = r.cloud.prepare(&text_request("hello")).unwrap();
+        for step in 0..4 {
+            let pending = r.buddy.consent.request_consent(&prepared, 1).unwrap();
+            let id = pending.request_id();
+            assert_eq!(r.buddy.consent.pending_count(), 1);
+            match step {
+                0 => drop(r.buddy.add_deny_entry("mine.exe").unwrap()),
+                1 => drop(r.buddy.remove_deny_entry("cmd.exe", true).unwrap()),
+                2 => drop(r.buddy.reset_deny_list_to_defaults(true).unwrap()),
+                _ => drop(r.buddy.remove_deny_entry("mine.exe", false).unwrap()),
+            }
+            assert_eq!(r.buddy.consent.pending_count(), 0, "step {step}");
+            assert_eq!(
+                r.buddy.preview_decision(id, Decision::Send),
+                Err(ConsentError::UnknownRequest)
+            );
+            assert_eq!(pending.wait().await.err(), Some(ConsentError::Cancelled));
+        }
+        // A refused edit is not a policy change: pending previews stay.
+        let pending = r.buddy.consent.request_consent(&prepared, 1).unwrap();
+        assert!(r.buddy.remove_deny_entry("cmd.exe", false).is_err());
+        assert_eq!(r.buddy.consent.pending_count(), 1);
+        drop(pending);
+    }
+
+    #[tokio::test]
+    async fn turning_local_only_off_never_skips_the_preview() {
+        let r = rig(true);
+        // Off: a cloud request still has to be shown and answered with Send.
+        r.buddy
+            .update_settings(&SettingsPatch {
+                local_only: Some(false),
+                ..Default::default()
+            })
+            .unwrap();
+        let prepared = r.cloud.prepare(&text_request("hello")).unwrap();
+        let shown_before = r.sink.shown_count();
+        let pending = r.buddy.consent.request_consent(&prepared, 1).unwrap();
+        assert_eq!(r.sink.shown_count(), shown_before + 1, "preview shown");
+        assert_eq!(r.buddy.consent.pending_count(), 1, "waiting for the user");
+        assert_eq!(r.transport.call_count(), 0, "nothing sent without Send");
+        // No setting can answer for the user.
+        let _ = r.buddy.update_settings(&SettingsPatch {
+            local_only: Some(false),
+            hotkey: Some("Ctrl+Alt+K".into()),
+            ..Default::default()
+        });
+        assert_eq!(r.buddy.consent.pending_count(), 1);
+        r.buddy
+            .preview_decision(pending.request_id(), Decision::Cancel)
+            .unwrap();
+        assert_eq!(pending.wait().await.err(), Some(ConsentError::Cancelled));
+        assert_eq!(r.transport.call_count(), 0);
+    }
+
+    #[tokio::test]
     async fn unknown_and_duplicate_decisions_are_errors() {
         let r = rig(false);
         assert_eq!(

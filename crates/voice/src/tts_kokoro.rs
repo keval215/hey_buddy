@@ -5,18 +5,26 @@
 //! load time and mapped to roles by element type and rank; mismatches fail with fixed
 //! strings (names are never included).
 //!
-//! # Limits (read before relying on this)
+//! # Text frontend
 //!
-//! Kokoro consumes *phoneme token ids*, not text. The usual text-to-phoneme frontend is
-//! espeak-ng (GPL-3.0), which the licence policy (D-002) does not allow as a dependency,
-//! and no permissively-licensed G2P is wired in. This module therefore provides:
-//! - model loading + I/O validation ([`KokoroCore::from_path`]);
-//! - raw inference from token ids + a 256-float style vector ([`KokoroCore::infer`]);
-//! - a [`Phonemizer`] trait so a frontend can be plugged in later;
-//! - a `TtsCore` that errors with a fixed message until a `Phonemizer` is supplied.
+//! Kokoro consumes *phoneme token ids*. The usual frontend is espeak-ng (GPL-3.0), which the
+//! licence policy (D-004) does not allow. [`crate::phonemize_en`] provides a permissive
+//! one instead: [`crate::text_norm`] normalisation, then CMU Pronouncing Dictionary lookup
+//! (user-downloaded `cmudict.dict`) with letter-to-sound rules for unknown words, then the
+//! `vocab` from the model's `config.json`. Use [`KokoroCore::from_models_dir`] to load all of it.
+//! Style vectors come from a user-downloaded voice file (see `phonemize_en`).
+//! Quality is below espeak-ng (no heteronym handling, approximate stress placement).
 //!
-//! It does NOT turn English text into speech by itself. Voice style vectors (the Kokoro
-//! `voices` files, which depend on token count) are likewise supplied by the caller.
+//! Caveats (details in `phonemize_en`): symbols missing from the vocab are silently dropped;
+//! over 510 phoneme tokens the tail is truncated at a word break and not spoken (the sentence
+//! chunker only splits at `.`/`!`/`?`/newline, so a very long unpunctuated sentence is cut);
+//! non-ASCII letters are transliterated (accented Latin) or act as word breaks; the `voice`
+//! argument of `synth` is ignored (voice fixed at load); the voice-file layout
+//! (`kokoro-voices/<voice>.bin`, raw f32 `[510,1,256]`, no `.pt`/npz), the ARPAbet -> misaki
+//! mapping and the `kokoro-82m.config.json` name are VERIFY items.
+//!
+//! Without a frontend, `synth` errors with a fixed message; raw token inference stays available
+//! via [`KokoroCore::infer`].
 
 use crate::tts_stream::{PcmIter, StreamingTts, TtsCore};
 use crate::VoiceError;
@@ -140,6 +148,7 @@ pub struct KokoroCore {
     io: IoMap,
     phonemizer: Option<Box<dyn Phonemizer>>,
     style: Option<Vec<f32>>,
+    voices: Option<crate::phonemize_en::VoicePack>,
     speed: f32,
 }
 
@@ -171,6 +180,7 @@ impl KokoroCore {
             io,
             phonemizer: None,
             style: None,
+            voices: None,
             speed: 1.0,
         })
     }
@@ -187,6 +197,31 @@ impl KokoroCore {
     pub fn with_frontend(mut self, p: Box<dyn Phonemizer>, style: Vec<f32>) -> Self {
         self.phonemizer = Some(p);
         self.style = Some(style);
+        self
+    }
+
+    /// Load the model, the text frontend (dictionary + vocab) and one voice from `models_dir`.
+    /// Any missing file gives `ModelMissing` naming it.
+    pub fn from_models_dir(
+        registry: &crate::registry::Registry,
+        models_dir: &Path,
+        voice: &str,
+    ) -> Result<Self, VoiceError> {
+        use crate::phonemize_en::{KokoroFrontend, VoicePack};
+        let core = Self::from_registry(registry, models_dir)?;
+        let frontend = KokoroFrontend::from_models_dir(registry, models_dir)?;
+        let voices = VoicePack::load(models_dir, voice)?;
+        Ok(core.with_voice_pack(Box::new(frontend), voices))
+    }
+
+    /// Plug in a text frontend and a voice pack (style chosen per token count).
+    pub fn with_voice_pack(
+        mut self,
+        p: Box<dyn Phonemizer>,
+        voices: crate::phonemize_en::VoicePack,
+    ) -> Self {
+        self.phonemizer = Some(p);
+        self.voices = Some(voices);
         self
     }
 
@@ -234,10 +269,18 @@ impl TtsCore for KokoroCore {
     }
 
     fn synth(&self, sentence: &str, _voice: Option<&str>) -> Result<PcmIter, VoiceError> {
-        let (Some(p), Some(style)) = (&self.phonemizer, &self.style) else {
+        let Some(p) = &self.phonemizer else {
             return Err(backend("text frontend (phonemiser) not available"));
         };
         let tokens = p.tokens(sentence)?;
+        if tokens.len() <= 2 {
+            return Ok(Box::new(std::iter::empty())); // nothing speakable
+        }
+        let style: &[f32] = match (&self.voices, &self.style) {
+            (Some(v), _) => v.style_for(tokens.len() - 2),
+            (None, Some(s)) => s,
+            _ => return Err(backend("no voice style loaded")),
+        };
         let pcm = self.infer(&tokens, style, self.speed)?;
         Ok(Box::new(std::iter::once(Ok(pcm))))
     }
@@ -359,5 +402,47 @@ mod tests {
         assert!(!pcm.is_empty() && pcm.iter().all(|s| s.is_finite()));
         // Without a frontend, text synthesis fails with the fixed message.
         assert!(core.synth("hi", None).is_err());
+    }
+
+    /// Full text -> speech with the real model, dictionary, vocab and voice from
+    /// `$HEY_BUDDY_MODELS_DIR`. Skips (with a message) when any file or ORT is absent; any other
+    /// load/synthesis error fails (L-007). Voice defaults to `af_heart` (`KOKORO_VOICE`).
+    #[test]
+    fn text_to_speech_when_all_files_present() {
+        let Some(dir) = std::env::var_os("HEY_BUDDY_MODELS_DIR").map(std::path::PathBuf::from)
+        else {
+            eprintln!("SKIP kokoro text synthesis test: HEY_BUDDY_MODELS_DIR unset");
+            return;
+        };
+        if std::env::var_os("ORT_DYLIB_PATH").is_none() {
+            eprintln!("SKIP kokoro text synthesis test: ORT_DYLIB_PATH not set");
+            return;
+        }
+        let registry =
+            crate::registry::Registry::from_json_str(include_str!("../../../models/registry.json"))
+                .unwrap();
+        let voice = std::env::var("KOKORO_VOICE").unwrap_or_else(|_| "af_heart".into());
+        let core = match KokoroCore::from_models_dir(&registry, &dir, &voice) {
+            Ok(c) => c,
+            Err(VoiceError::ModelMissing { path }) => {
+                eprintln!(
+                    "SKIP kokoro text synthesis test: missing {}",
+                    path.file_name()
+                        .map(|n| n.to_string_lossy())
+                        .unwrap_or_default()
+                );
+                return;
+            }
+            Err(e) => panic!("kokoro load failed: {e}"),
+        };
+        let pcm: Vec<f32> = core
+            .synth("Mr. Smith paid $5.50 on March 5th at 3:45 pm.", None)
+            .unwrap()
+            .flat_map(|r| r.unwrap())
+            .collect();
+        assert!(pcm.len() > KOKORO_SAMPLE_RATE as usize / 2);
+        assert!(pcm.iter().all(|s| s.is_finite()));
+        // Nothing speakable -> no audio, no error.
+        assert_eq!(core.synth("🎉", None).unwrap().count(), 0);
     }
 }

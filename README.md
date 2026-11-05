@@ -23,6 +23,16 @@ architecture decisions.
 4. Swappable parts behind small traits.
 5. Clean licensing (Apache-2.0 project; permissive dependencies only).
 
+## Settings
+
+Everything is set in the Settings window (tray icon): profile, vision, push-to-talk hotkey, the
+models folder, Local only, the language model and an Anthropic key (kept in the OS keychain,
+never in a file), and a list of apps the buddy never looks at. No file editing is needed. Every
+value is checked by the core; a value that is not acceptable is not saved, the safest value is
+used instead (Local only, the default hotkey and models folder) and the window says why. Turning
+Local only off never skips the preview: each cloud request still needs your Send. There is no
+setting that turns off the privacy firewall, redaction, the preview or push-to-talk.
+
 ## Development
 
 ```
@@ -45,7 +55,10 @@ cd apps/desktop && pnpm tauri dev --features real-voice
 ```
 
 It needs cmake + clang at build time (and `libasound2-dev` on Linux), the model files in
-`<app data folder>/models` (or `HEY_BUDDY_MODELS_DIR`; nothing is downloaded for you),
+`<app data folder>/models` (or `HEY_BUDDY_MODELS_DIR`; nothing is downloaded unless you click
+Download on the Models table in Settings, which is HTTPS only, resumable and checksum-verified;
+registry entries without a download URL yet say "no download source yet"; weights are never
+committed),
 `ORT_DYLIB_PATH` pointing at onnxruntime, and Ollama with `qwen3:4b` pulled. Step by step:
 `docs/manual-tests.md` ("Step 1 EXIT TEST").
 

@@ -22,4 +22,13 @@ has_api_key: boolean,
 /**
  * Anthropic model id. Empty = cloud unavailable (no default on purpose).
  */
-anthropic_model: string, };
+anthropic_model: string, 
+/**
+ * Custom models directory. Empty = the built-in default ([`Settings::default_models_dir`]).
+ */
+models_dir: string, 
+/**
+ * The default models directory, for display (filled by `Buddy`; empty before the shell
+ * has set it). Never persisted.
+ */
+default_models_dir: string, };

@@ -13,6 +13,21 @@ Key points: <2–4 bullets>
 Next: <what orch does next>
 ```
 
+## H-018 2026-11-04 S2-2 -> coder, reviewer
+Result: APPROVED round 1 (EngineSlot, request_engine_swap, 29 e2e tests). NOTE: most S2-2 code was swept into the S2-8/S2-9 ADR commits by orch `git add -A` mid-run (history mislabelled, code intact). Lesson: add specific paths while a coder runs.
+Next: S2-3.
+
+## H-021 2026-11-04 S2-4 -> coder (x2), reviewer (x2)
+Result: APPROVED round 2. Resumable HTTPS-only sha256-verified downloader (core/download), Models table in settings, loopback fake-server tests. Round 1 MAJOR: 'unverified' marker was written after rename (fail-open) -> now before, with rollback.
+Next: S2-5.
+
+## H-020 2026-11-04 S2-3 -> coder (x2), reviewer (x2)
+Result: APPROVED round 2. Own CMUdict parser + rule G2P (no espeak, no new crates); round 1 BLOCKER: Unicode lowercase length-change panic on 'İİİİam' fixed with ASCII lowercasing + table-driven adversarial fuzz.
+Next: S2-4.
+
+## H-019 2026-11-04 S2-8/S2-9 -> reviewer-ARCH (Opus) x2
+Result: ADR 0003 and ADR 0004 drafted (PROPOSED), waiting on user approval + tier table sign-off.
+
 ## H-017 2026-11-03 T12-hardening -> coder, reviewer
 Result: APPROVED round 1 (60 s recording cap finishes like a release; non-zero-origin Windows fallback test; log-capture sanity asserts; remaining-time preview; api-key cache primed).
 Next: Step 1 complete -> final memory + PR go-ahead from user.

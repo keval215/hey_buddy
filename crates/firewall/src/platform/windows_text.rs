@@ -10,7 +10,9 @@
 //! 1. `IsPassword` (same `windows::is_password` as the T8 detector). Secure elements: bounding
 //!    rect ONLY (same `windows::bounding_rect`); no name, no value, no children.
 //! 2. Bounding rect, `ControlType`, and for non-secure elements the children.
-//! 3. `Name` as the label (never for the window root or a Document: page titles).
+//! 3. `Name` as the label (never for the window root, a TitleBar or a Document: page titles; Tab,
+//!    TabItem and TitleBar subtrees, address-bar-like Edit controls, bookmark bars and download
+//!    shelves are dropped by the shared walker, S2-5).
 //! 4. Editable (Edit/ComboBox) elements: `ValuePattern.CurrentValue` is fetched ONLY to test
 //!    for emptiness and dropped immediately (UIA offers no "is empty" query); its text is never
 //!    stored. Static text (`Text` control type) is emitted through its `Name`.

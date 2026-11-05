@@ -7,6 +7,7 @@
 //! on release or cancel; nothing here opens it otherwise. Without an engine (voice engines not
 //! built) a press reports `voice_not_built` and does nothing else.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -17,19 +18,30 @@ use llm::{
     RequestPreview, ANTHROPIC_ACCOUNT, ANTHROPIC_PROVIDER_ID,
 };
 use secrecy::SecretString;
+use voice::registry::{Device, Registry, Task};
+use voice::{SttProvider, TtsProvider};
 
 use crate::api::{
-    Decision, DisplayDto, FirewallStatus, LastRequestDto, Phase, PointEvent, Settings,
-    SettingsPatch, Status, TurnState,
+    Decision, DenyListDto, DisplayDto, DownloadDone, DownloadFailed, DownloadProgress,
+    EngineSlotName, EngineSwapEvent, FirewallStatus, LastRequestDto, ModelRow, Phase, PointEvent,
+    Settings, SettingsPatch, SettingsResult, Status, SwapTarget, TurnState,
 };
 use crate::consent::{
     last_request_dto, provider_allowed, ConsentError, ConsentGate, PreviewSink, PreviewStore,
     LAST_KEY,
 };
+use crate::deny_edit::{DenyEditError, DenyEditor};
+use crate::download::{
+    DownloadError, DownloadNotice, DownloadObserver, Downloader, ModelManager, SharedDir,
+};
+use crate::engine_slot::{
+    EngineLoader, EngineSlot, SwapFailure, SwapNotice, SwapObserver, TOKEN_MODEL_MISSING,
+};
 use crate::error::{simple_turn_error, CoreError, KeyError};
 use crate::events::{EventSink, NullSink};
 use crate::point::sanitize_label;
-use crate::settings::{SettingsError, SettingsStore};
+use crate::settings::{builtin_registry, SettingsError, SettingsStore};
+use crate::setup::BANKING_NOTICE;
 use crate::turn::{self, EngineDeps, ProviderSource, TurnControl, TurnCtx};
 
 /// Result of a settings update; the glue re-registers the hotkey when `hotkey_changed`.
@@ -38,6 +50,21 @@ pub struct SettingsUpdate {
     pub settings: Settings,
     /// `(old, new)` canonical shortcut strings when the hotkey changed.
     pub hotkey_changed: Option<(String, String)>,
+    /// Values that were not accepted and fell back to the safest value.
+    pub issues: Vec<crate::api::SettingsIssue>,
+    /// The effective models directory changed (refresh the table, request an engine swap).
+    pub models_dir_changed: bool,
+}
+
+impl SettingsUpdate {
+    /// The IPC shape of the update.
+    pub fn result(&self) -> SettingsResult {
+        SettingsResult {
+            settings: self.settings.clone(),
+            issues: self.issues.clone(),
+            models_dir_changed: self.models_dir_changed,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -46,6 +73,41 @@ struct Inner {
     phase: Phase,
     firewall: FirewallStatus,
     hotkey_registered: bool,
+}
+
+/// Why `request_engine_swap` refused. Fixed tokens (the `Display` text), no content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SwapError {
+    /// No loader is installed (voice engines not built).
+    #[error("loader_unavailable")]
+    NoLoader,
+    /// The profile or one of its models is not valid in the registry.
+    #[error("invalid_model")]
+    InvalidModel,
+}
+
+/// The `(stt, tts)` model ids of `profile`, validated against `reg`: the profile and models
+/// must exist with the right task, and STT never runs on the GPU.
+pub fn engine_models(reg: &Registry, profile: &str) -> Result<(String, String), SwapError> {
+    let p = reg.profile(profile).ok_or(SwapError::InvalidModel)?;
+    let ok = |id: &str, task: Task| reg.get(id).is_ok_and(|m| m.task == task);
+    if !ok(&p.stt.model, Task::Stt) || !ok(&p.tts.model, Task::Tts) || p.stt.device == Device::Gpu {
+        return Err(SwapError::InvalidModel);
+    }
+    Ok((p.stt.model.clone(), p.tts.model.clone()))
+}
+
+fn failure_notice(slot: EngineSlotName, id: &str, f: &SwapFailure) -> String {
+    let which = match slot {
+        EngineSlotName::Stt => "speech recognition",
+        EngineSlotName::Tts => "speech synthesis",
+    };
+    match (&f.path, f.token) {
+        (Some(path), TOKEN_MODEL_MISSING) => format!(
+            "Missing model file for {id}: place it at {path} (nothing is downloaded automatically)."
+        ),
+        _ => format!("Could not load the {which} model {id} ({}).", f.token),
+    }
 }
 
 /// Longest accepted API key (bytes).
@@ -62,7 +124,22 @@ pub struct Buddy {
     has_key: Mutex<Option<bool>>,
     /// Most recent turn's request (in memory only, replaced each turn).
     last: Mutex<Option<LastRequestDto>>,
-    sink: Mutex<Arc<dyn EventSink>>,
+    sink: Arc<Mutex<Arc<dyn EventSink>>>,
+    /// The swappable voice engines (S2-2). Turns take their engines from here at their start.
+    stt: EngineSlot<dyn SttProvider>,
+    tts: EngineSlot<dyn TtsProvider>,
+    loader: Mutex<Option<Arc<dyn EngineLoader>>>,
+    /// Model downloads (S2-4); `None` until the shell calls `set_models_dir`.
+    models: Mutex<Option<ModelManager>>,
+    /// The built-in models directory (set by the shell) and the one in use (the setting, or
+    /// the built-in one). The shared cell is what the engine loaders read.
+    default_models_dir: Mutex<Option<PathBuf>>,
+    models_cell: SharedDir,
+    /// The deny-list editor; `None` until the shell calls `set_config_dir` (then the engine's
+    /// own list is used unchanged).
+    deny_editor: Mutex<Option<DenyEditor>>,
+    /// Latest failed swap per slot, shown as a status notice until the next request.
+    swap_failures: Arc<Mutex<BTreeMap<EngineSlotName, String>>>,
     /// The turn engine's dependencies; `None` = voice engines not built.
     engine: Mutex<Option<Arc<EngineDeps>>>,
     current: Mutex<Option<TurnControl>>,
@@ -89,6 +166,38 @@ impl Buddy {
         let store = Arc::new(PreviewStore::new());
         let consent = ConsentGate::new(store.clone());
         consent.set_local_only(settings.settings().local_only);
+        let sink: Arc<Mutex<Arc<dyn EventSink>>> = Arc::new(Mutex::new(Arc::new(NullSink)));
+        let swap_failures: Arc<Mutex<BTreeMap<EngineSlotName, String>>> = Arc::default();
+        let observer = |slot: EngineSlotName| -> SwapObserver {
+            let (sink, failures) = (sink.clone(), swap_failures.clone());
+            Arc::new(move |n: SwapNotice| {
+                let ev = |id: String, f: Option<&SwapFailure>| EngineSwapEvent {
+                    slot,
+                    engine_id: id,
+                    error: f.map(|f| f.token.to_string()),
+                    path: f.and_then(|f| f.path.clone()),
+                };
+                let out = lock(&sink).clone();
+                match n {
+                    SwapNotice::Requested { id } => {
+                        lock(&failures).remove(&slot);
+                        out.engine_swap_requested(ev(id, None));
+                    }
+                    SwapNotice::Done { id } => {
+                        lock(&failures).remove(&slot);
+                        out.engine_swap_done(ev(id, None));
+                    }
+                    SwapNotice::Failed { id, failure } => {
+                        lock(&failures).insert(slot, failure_notice(slot, &id, &failure));
+                        out.engine_swap_failed(ev(id, Some(&failure)));
+                    }
+                }
+            })
+        };
+        let (stt, tts) = (
+            EngineSlot::new(observer(EngineSlotName::Stt)),
+            EngineSlot::new(observer(EngineSlotName::Tts)),
+        );
         Self {
             settings: Mutex::new(settings),
             inner: Mutex::new(Inner {
@@ -103,7 +212,15 @@ impl Buddy {
             credentials,
             has_key: Mutex::new(None),
             last: Mutex::new(None),
-            sink: Mutex::new(Arc::new(NullSink)),
+            sink,
+            stt,
+            tts,
+            loader: Mutex::new(None),
+            models: Mutex::new(None),
+            default_models_dir: Mutex::new(None),
+            models_cell: Arc::default(),
+            deny_editor: Mutex::new(None),
+            swap_failures,
             engine: Mutex::new(None),
             current: Mutex::new(None),
             notices: Mutex::new(Vec::new()),
@@ -118,6 +235,122 @@ impl Buddy {
 
     pub(crate) fn sink(&self) -> Arc<dyn EventSink> {
         lock(&self.sink).clone()
+    }
+
+    /// The STT engine slot (tests and fixed setups may `set` an engine directly).
+    pub fn stt_slot(&self) -> &EngineSlot<dyn SttProvider> {
+        &self.stt
+    }
+
+    /// The TTS engine slot.
+    pub fn tts_slot(&self) -> &EngineSlot<dyn TtsProvider> {
+        &self.tts
+    }
+
+    /// Install what builds STT/TTS engines for `request_engine_swap` (the real adapters, or a
+    /// fake in tests).
+    pub fn set_engine_loader(&self, loader: Arc<dyn EngineLoader>) {
+        *lock(&self.loader) = Some(loader);
+    }
+
+    /// Enable the models screen for `dir` (the shell calls this once at startup). Touches
+    /// nothing: no directory is created and nothing is downloaded until the user clicks.
+    ///
+    /// `dir` is the built-in default; the `models_dir` setting, when set, wins.
+    pub fn set_models_dir(&self, dir: PathBuf) {
+        *lock(&self.default_models_dir) = Some(dir);
+        if let Some(dir) = self.models_dir() {
+            self.set_model_manager(dir, Downloader::new(), builtin_registry().clone());
+        }
+    }
+
+    /// The models directory in use: the setting if set, else the built-in default. `None`
+    /// until the shell has set the default.
+    pub fn models_dir(&self) -> Option<PathBuf> {
+        let custom = lock(&self.settings).settings().models_dir;
+        if !custom.is_empty() {
+            return Some(PathBuf::from(custom));
+        }
+        lock(&self.default_models_dir).clone()
+    }
+
+    /// The models directory as a shared cell for the engine loaders (follows the setting).
+    pub fn models_dir_cell(&self) -> SharedDir {
+        self.models_cell.clone()
+    }
+
+    pub(crate) fn set_model_manager(&self, dir: PathBuf, dl: Downloader, reg: Registry) {
+        *lock(&self.models_cell) = dir.clone();
+        let sink = self.sink.clone();
+        // Events go out with no lock held (L-013): the sink is only cloned under its lock.
+        let observer: DownloadObserver = Arc::new(move |n: DownloadNotice| {
+            let out = lock(&sink).clone();
+            match n {
+                DownloadNotice::Progress { id, bytes, total } => {
+                    out.download_progress(DownloadProgress { id, bytes, total })
+                }
+                DownloadNotice::Done { id } => out.download_done(DownloadDone { id }),
+                DownloadNotice::Failed { id, code } => out.download_failed(DownloadFailed {
+                    id,
+                    code: code.to_string(),
+                }),
+            }
+        });
+        *lock(&self.models) = Some(ModelManager::new(reg, dir, dl, observer));
+    }
+
+    fn model_manager(&self) -> Option<ModelManager> {
+        lock(&self.models).clone()
+    }
+
+    /// `list_models`: the models table from the local filesystem only (no network).
+    pub fn list_models(&self) -> Vec<ModelRow> {
+        let profile = lock(&self.settings).settings().profile;
+        self.model_manager()
+            .map(|m| m.list(&profile))
+            .unwrap_or_default()
+    }
+
+    /// `start_download`: explicit click only. `accept_unknown_checksum` is the second confirm
+    /// for registry entries whose checksum is `TODO`. Errors are fixed tokens.
+    pub fn start_download(
+        &self,
+        id: &str,
+        accept_unknown_checksum: bool,
+    ) -> Result<(), DownloadError> {
+        self.model_manager()
+            .ok_or(DownloadError::Unavailable)?
+            .start(id, accept_unknown_checksum)
+    }
+
+    /// `cancel_download`: stops the running download of `id` and deletes its partial files.
+    pub fn cancel_download(&self, id: &str) {
+        if let Some(m) = self.model_manager() {
+            m.cancel(id);
+        }
+    }
+
+    /// `request_engine_swap` command (design: explicit command, called by the settings window
+    /// after a profile change and by the startup code for the first load; `update_settings`
+    /// itself never loads anything). The model ids come from the CURRENT profile, validated
+    /// against the registry (STT never on the GPU); an invalid profile or model is refused
+    /// before anything starts. Loads run in the background, a running push-to-talk turn is
+    /// never disturbed, and results arrive as `engine_swap_*` events.
+    pub fn request_engine_swap(&self, target: SwapTarget) -> Result<(), SwapError> {
+        let loader = lock(&self.loader).clone().ok_or(SwapError::NoLoader)?;
+        let profile = lock(&self.settings).settings().profile;
+        let (stt_id, tts_id) = engine_models(builtin_registry(), &profile)?;
+        if matches!(target, SwapTarget::Stt | SwapTarget::All) {
+            let (l, id) = (loader.clone(), stt_id.clone());
+            self.stt
+                .request_swap(stt_id, Box::new(move || l.load_stt(&id)));
+        }
+        if matches!(target, SwapTarget::Tts | SwapTarget::All) {
+            let (l, id) = (loader, tts_id.clone());
+            self.tts
+                .request_swap(tts_id, Box::new(move || l.load_tts(&id)));
+        }
+        Ok(())
     }
 
     /// Install the turn engine. Until this is called a hotkey press reports `voice_not_built`.
@@ -173,24 +406,64 @@ impl Buddy {
     pub fn get_settings(&self) -> Settings {
         let mut s = lock(&self.settings).settings();
         s.has_api_key = self.has_api_key();
+        s.default_models_dir = self.default_models_dir_text();
         s
     }
 
+    fn default_models_dir_text(&self) -> String {
+        lock(&self.default_models_dir)
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
+    /// Validate and store a settings patch. Invalid values never fail the call: each falls
+    /// back to the safest value and comes back as an issue (the rejected text is not kept).
+    /// Only a failed write is an error.
     pub fn update_settings(&self, patch: &SettingsPatch) -> Result<SettingsUpdate, SettingsError> {
-        let (mut settings, hotkey_changed) = {
+        let old_dir = self.models_dir();
+        let (mut settings, hotkey_changed, issues) = {
             let mut store = lock(&self.settings);
             let old = store.settings().hotkey;
-            let settings = store.apply(patch)?;
+            let (settings, issues) = store.apply_with_issues(patch)?;
             let hotkey_changed = (settings.hotkey != old).then(|| (old, settings.hotkey.clone()));
-            (settings, hotkey_changed)
+            (settings, hotkey_changed, issues)
         };
         // Mirror local_only into the consent gate (turning it on cancels pending previews).
+        // Turning it OFF changes nothing else: every cloud request still needs its preview.
         self.consent.set_local_only(settings.local_only);
         settings.has_api_key = self.has_api_key();
+        settings.default_models_dir = self.default_models_dir_text();
+        let new_dir = self.models_dir();
+        let models_dir_changed = old_dir != new_dir;
+        if models_dir_changed {
+            self.switch_models_dir(new_dir);
+        }
         Ok(SettingsUpdate {
             settings,
             hotkey_changed,
+            issues,
+            models_dir_changed,
         })
+    }
+
+    /// The models directory changed: stop a running download (it was writing to the old
+    /// folder) and point the models table and the engine loaders at the new one.
+    fn switch_models_dir(&self, dir: Option<PathBuf>) {
+        let Some(dir) = dir else { return };
+        if let Some(old) = self.model_manager() {
+            let profile = lock(&self.settings).settings().profile;
+            for row in old.list(&profile) {
+                if row.status == crate::api::ModelStatus::Downloading {
+                    old.cancel(&row.id);
+                }
+            }
+        }
+        // Keep the engines' view in step even before the models screen is enabled.
+        *lock(&self.models_cell) = dir.clone();
+        if lock(&self.models).is_some() {
+            self.set_model_manager(dir, Downloader::new(), builtin_registry().clone());
+        }
     }
 
     /// Store the Anthropic API key in the OS keychain. The key is never logged, persisted in
@@ -221,6 +494,64 @@ impl Buddy {
         self.refresh_has_api_key();
         res?;
         Ok(self.get_settings())
+    }
+
+    // ------------------------------------------------------------ deny-list editor
+
+    /// Tell the core where `deny_list.json` lives (the shell calls this once at startup).
+    /// Loads the list; a broken file falls back to the built-in list and is reported in the
+    /// status notices.
+    pub fn set_config_dir(&self, dir: PathBuf) {
+        *lock(&self.deny_editor) = Some(DenyEditor::load(dir));
+    }
+
+    /// The deny list turns must use (`None` before `set_config_dir`).
+    pub fn current_deny(&self) -> Option<Arc<capture::DenyList>> {
+        lock(&self.deny_editor).as_ref().map(DenyEditor::list)
+    }
+
+    /// `get_deny_list` command.
+    pub fn get_deny_list(&self) -> Result<DenyListDto, DenyEditError> {
+        lock(&self.deny_editor)
+            .as_ref()
+            .map(|e| e.view(BANKING_NOTICE))
+            .ok_or(DenyEditError::Unavailable)
+    }
+
+    /// Run one edit. A deny-list change is a policy change: it takes effect for the NEXT turn
+    /// (a running turn keeps the list it started with) and cancels every pending consent.
+    fn edit_deny(
+        &self,
+        f: impl FnOnce(&mut DenyEditor) -> Result<(), DenyEditError>,
+    ) -> Result<DenyListDto, DenyEditError> {
+        let dto = {
+            let mut g = lock(&self.deny_editor);
+            let ed = g.as_mut().ok_or(DenyEditError::Unavailable)?;
+            f(ed)?;
+            ed.view(BANKING_NOTICE)
+        };
+        self.cancel_pending_consents();
+        Ok(dto)
+    }
+
+    /// `add_deny_entry` command.
+    pub fn add_deny_entry(&self, id: &str) -> Result<DenyListDto, DenyEditError> {
+        self.edit_deny(|e| e.add(id))
+    }
+
+    /// `remove_deny_entry` command. A built-in entry needs `confirm_remove_default`.
+    pub fn remove_deny_entry(
+        &self,
+        id: &str,
+        confirm_remove_default: bool,
+    ) -> Result<DenyListDto, DenyEditError> {
+        self.edit_deny(|e| e.remove(id, confirm_remove_default))
+    }
+
+    /// `reset_deny_list_to_defaults` command: restores removed built-in entries (`confirm`
+    /// required); the user's own additions stay.
+    pub fn reset_deny_list_to_defaults(&self, confirm: bool) -> Result<DenyListDto, DenyEditError> {
+        self.edit_deny(|e| e.reset_to_defaults(confirm))
     }
 
     // ------------------------------------------------------------ consent / preview
@@ -283,6 +614,10 @@ impl Buddy {
         let settings = lock(&self.settings).settings();
         provider_allowed(&settings, provider.locality())?;
         let prepared = provider.prepare(request)?;
+        // Debug tripwire (S2-5): panics if a registered title/URL marker is in the built
+        // request. Empty in release builds; fed only by tests and fakes.
+        #[cfg(any(debug_assertions, test))]
+        crate::leakguard::assert_no_known_titles(&prepared);
         // The prepared request, not the provider's claim, decides: either side saying Cloud
         // means cloud.
         let locality =
@@ -303,14 +638,27 @@ impl Buddy {
     }
 
     pub fn get_status(&self) -> Status {
-        let settings_error = lock(&self.settings).load_error().map(String::from);
+        let (settings_error, settings_issues) = {
+            let st = lock(&self.settings);
+            (st.load_error().map(String::from), st.load_issues().to_vec())
+        };
+        let deny_notices = lock(&self.deny_editor)
+            .as_ref()
+            .map(DenyEditor::notices)
+            .unwrap_or_default();
         let i = lock(&self.inner);
         Status {
             phase: i.phase,
             firewall: i.firewall.clone(),
             hotkey_registered: i.hotkey_registered,
             settings_error,
-            notices: lock(&self.notices).clone(),
+            settings_issues,
+            notices: {
+                let mut n = lock(&self.notices).clone();
+                n.extend(deny_notices);
+                n.extend(lock(&self.swap_failures).values().cloned());
+                n
+            },
         }
     }
 
@@ -345,6 +693,15 @@ impl Buddy {
             self.sink().error(simple_turn_error(&code, &msg));
             return;
         };
+        // The edited deny list (if the shell set a config dir) replaces the engine's own for
+        // this turn: a change applies to the NEXT turn, never to one in progress.
+        let deps = match self.current_deny() {
+            Some(deny) => Arc::new(EngineDeps {
+                deny,
+                ..(*deps).clone()
+            }),
+            None => deps,
+        };
         let sink = self.sink();
         {
             let i = lock(&self.inner);
@@ -355,6 +712,18 @@ impl Buddy {
         if let Some(old) = self.cancel_current() {
             sink.turn_state(old);
         }
+        // The cancelled turn is over: a waiting engine swap lands now, before the new turn
+        // takes its engines.
+        self.engines_idle();
+        let (Some(stt), Some(tts)) = (self.stt.begin_turn(), self.tts.begin_turn()) else {
+            self.engines_idle();
+            let (code, msg) = (
+                "engine_not_loaded",
+                "The voice engines are not loaded yet. See the status notices.",
+            );
+            sink.error(simple_turn_error(code, msg));
+            return;
+        };
         // A new turn supersedes any preview still waiting from an earlier one.
         self.consent.cancel_all();
         let ev = {
@@ -370,6 +739,8 @@ impl Buddy {
                 turn_id,
                 cancelled: cancelled.clone(),
                 release: release_rx,
+                stt,
+                tts,
             };
             let task = deps.runtime.spawn(turn::run(ctx));
             *lock(&self.current) = Some(TurnControl {
@@ -412,6 +783,13 @@ impl Buddy {
         if let Some(ev) = ev {
             self.sink().turn_state(ev);
         }
+        self.engines_idle();
+    }
+
+    /// No turn is running any more: let waiting engine swaps land.
+    fn engines_idle(&self) {
+        self.stt.end_turn();
+        self.tts.end_turn();
     }
 
     /// Abort the running turn. Returns the `Idle` state to emit when a turn was in progress.
@@ -451,10 +829,18 @@ impl Buddy {
 
     /// Engine -> state: the turn is over.
     pub(crate) fn finish_turn(&self, turn_id: u32) {
+        if self.finish_turn_state(turn_id) {
+            // The turn is over: a waiting engine swap lands now (after the Idle event).
+            self.engines_idle();
+        }
+    }
+
+    /// Returns false for a stale turn (a newer one owns the engines now).
+    fn finish_turn_state(&self, turn_id: u32) -> bool {
         let ev = {
             let mut i = lock(&self.inner);
             if i.turn_id != turn_id {
-                return;
+                return false;
             }
             {
                 let mut cur = lock(&self.current);
@@ -463,7 +849,7 @@ impl Buddy {
                 }
             }
             if i.phase == Phase::Idle {
-                return;
+                return true;
             }
             i.phase = Phase::Idle;
             TurnState {
@@ -472,6 +858,7 @@ impl Buddy {
             }
         };
         self.sink().turn_state(ev);
+        true
     }
 
     /// Engine -> state: remember and announce the firewall's state for this turn.
@@ -663,5 +1050,141 @@ mod tests {
         );
         assert!(b.list_displays().is_empty());
         assert!(b.debug_point(0, 0, "x").is_none());
+    }
+
+    // ------------------------------------------------------------- S2-7
+
+    #[test]
+    fn invalid_values_fall_back_report_issues_and_flag_the_hotkey_change() {
+        use crate::api::{IssueCode, SettingsField, SettingsIssue};
+        let (_d, b) = buddy();
+        b.update_settings(&SettingsPatch {
+            hotkey: Some("alt+k".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        let u = b
+            .update_settings(&SettingsPatch {
+                hotkey: Some("k".into()),
+                anthropic_model: Some("bad model".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(u.settings.hotkey, "Ctrl+Alt+Space");
+        assert_eq!(
+            u.hotkey_changed,
+            Some(("Alt+K".into(), "Ctrl+Alt+Space".into()))
+        );
+        assert_eq!(
+            u.issues,
+            vec![
+                SettingsIssue {
+                    field: SettingsField::Hotkey,
+                    code: IssueCode::NeedsModifier
+                },
+                SettingsIssue {
+                    field: SettingsField::AnthropicModel,
+                    code: IssueCode::InvalidFormat
+                }
+            ]
+        );
+        assert_eq!(u.result().issues, u.issues);
+        // The rejected text is nowhere in what the UI gets back.
+        assert!(!format!("{:?}", u.result()).contains("bad model"));
+    }
+
+    #[test]
+    fn load_issues_from_the_file_show_up_in_the_status() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("s.json");
+        std::fs::write(&p, br#"{"models_dir":"/nonexistent-root-xyz/a/../b"}"#).unwrap();
+        let b = Buddy::new(&p, Box::new(capture::UnsupportedCapture));
+        let st = b.get_status();
+        assert!(st.settings_error.is_none());
+        assert_eq!(st.settings_issues.len(), 1);
+        assert_eq!(b.get_settings().models_dir, "");
+        // Saving anything clears the visible issue.
+        b.update_settings(&SettingsPatch::default()).unwrap();
+        assert!(b.get_status().settings_issues.is_empty());
+    }
+
+    #[test]
+    fn changing_the_models_dir_repoints_the_table_and_the_engine_cell() {
+        let (d, b) = buddy();
+        let default = d.path().join("default-models");
+        b.set_models_dir(default.clone());
+        assert_eq!(
+            b.get_settings().default_models_dir,
+            default.to_string_lossy()
+        );
+        assert_eq!(b.models_dir(), Some(default.clone()));
+        assert_eq!(*lock(&b.models_dir_cell()), default);
+        assert_eq!(b.model_manager().unwrap().dir(), default);
+        // Nothing is created by choosing a folder.
+        assert!(!default.exists());
+
+        let custom = d.path().join("custom");
+        let u = b
+            .update_settings(&SettingsPatch {
+                models_dir: Some(custom.to_str().unwrap().into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(u.models_dir_changed && u.issues.is_empty());
+        assert_eq!(b.model_manager().unwrap().dir(), custom);
+        assert_eq!(*lock(&b.models_dir_cell()), custom);
+        assert!(!custom.exists());
+        // An unrelated change is not a models change.
+        let u = b
+            .update_settings(&SettingsPatch {
+                local_only: Some(false),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(!u.models_dir_changed);
+        // An invalid folder falls back to the default and that IS a change (back to default).
+        let u = b
+            .update_settings(&SettingsPatch {
+                models_dir: Some("../../etc".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(u.models_dir_changed);
+        assert_eq!(u.issues.len(), 1);
+        assert_eq!(b.model_manager().unwrap().dir(), default);
+        assert_eq!(b.get_settings().models_dir, "");
+        // Empty = default again, no change.
+        let u = b
+            .update_settings(&SettingsPatch {
+                models_dir: Some(String::new()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(!u.models_dir_changed);
+    }
+
+    #[test]
+    fn deny_commands_need_a_config_dir_and_report_in_the_status() {
+        let (d, b) = buddy();
+        assert_eq!(b.get_deny_list().unwrap_err(), DenyEditError::Unavailable);
+        assert_eq!(
+            b.add_deny_entry("x.exe").unwrap_err(),
+            DenyEditError::Unavailable
+        );
+        assert!(b.current_deny().is_none());
+        b.set_config_dir(d.path().join("cfg"));
+        let v = b.get_deny_list().unwrap();
+        assert!(v.entries.iter().all(|e| e.builtin));
+        assert_eq!(v.banking_notice, BANKING_NOTICE);
+        assert!(v.removed_defaults.is_empty() && v.load_issue.is_none());
+        let v = b.add_deny_entry("Mine.EXE").unwrap();
+        assert!(v.entries.iter().any(|e| e.id == "mine.exe" && !e.builtin));
+        assert!(b.current_deny().unwrap().matches("mine.exe"));
+        b.remove_deny_entry("cmd.exe", true).unwrap();
+        let notices = b.get_status().notices;
+        assert!(notices.iter().any(|n| n.contains("cmd.exe")), "{notices:?}");
+        assert!(notices.iter().any(|n| n == BANKING_NOTICE));
+        b.reset_deny_list_to_defaults(true).unwrap();
+        assert!(!b.get_status().notices.iter().any(|n| n.contains("cmd.exe")));
     }
 }

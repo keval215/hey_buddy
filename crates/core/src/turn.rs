@@ -76,14 +76,16 @@ pub trait ProviderSource: Send + Sync {
 
 /// Everything a turn needs besides the settings, capture and consent that [`Buddy`] owns.
 /// All trait objects, so the whole engine runs on fakes.
+///
+/// STT and TTS are NOT in here: they live in swappable [`crate::engine_slot::EngineSlot`]s on
+/// `Buddy`, and each turn takes its engines from them at its start.
+#[derive(Clone)]
 pub struct EngineDeps {
     pub firewall: Arc<dyn Firewall>,
     pub deny: Arc<DenyList>,
     pub audio_in: Arc<dyn AudioInput>,
     pub audio_out: Arc<dyn AudioOutput>,
     pub vad: VadFactory,
-    pub stt: Arc<dyn SttProvider>,
-    pub tts: Arc<dyn TtsProvider>,
     pub providers: Arc<dyn ProviderSource>,
     /// Runtime the turn tasks run on.
     pub runtime: tokio::runtime::Handle,
@@ -112,6 +114,9 @@ pub(crate) struct TurnCtx {
     pub turn_id: u32,
     pub cancelled: Arc<AtomicBool>,
     pub release: watch::Receiver<bool>,
+    /// The engines this turn started with; kept for the whole turn even if a swap is waiting.
+    pub stt: Arc<dyn SttProvider>,
+    pub tts: Arc<dyn TtsProvider>,
 }
 
 impl TurnCtx {
@@ -238,7 +243,6 @@ async fn listen_and_transcribe(ctx: &TurnCtx) -> Heard {
         })
         .collect();
     let mut events = match ctx
-        .deps
         .stt
         .transcribe(stream::iter(chunks).boxed(), SttOptions::default())
         .await
@@ -512,7 +516,6 @@ impl<'a> Speaker<'a> {
         let (tx, rx) = mpsc::unbounded::<String>();
         let audio = match self
             .ctx
-            .deps
             .tts
             .synthesize(rx.boxed(), TtsOptions::default())
             .await
