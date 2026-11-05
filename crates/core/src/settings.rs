@@ -188,6 +188,8 @@ struct Stored {
     observe_mode: bool,
     agent_enabled: bool,
     agent_mode: bool,
+    /// Local diagnostic log file (S3-6), default OFF; read at startup.
+    diagnostic_logs: bool,
     /// First-run wizard progress (S3-4). Read leniently: a bad value becomes the fail-closed
     /// default (see [`SettingsStore::load`]).
     #[serde(deserialize_with = "lenient_wizard")]
@@ -221,6 +223,7 @@ impl Default for Stored {
             observe_mode: d.observe_mode,
             agent_enabled: d.agent_enabled,
             agent_mode: d.agent_mode,
+            diagnostic_logs: d.diagnostic_logs,
             wizard: WizardState::default(),
         }
     }
@@ -338,6 +341,7 @@ impl SettingsStore {
                             }
                             clean.agent_enabled = d.agent_enabled;
                             clean.agent_mode = d.agent_mode;
+                            clean.diagnostic_logs = d.diagnostic_logs;
                         }
                         if issues.iter().any(|i| i.field != SettingsField::ModelsDir) {
                             store.load_error = Some(ERR_SETTINGS_CORRUPT);
@@ -402,6 +406,7 @@ impl SettingsStore {
             observe_mode: self.stored.observe_mode,
             agent_enabled: self.stored.agent_enabled,
             agent_mode: self.stored.agent_mode,
+            diagnostic_logs: self.stored.diagnostic_logs,
         }
     }
 
@@ -445,6 +450,9 @@ impl SettingsStore {
         }
         if let Some(v) = patch.agent_mode {
             next.agent_mode = v;
+        }
+        if let Some(v) = patch.diagnostic_logs {
+            next.diagnostic_logs = v;
         }
         let (next, issues) = next.sanitize(Some(patch));
         let json = serde_json::to_vec_pretty(&next).map_err(|_| SettingsError::Io)?;
@@ -1171,6 +1179,7 @@ mod tests {
         "observe_mode", // dry run first (default ON); turning it off only skips that question, never a check
         "agent_enabled", // opt-in to the agent (default OFF); the readiness checks still apply
         "agent_mode",   // route voice requests to the agent (default OFF)
+        "diagnostic_logs", // local, size-capped, content-free log file (default OFF)
     ];
 
     /// Words that would name a safety switch. Checked on top of the allowlist.
@@ -1234,6 +1243,7 @@ mod tests {
                 observe_mode: Some(true),
                 agent_enabled: Some(false),
                 agent_mode: Some(false),
+                diagnostic_logs: Some(false),
             })
             .unwrap(),
         );

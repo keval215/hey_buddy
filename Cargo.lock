@@ -3698,6 +3698,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "registry-check"
+version = "0.1.0"
+dependencies = [
+ "voice",
+]
+
+[[package]]
+name = "registry-verify"
+version = "0.1.0"
+dependencies = [
+ "buddy-core",
+ "sha2",
+ "tempfile",
+ "voice",
+]
+
+[[package]]
 name = "reqwest"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

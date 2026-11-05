@@ -147,6 +147,16 @@ impl Downloader {
         }
     }
 
+    /// For the maintainer tool's tests (`fakes` feature, never in the desktop tree): the same
+    /// downloader, but plain `http://127.0.0.1` / `localhost` is accepted so a loopback fake
+    /// server can stand in for HTTPS.
+    #[cfg(feature = "fakes")]
+    pub fn with_loopback_http_for_tests() -> Self {
+        let mut d = Self::new();
+        d.allow_loopback_http = true;
+        d
+    }
+
     /// Test hook: rewrite every URL before it is validated and fetched.
     #[cfg(test)]
     pub fn with_rewrite(mut self, f: std::sync::Arc<Rewrite>) -> Self {
@@ -604,6 +614,23 @@ fn verify(path: &Path, want: Option<&str>) -> Result<Option<u64>, DownloadError>
         return Ok(None);
     }
     Ok(Some(len))
+}
+
+/// Streamed `(length, lowercase sha256 hex)` of `path`.
+pub(crate) fn file_sha256(path: &Path) -> Result<(u64, String), DownloadError> {
+    let mut f = std::fs::File::open(path).map_err(|e| map_io(&e))?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut len = 0u64;
+    loop {
+        let n = f.read(&mut buf).map_err(|e| map_io(&e))?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+        len += n as u64;
+    }
+    Ok((len, hex(&h.finalize())))
 }
 
 fn hex(bytes: &[u8]) -> String {

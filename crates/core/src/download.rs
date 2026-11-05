@@ -192,7 +192,7 @@ pub(crate) fn plan(m: &ModelEntry) -> Result<Vec<PlannedFile>, DownloadError> {
 
 /// What must exist on disk for the model to count as present: `(relative path, is_dir)`.
 /// `None` for models that are not files (Ollama).
-fn expected(m: &ModelEntry) -> Option<Vec<(String, bool)>> {
+pub(crate) fn expected(m: &ModelEntry) -> Option<Vec<(String, bool)>> {
     if let Some(files) = &m.files {
         return Some(files.iter().map(|f| (f.path.clone(), false)).collect());
     }
@@ -360,6 +360,46 @@ fn free_space_of(p: &Path) -> Option<u64> {
 #[cfg(not(any(unix, windows)))]
 fn free_space_of(_: &Path) -> Option<u64> {
     None
+}
+
+/// Size and checksum of a file fetched by [`fetch_report`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchReport {
+    pub size: u64,
+    /// Lowercase hex sha256.
+    pub sha256: String,
+}
+
+/// Maintainer tooling (S3-5): download `url` through the same HTTPS-only, redirect-checked,
+/// size-capped downloader into `root` (an existing, empty scratch directory) and report its
+/// size and sha256. The file is left at `root/probe.bin`; the caller removes `root`. Nothing is
+/// verified against a registry value (there is none yet): the maintainer reviews the output.
+pub fn fetch_report(
+    downloader: &Downloader,
+    url: &str,
+    root: &Path,
+    max_bytes: u64,
+    progress: &(dyn Fn(u64, Option<u64>) + Sync),
+) -> Result<FetchReport, DownloadError> {
+    const REL: &str = "probe.bin";
+    downloader.check_url(url)?;
+    let job = Job {
+        id: "probe".to_string(),
+        root: root.to_path_buf(),
+        files: vec![PlannedFile {
+            rel: REL.to_string(),
+            url: url.to_string(),
+            sha256: None,
+            declared: Some(max_bytes),
+            // No slack: `max_bytes` is a hard cap.
+            exact_size: true,
+        }],
+        cancel: Arc::new(AtomicBool::new(false)),
+    };
+    downloader.run(&job, progress)?;
+    let dest = resolve_inside(root, REL)?;
+    let (size, sha256) = fetch::file_sha256(&dest)?;
+    Ok(FetchReport { size, sha256 })
 }
 
 /// Reported to the observer (the glue turns these into events).
@@ -549,6 +589,27 @@ impl ModelManager {
             return Err(DownloadError::Io);
         }
         Ok(())
+    }
+
+    /// A download is running.
+    pub fn is_downloading(&self) -> bool {
+        self.active_id().is_some()
+    }
+
+    /// Stop whatever is downloading and wait (at most `wait`) until its worker has cleaned up.
+    /// `true` when nothing is running afterwards. Used before the downloaded models are erased.
+    pub fn cancel_active_and_wait(&self, wait: std::time::Duration) -> bool {
+        if let Some(a) = lock(&self.inner.active).as_ref() {
+            a.cancel.store(true, Ordering::SeqCst);
+        }
+        let start = std::time::Instant::now();
+        while self.active_id().is_some() {
+            if start.elapsed() >= wait {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        true
     }
 
     /// Ask the running download of `id` to stop. Its partial files are deleted. No-op when

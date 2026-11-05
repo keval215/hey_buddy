@@ -292,6 +292,11 @@ jobs:
           out=$(cargo run -q -p installer-check)
           echo "$out"
           echo "$out" | grep -q 'installer-check: OK' # not vacuous
+      - name: Model registry check (S3-5, static, offline; values stay TODO until a maintainer fills them)
+        run: |
+          out=$(cargo run -q -p registry-check -- models/registry.json)
+          echo "$out"
+          echo "$out" | grep -qE 'registry-check: OK \([1-9][0-9]+ entries' # not vacuous (at least 10)
       - name: Licence check
         uses: EmbarkStudios/cargo-deny-action@v2
         with:

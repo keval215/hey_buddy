@@ -1,0 +1,18 @@
+[package]
+name = "registry-verify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Maintainer tool (S3-5): download one URL with the app's verified downloader and print size + sha256 to paste into models/registry.json. Explicit run only; never edits the registry."
+
+[dependencies]
+# The app's downloader (HTTPS only, redirect checks, size cap): no second copy of that logic.
+buddy-core = { path = "../../crates/core" }
+voice = { path = "../../crates/voice" }
+tempfile = "3"
+
+[dev-dependencies]
+# `Downloader::with_loopback_http_for_tests` (test doubles only; never reaches the desktop tree).
+buddy-core = { path = "../../crates/core", features = ["fakes"] }
+sha2 = "0.10"

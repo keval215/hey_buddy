@@ -24,16 +24,17 @@ use voice::{SttProvider, TtsProvider};
 use crate::activity::ActivityProbe;
 use crate::agent::AgentTrigger;
 use crate::api::{
-    AuditClearDto, AuditExportDto, AuditPageDto, Decision, DenyListDto, DisplayDto, DownloadDone,
-    DownloadFailed, DownloadProgress, EngineSlotName, EngineSwapEvent, FirewallStatus,
-    LastRequestDto, ModelRow, Phase, PointEvent, Settings, SettingsPatch, SettingsResult, Status,
-    SwapTarget, TurnState,
+    AuditClearDto, AuditExportDto, AuditPageDto, DataDeleteDto, DataKind, DataOverviewDto,
+    Decision, DenyListDto, DisplayDto, DownloadDone, DownloadFailed, DownloadProgress,
+    EngineSlotName, EngineSwapEvent, FirewallStatus, LastRequestDto, ModelRow, Phase, PointEvent,
+    Settings, SettingsPatch, SettingsResult, Status, SwapTarget, TurnState,
 };
 use crate::audit_log::{page_dto, validate_export_path, AuditCmdError, DEFAULT_PAGE};
 use crate::consent::{
     last_request_dto, provider_allowed, ConsentError, ConsentGate, PreviewSink, PreviewStore,
     LAST_KEY,
 };
+use crate::data_paths::{DataError, DataLocations};
 use crate::deny_edit::{DenyEditError, DenyEditor};
 use crate::download::{
     DownloadError, DownloadNotice, DownloadObserver, Downloader, ModelManager, SharedDir,
@@ -170,6 +171,9 @@ pub struct Buddy {
     /// The deny-list editor; `None` until the shell calls `set_config_dir` (then the engine's
     /// own list is used unchanged).
     deny_editor: Mutex<Option<DenyEditor>>,
+    /// The two folders the app writes into (set by the shell); what "Your data" shows and erases.
+    config_dir: Mutex<Option<PathBuf>>,
+    data_dir: Mutex<Option<PathBuf>>,
     /// Latest failed swap per slot, shown as a status notice until the next request.
     swap_failures: Arc<Mutex<BTreeMap<EngineSlotName, String>>>,
     /// The turn engine's dependencies; `None` = voice engines not built.
@@ -275,6 +279,8 @@ impl Buddy {
             default_models_dir: Mutex::new(None),
             models_cell: Arc::default(),
             deny_editor: Mutex::new(None),
+            config_dir: Mutex::new(None),
+            data_dir: Mutex::new(None),
             swap_failures,
             engine: Mutex::new(None),
             current: Mutex::new(None),
@@ -576,6 +582,7 @@ impl Buddy {
     /// Loads the list; a broken file falls back to the built-in list and is reported in the
     /// status notices.
     pub fn set_config_dir(&self, dir: PathBuf) {
+        *lock(&self.config_dir) = Some(dir.clone());
         *lock(&self.deny_editor) = Some(DenyEditor::load(dir));
     }
 
@@ -641,6 +648,7 @@ impl Buddy {
     /// `false` and the sink fails every `intent`, so the agent cannot act (fail closed).
     pub fn set_data_dir(&self, dir: PathBuf) {
         self.audit_attempted.store(true, Ordering::SeqCst);
+        *lock(&self.data_dir) = Some(dir.clone());
         let _ = self.audit.attach(&dir);
     }
 
@@ -707,6 +715,81 @@ impl Buddy {
         }
         let removed = self.audit.clear(confirm)?;
         Ok(AuditClearDto { removed })
+    }
+
+    // ------------------------------------------------------------ your data (S3-6)
+
+    fn data_locations(&self) -> DataLocations {
+        DataLocations {
+            config_dir: lock(&self.config_dir).clone(),
+            data_dir: lock(&self.data_dir).clone(),
+        }
+    }
+
+    /// `data_overview` command: counts and sizes per kind. Read-only, local, no names.
+    pub fn data_overview(&self) -> DataOverviewDto {
+        let loc = self.data_locations();
+        let kinds = loc.overview(builtin_registry());
+        let custom_models_dir = match (&loc.data_dir, self.models_dir()) {
+            (Some(d), Some(m)) => m != d.join("models"),
+            _ => false,
+        };
+        DataOverviewDto {
+            kinds,
+            custom_models_dir,
+            diagnostic_logs: lock(&self.settings).settings().diagnostic_logs,
+        }
+    }
+
+    /// `data_delete` command (explicit, confirmed user action). `confirm` must be exactly
+    /// `kind.confirm_token()`. Refused with `busy` while a task, turn, update operation or (for
+    /// everything except the models themselves) a download is running; deleting the models
+    /// stops a running download first. `update_busy` comes from the update manager (the shell
+    /// owns it).
+    pub fn data_delete(
+        &self,
+        kind: DataKind,
+        confirm: &str,
+        update_busy: bool,
+    ) -> Result<DataDeleteDto, DataError> {
+        if confirm != kind.confirm_token() {
+            return Err(DataError::NeedsConfirm);
+        }
+        if self.agent_busy() || lock(&self.current).is_some() || update_busy {
+            return Err(DataError::Busy);
+        }
+        let mgr = self.model_manager();
+        if kind == DataKind::Models {
+            if let Some(m) = &mgr {
+                if !m.cancel_active_and_wait(std::time::Duration::from_secs(5)) {
+                    return Err(DataError::Busy);
+                }
+            }
+        } else if self.downloading() {
+            return Err(DataError::Busy);
+        }
+        match kind {
+            DataKind::AuditLog => match self.audit.clear(true) {
+                Ok(n) => Ok(DataDeleteDto {
+                    kind,
+                    removed: n,
+                    failed: 0,
+                    restart_needed: false,
+                }),
+                Err(audit::LogError::Io) => Ok(DataDeleteDto {
+                    kind,
+                    removed: 0,
+                    failed: 1,
+                    restart_needed: false,
+                }),
+                Err(_) => Err(DataError::Unavailable),
+            },
+            _ => self.data_locations().delete(kind, builtin_registry()),
+        }
+    }
+
+    fn downloading(&self) -> bool {
+        self.model_manager().is_some_and(|m| m.is_downloading())
     }
 
     // ------------------------------------------------------------ consent / preview

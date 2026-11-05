@@ -226,6 +226,11 @@ impl UpdateManager {
         matches!(self.inner.cfg, UpdateConfig::Configured(_))
     }
 
+    /// An update check, download or install is running (cheap: no file is read).
+    pub fn is_busy(&self) -> bool {
+        lock(&self.inner.state).busy.is_some()
+    }
+
     fn begin(&self, op: Op) -> Result<OpGuard, UpdateFail> {
         let mut st = lock(&self.inner.state);
         if st.busy.is_some() {
