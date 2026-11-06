@@ -76,10 +76,8 @@ async fn a_hung_engine_is_killed_by_the_kill_switch_and_the_gate_is_released() {
 #[tokio::test]
 async fn an_approval_that_never_arrives_expires_and_frees_everything() {
     let e = env();
-    e.human.script(&[Act::Silent]);
-    let t = e.advance_when_pending(Duration::from_secs(130));
+    e.human.script(&[custom(|cx| cx.advance_ms(130_000))]);
     let r = e.run(&notepad_plan()).await;
-    t.join().unwrap();
     assert_eq!(r.outcome, TaskOutcome::Expired(Stage::LiveOffer), "{r:?}");
     e.executed_nothing();
     assert_eq!(e.broker.pending_count(), 0);

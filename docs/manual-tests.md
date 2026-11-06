@@ -783,6 +783,76 @@ A kill adds `killed` and `sup_task_end` (decision `killed`, result `run` / `plan
 - The spoken phrases and read answers through the real Phonon/Kokoro TTS: "Done.", "Stopped.", "I couldn't do that.",
   "Okay, I won't.", "I need you to take a look.", and for a `find_text` task "I found one match. The first is a button: Save."
 
+## Installer (S3-1) - UNTESTED on this machine (Windows only; built in CI, artifact `hey_buddy-installer`)
+
+The NSIS build cannot run on Linux. Download the artifact, check `SHA256SUMS`, then (details in `docs/installer.md`):
+
+- [ ] Install as a normal (non-admin) user: NO UAC prompt appears; installed under `%LOCALAPPDATA%\Programs\hey_buddy`.
+- [ ] SmartScreen shows the unsigned warning ("Windows protected your PC"); More info, Run anyway works. Record the
+      exact text.
+- [ ] WebView2: on a machine without the runtime the installer downloads it and says so; with it present nothing is
+      downloaded.
+- [ ] hey_buddy starts after install (tray icon, hotkey), icon looks right in Start menu, tray and installer.
+- [ ] `buddy-agent.exe` sits beside the Tauri-produced main app exe in the install dir (likely `desktop.exe`; record the
+      real name). `icacls "<install dir>"` lists `ALL APPLICATION PACKAGES:(RX)` (NOT `(OI)(CI)`, so nothing inherited)
+      and `icacls "<install dir>\buddy-agent.exe"` lists `ALL APPLICATION PACKAGES:(RX)`; no write grant anywhere.
+      A plan task spawns the sandboxed agent (see "Agent engine sandbox"). If it fails with a missing DLL, note which.
+- [ ] Guard: install into a drive root (`D:\`) or your profile / Documents / Desktop folder: the installer shows a
+      warning that the agent sandbox will be unavailable, NO `ALL APPLICATION PACKAGES` ACE is added to that folder
+      (`icacls` shows none), and the agent stays off (`sandbox_failed`), nothing is spawned unsandboxed.
+- [ ] Run the installer a second time (upgrade path, as the updater will): no arguments, no prompt for admin.
+- [ ] Uninstall: install dir is gone; settings, models and audit log in AppData are still there by default; the
+      "delete application data" checkbox is OFF by default.
+
+## Updates (S3-3) - UNTESTED on this machine (Windows only for the launch; the rest runs on Linux CI with fakes)
+
+Design: `docs/adr/0005-auto-update.md` (provisional D-010); how it works: `docs/update.md`. In this repository
+`TRUSTED_KEYS` is EMPTY, so a normal build is "not configured" and never contacts the network.
+
+Unconfigured build (what CI and `main` ship today):
+
+- [ ] Settings shows an "Updates" section that says "Updates are not configured in this build."; "Check for
+      updates", "Download" and "Install and restart" are all disabled.
+- [ ] Start the app with a network monitor (Resource Monitor, or a firewall prompt): NO update-related connection
+      at startup, after an hour, or when opening Settings.
+
+Local-only test with your own key (NEVER commit or ship this; there is deliberately no test-key switch in the app):
+
+1. Generate a throw-away key OUTSIDE the repo: `cargo run -p update-sign -- keygen --id hb-local --private C:\Temp\hb.key --public C:\Temp\hb.pub`
+   (it refuses to write inside a git work tree). Copy the printed `TrustedKey { .. }` line.
+2. In a LOCAL checkout only, paste it into `TRUSTED_KEYS` in `crates/update/src/config.rs` and set the `OWNER_TODO`
+   part of the manifest URL and `hosts` to a host you control (a local HTTPS server with a certificate the machine
+   trusts, or a GitHub test repo). Build it with `pnpm --filter desktop tauri build`. Do not commit this change.
+3. Write a payload JSON (ADR 0005 section 4.2: `schema`, `product`, `channel`, `serial`, `version`, `issued_at`,
+   `expires_at` <= 180 days later, `min_supported`, `revoked`, `notes`, one `windows-x86_64`/`nsis` artifact with the
+   installer URL, its lowercase sha256 and exact size), sign it:
+   `update-sign sign --private C:\Temp\hb.key --id hb-local --payload payload.json --out update-manifest.json`,
+   check it: `update-sign verify --public C:\Temp\hb.pub --id hb-local --envelope update-manifest.json`.
+
+Then, with that local build:
+
+- [ ] "Check for updates" with a manifest for a HIGHER version: shows "Version X is available" and the notes as plain
+      text; one request in the server log, no cookie, `User-Agent: hey_buddy-update`, no query string.
+- [ ] A manifest for the SAME version: "You are up to date". An OLDER version: refused (stale). A lower `serial` than
+      before: refused (replayed). An expired manifest: "out of date" message.
+- [ ] Edit one byte of the envelope: refused (signature). Sign with a different key: refused.
+- [ ] "Download" shows progress and "downloaded and verified"; "Install and restart" is a SEPARATE click and only
+      enabled after it. Cancel mid-download leaves nothing in `%APPDATA%\dev.heybuddy.desktop\updates\.downloads`.
+- [ ] Flip one byte of `updates\installer.exe` after the download: "Install and restart" says the file changed and
+      does NOT start anything.
+- [ ] Install and restart: the NSIS installer starts with NO arguments and NO admin prompt, hey_buddy exits, the
+      per-user install is replaced. `%LOCALAPPDATA%\dev.heybuddy.desktop\updates\run\<32 hex>\` holds only
+      `setup.exe`; `icacls` on it shows SYSTEM and your user only, no inheritance.
+- [ ] Next "Check": the old `run\<hex>` directory is removed.
+- [ ] RECORD: does SmartScreen prompt for the installer launched this way (ADR 0005 expects no)? Does Smart App
+      Control (Windows 11) block the unsigned installer (`launch_blocked`)? Is the NSIS self-extraction folder
+      private?
+- [ ] Downgrade: a manifest that lists YOUR running version in `revoked` and offers a lower version shows the
+      withdrawn warning and a confirm checkbox; "Install and restart" stays disabled until it is ticked.
+- [ ] `updates\kept\` holds exactly one previous verified installer + envelope after a second download.
+- [ ] The activity log (Settings, "Agent activity log") shows `update_check` / `update_download` / `update_install`
+      lines with result codes and versions only: no URL, no path, no notes.
+
 ## Step 2 packaging note
 
 - [ ] macOS bundled builds (not `tauri dev`) need an `Info.plist` with
@@ -837,3 +907,109 @@ Known caveats / VERIFY items for Kokoro (also in the `phonemize_en` module docs)
   (onnx-community `voices/<name>.bin` style). `.pt` voices and kokoro-onnx `voices-v1.0.bin`/npz do NOT load.
 - [ ] VERIFY the ARPAbet to misaki symbol mapping (listen for wrong vowels) and that the vocab file
   is really named `kokoro-82m.config.json`.
+
+## First-run wizard (S3-4) — Windows, UNTESTED
+
+Use a fresh user profile (or delete the `wizard` entry from `settings.json`). Build with
+`--features real-voice` for the microphone step. Leave a network monitor (Resource Monitor or
+`netstat -ano`) open to watch for connections.
+
+- [ ] First launch: the settings window opens by itself on the wizard (Welcome). Before any click:
+  no connection to anything, microphone indicator off, nothing in the models folder.
+- [ ] Welcome lists local-first, screen only on hotkey, cloud off / preview before send, agent off.
+- [ ] Next / Back / Skip through the steps without pressing any check button: still no network, no
+  microphone indicator.
+- [ ] Your computer: "Check my computer" shows RAM, GPU name and VRAM that match Task Manager.
+  A 4 GB GPU with 16 GB RAM recommends `default`; a machine with less (or an integrated GPU)
+  recommends `low-memory`. Pick the other profile with "Use this profile"; the Models step follows.
+- [ ] Microphone: "Test microphone" lights the mic indicator for at most 5 s, the meter moves
+  when you talk, and the indicator goes off afterwards. No audio file appears anywhere. With the
+  microphone muted or unplugged the text explains it.
+- [ ] Ollama (not installed or stopped): "Check" says nothing answered and shows install text
+  (no link opens). Network monitor shows only a connection to 127.0.0.1:11434.
+- [ ] Ollama running with one of the models: the model shows installed, the other shows the
+  `ollama pull` hint.
+- [ ] Models: only the active profile's models are listed; a "no download source yet" row is
+  explained and has no working Download; nothing downloads until you click.
+- [ ] Hotkey: an invalid chord (`Space`) is refused with a hint; a valid one is saved and reports
+  ready; a chord owned by another app reports it could not be used and the old one stays.
+- [ ] Safety: Skip is disabled with the explanation; the rows show local-only ON, observe ON,
+  agent OFF, vision auto, the deny-list count. Before running the wizard set local-only OFF in
+  Settings, run setup again: the row says it will be switched to the safe value, and "Keep these
+  safe settings" turns it ON. Nothing in the wizard can turn a protection off.
+- [ ] Finish, restart the app: the wizard does not open again. "Run setup again" in Settings
+  opens it at Welcome and changes no setting.
+- [ ] Close the app in the middle of the wizard and restart: it opens again (resumes where you
+  were, or at Welcome after edits to the file).
+- [ ] Edit `settings.json`, set `"wizard": {"step": "Nope"}` and turn local-only to false: on the
+  next start the wizard is back at Welcome and local-only is ON again.
+
+## Data and deletion (S3-5/S3-6)
+
+Windows UNTESTED (the logic is covered on Linux by `cargo test -p buddy-core` and `pnpm test`; these steps check the real
+folders, junctions and the installer). The folders are `%APPDATA%\dev.heybuddy.desktop` (VERIFY the exact name).
+
+- [ ] Fresh install, first start: no `logs` folder exists. Settings, "Your data": every row is listed with a size, and
+  nothing was deleted by opening the screen.
+- [ ] Turn on "Keep a local diagnostic log", Save, restart: `logs\hey_buddy.log` appears, holds only timestamps and event
+  names (no text you said, no window titles, no URLs). Turn it off and restart: no new lines are added.
+- [ ] Click "Delete..." on any row: nothing happens until "Yes, delete ..." is clicked; "Cancel" disarms it. Do this for
+  Settings (restart afterwards: defaults and the wizard come back), App deny list changes, Update files, Logs, Downloaded
+  models (files gone, a custom models folder untouched) and Agent activity log (a new log with one `cleared` line).
+- [ ] While a download is running, delete the models: the download stops, then the files go. While an agent task or an
+  update step is running, any delete answers "Something is running".
+- [ ] Make a junction inside the data folder (`mklink /J %APPDATA%\dev.heybuddy.desktop\logs C:\Temp\keep`) and click
+  Delete logs: `C:\Temp\keep` and its files are untouched and the result says one item could not be removed.
+- [ ] Uninstall without the checkbox: your data stays. Uninstall with the checkbox: compare what is left against
+  `docs/installer.md` (VERIFY) and note any difference.
+- [ ] Registry tool (maintainer, needs network): `cargo run -p registry-verify -- --id <id> --url <https url>` prints size,
+  sha256 and the licence hint and changes no file; an `http://` URL or one with `user:pass@` is refused.
+
+## Step 3 exit test (Windows) - UNTESTED on this machine (everything below)
+
+Consolidates the Step 3 sections above ("Installer (S3-1)", "Updates (S3-3)", "First-run wizard (S3-4)", "Data and
+deletion (S3-5/S3-6)") into one pass on a clean machine. Use a fresh Windows 10/11 VM or a brand-new local user (a normal
+user, not an administrator account if you can avoid it). Mark each step PASS or FAIL, write what you saw for any FAIL,
+then use the triage table. Maintainer release steps are in `docs/RELEASING.md`; this test needs no signing key except
+step 9.
+
+Get the installer from the CI artifact `hey_buddy-installer` (or a draft release) and check it first:
+`sha256sum -c SHA256SUMS` or `Get-FileHash <file> -Algorithm SHA256`.
+
+| # | Step | Expected result | Pass |
+|---|---|---|---|
+| 1 | Open a network monitor (Resource Monitor, Network tab, or Sysinternals ProcMon filtered on `desktop.exe`). Double-click the unsigned `hey_buddy_<version>_x64-setup.exe`. | SmartScreen "Windows protected your PC" (record the exact text); More info, Run anyway. NO UAC / administrator prompt at any point. | [ ] PASS [ ] FAIL |
+| 2 | Finish the installer with defaults. | Installed under `%LOCALAPPDATA%\Programs\hey_buddy`; if WebView2 was missing the installer said it downloads it, otherwise nothing is downloaded. Start menu entry, icon looks right. `buddy-agent.exe` sits beside the main exe (record its name; `icacls` as in "Installer (S3-1)"). | [ ] PASS [ ] FAIL |
+| 3 | First launch, before any click. | The settings window opens on the wizard (Welcome). No connection to anything, microphone indicator off, no `models` and no `logs` folder under `%APPDATA%\dev.heybuddy.desktop`. | [ ] PASS [ ] FAIL |
+| 4 | Wizard, Next/Back/Skip through every step without pressing a check button. | Still no network and no microphone indicator. Skipping a step changes no setting; the Safety step's Skip is disabled with an explanation. | [ ] PASS [ ] FAIL |
+| 5 | "Check my computer". | RAM, GPU name and VRAM match Task Manager; the recommended profile follows the rule (4 GB GPU + 16 GB RAM: `default`; less or integrated GPU: `low-memory`). "Use this profile" on the other one makes the Models step follow. | [ ] PASS [ ] FAIL |
+| 6 | Ollama step with Ollama stopped or not installed, then running with one profile model pulled. | Stopped: "nothing answered" plus install text (no link opens), network shows only 127.0.0.1:11434. Running: the pulled model shows installed, the other shows its `ollama pull` hint. | [ ] PASS [ ] FAIL |
+| 7 | Models step, download ONE model. | If `models/registry.json` values are still `TODO` (expected until a maintainer fills them): the rows say "no download source yet", have no working Download button, nothing downloads. THEN: fill one entry with `cargo run -p registry-verify -- --id <id> --url <https url>` (prints size, sha256, licence hint, changes no file), paste into `models/registry.json`, run `cargo run -p registry-check -- models/registry.json`, rebuild, repeat: Download shows progress, the licence, "downloaded and verified", and the file lands in `%APPDATA%\dev.heybuddy.desktop\models`. A wrong sha256 must end in `checksum_mismatch` with nothing left. | [ ] PASS [ ] FAIL [ ] NO SOURCE (expected, record) |
+| 8 | Wizard Hotkey and Safety steps, Finish, restart the app. | Invalid chord refused, valid one saved; safe defaults shown (local-only ON, observe ON, agent OFF); wizard does not open again; "Run setup again" in Settings opens Welcome and changes nothing. | [ ] PASS [ ] FAIL |
+| 9 | Step 1 exit test, quick pass (`Step 1 EXIT TEST (T12)`, parts A and C at least): hold the hotkey, ask about the screen, check the preview panel, deny-listed app and secure field are blacked out. | Same results as Step 1; the installed app behaves like `tauri dev`. | [ ] PASS [ ] FAIL |
+| 10 | Updates, UNCONFIGURED build (the installer as shipped): Settings, "Updates". With the network monitor still running, click around, open Settings, wait ten minutes. | Text "Updates are not configured in this build."; Check, Download and Install are disabled; ZERO update-related connections (nothing to github.com), no `updates` folder created. | [ ] PASS [ ] FAIL |
+| 11 | Updates, CONFIGURED local build: follow "Updates (S3-3)", "Local-only test with your own key" (throw-away key OUTSIDE the repo, local edit of `TRUSTED_KEYS` in `crates/update/src/config.rs`, NEVER committed) and run its checklist: higher/same/older version, replay, expired, tampered envelope, wrong key, download, flipped installer byte, install, downgrade. | Every line of that checklist passes; exactly one GET per check. Record SmartScreen and Smart App Control behaviour for the launched installer. | [ ] PASS [ ] FAIL [ ] SKIPPED |
+| 12 | Settings, "Your data". | Every row (settings, deny list changes, update files, logs, models, agent activity log) with a size; opening the screen deleted nothing. | [ ] PASS [ ] FAIL |
+| 13 | Delete each kind in turn: Settings, App deny list changes, Update files, Logs (turn "Keep a local diagnostic log" on first), Downloaded models, Agent activity log. | Nothing happens until "Yes, delete ..." is clicked; Cancel disarms. Settings: defaults and wizard return after restart. Models: files gone, a custom models folder untouched. Activity log: new log with one `cleared` line. While a download or task runs: models delete stops the download first; other deletes say "Something is running". A junction inside the data folder is not followed (see "Data and deletion"). | [ ] PASS [ ] FAIL |
+| 14 | Uninstall (Settings, Apps, hey_buddy) WITHOUT ticking "delete the application data". | Install folder gone, no Start menu entry, registry uninstall entry gone. `%APPDATA%\dev.heybuddy.desktop` (settings, models, audit) still there. | [ ] PASS [ ] FAIL |
+| 15 | Reinstall (run the installer again) over the existing data. | No admin prompt; the app starts with your old settings, wizard does not reappear, models still listed installed. (Also run the installer a second time over an installed copy: upgrade path.) | [ ] PASS [ ] FAIL |
+| 16 | Uninstall again, THIS TIME ticking the Tauri "delete the application data" checkbox. | Record exactly what was removed: `%APPDATA%\dev.heybuddy.desktop`, `%LOCALAPPDATA%\dev.heybuddy.desktop` (webview cache), and whether a junction target was followed (it must not be). Compare with `docs/installer.md` ("Tauri's delete the application data checkbox", VERIFY) and write down any difference. | [ ] PASS [ ] FAIL |
+| 17 | Look for leftovers: `%LOCALAPPDATA%\Programs\hey_buddy`, both `dev.heybuddy.desktop` folders, `%TEMP%` (NSIS extraction), Run key (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`), Task Scheduler, Credential Manager entry for the API key. | Nothing remains except what you chose to keep (step 14) or what is listed as not covered (API key: remove with "Remove key" before uninstalling; a custom models folder). No autostart entry, no service, no scheduled task. | [ ] PASS [ ] FAIL |
+
+### Failure triage
+
+| Symptom | Likely cause | What to do |
+|---|---|---|
+| SmartScreen shows no "Run anyway" | policy, or Smart App Control (Windows 11) blocks unsigned code | record the text; use a VM with Smart App Control off or a Windows 10 machine; note it for the release notes |
+| UAC prompt appears during install | `installMode` or the installer manifest changed | FAIL step 1; run `cargo run -p installer-check`, check `tauri.conf.json` `installMode: currentUser` |
+| Installer says it downloads WebView2 on a machine that has it | detection differs | record it; not a security failure |
+| Wizard does not open on first launch | `settings.json` already exists from an older run | use a fresh user, or delete the `wizard` entry |
+| Network activity at startup other than 127.0.0.1:11434 after a click | a check ran without a click | FAIL: copy the destination from the monitor, file a bug (privacy) |
+| Models step: "no download source yet" | registry values are `TODO` | expected until filled; follow step 7 with `registry-verify` |
+| `checksum_mismatch` on the model | wrong sha256/size in the registry, or a truncated download | re-run `registry-verify` on the exact URL; nothing partial should remain |
+| Updates section shows a Check button enabled in a normal build | a key was left in `TRUSTED_KEYS` | FAIL: remove the key; `grep -n 'TRUSTED_KEYS' crates/update/src/config.rs` must show the empty list |
+| `launch_blocked` / `installer_needs_admin` on update install | Smart App Control or antivirus; installer asked for elevation | record it; the app tells the user to download manually |
+| Agent says `sandbox_failed` after install | install under a user-profile folder, drive root, or the AppContainer ACL is missing | see "Installer (S3-1)" guard and `icacls` items |
+| Data left after uninstall (step 14) | default behaviour, by design | not a failure; step 16 covers erasing it |
+| Data left after the checkbox (step 16) | Tauri removes only the identifier-named folders | record which; use "Your data" before uninstalling |
+| Delete says "Something is running" | a task, download or update step is active | wait or stop it, retry |

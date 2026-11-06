@@ -1,0 +1,11 @@
+[package]
+name = "registry-check"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Offline CI check for models/registry.json (S3-5): schema, profiles, TODO/url/sha256 consistency"
+
+[dependencies]
+# The registry types and their own validation, so this check is the app's check plus extras.
+voice = { path = "../../crates/voice" }

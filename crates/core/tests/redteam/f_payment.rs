@@ -181,10 +181,10 @@ async fn submit_stops_without_its_own_approval() {
 #[tokio::test]
 async fn submit_with_an_approval_that_never_arrives_expires_and_does_not_click() {
     let e = env();
-    e.human.script(&[Act::Approve, Act::Silent]);
-    let t = e.advance_when_pending(std::time::Duration::from_secs(40));
+    // The silent step request advances the manual clock past its 30 s TTL inside `show`.
+    e.human
+        .script(&[Act::Approve, custom(|cx| cx.advance_ms(40_000))]);
     let r = e.run(&form_plan()).await;
-    t.join().unwrap();
     assert_eq!(
         r.outcome,
         TaskOutcome::Expired(buddy_core::agent::Stage::StepApproval),

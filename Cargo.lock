@@ -334,6 +334,7 @@ dependencies = [
  "png",
  "policy",
  "reqwest",
+ "ring",
  "rustls",
  "secrecy",
  "serde",
@@ -345,7 +346,9 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ts-rs",
+ "update",
  "voice",
+ "windows",
 ]
 
 [[package]]
@@ -2178,6 +2181,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "installer-check"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3686,6 +3696,23 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "registry-check"
+version = "0.1.0"
+dependencies = [
+ "voice",
+]
+
+[[package]]
+name = "registry-verify"
+version = "0.1.0"
+dependencies = [
+ "buddy-core",
+ "sha2",
+ "tempfile",
+ "voice",
+]
 
 [[package]]
 name = "reqwest"
@@ -5264,6 +5291,30 @@ name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
+
+[[package]]
+name = "update"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+ "windows",
+]
+
+[[package]]
+name = "update-sign"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "ring",
+ "serde_json",
+ "tempfile",
+ "update",
+]
 
 [[package]]
 name = "url"

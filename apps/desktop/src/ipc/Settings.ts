@@ -52,4 +52,9 @@ agent_enabled: boolean,
 /**
  * Voice requests go to the agent instead of the chat (default OFF; needs `agent_enabled`).
  */
-agent_mode: boolean, };
+agent_mode: boolean, 
+/**
+ * Write a local, size-capped, content-free diagnostic log under `<app data>/logs` (default
+ * OFF; takes effect at the next start). Never uploaded.
+ */
+diagnostic_logs: boolean, };

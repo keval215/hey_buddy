@@ -29,7 +29,7 @@ use voice::registry::{is_safe_rel_path, ModelEntry, Registry, Task};
 
 use crate::api::{EngineSlotName, ModelRow, ModelStatus};
 
-mod fetch;
+pub(crate) mod fetch;
 pub use fetch::Downloader;
 #[cfg(test)]
 mod tests;
@@ -125,13 +125,16 @@ pub(crate) struct PlannedFile {
     /// `None` = the registry says `TODO` (unverified download).
     pub sha256: Option<String>,
     pub declared: Option<u64>,
+    /// Update installers (ADR 0005): the declared size is exact, with no slack.
+    pub exact_size: bool,
 }
 
 impl PlannedFile {
     /// Most bytes the server may send for this file.
     pub fn limit(&self) -> u64 {
+        let slack = if self.exact_size { 0 } else { SIZE_SLACK };
         self.declared
-            .map_or(DEFAULT_MAX_BYTES, |d| d.saturating_add(SIZE_SLACK))
+            .map_or(DEFAULT_MAX_BYTES, |d| d.saturating_add(slack))
     }
 }
 
@@ -164,6 +167,7 @@ pub(crate) fn plan(m: &ModelEntry) -> Result<Vec<PlannedFile>, DownloadError> {
                     url: f.url.clone(),
                     sha256: sha(&f.sha256),
                     declared: f.size_bytes,
+                    exact_size: false,
                 })
             })
             .collect();
@@ -182,12 +186,13 @@ pub(crate) fn plan(m: &ModelEntry) -> Result<Vec<PlannedFile>, DownloadError> {
         url: m.url.clone(),
         sha256: sha(&m.sha256),
         declared: m.size_bytes,
+        exact_size: false,
     }])
 }
 
 /// What must exist on disk for the model to count as present: `(relative path, is_dir)`.
 /// `None` for models that are not files (Ollama).
-fn expected(m: &ModelEntry) -> Option<Vec<(String, bool)>> {
+pub(crate) fn expected(m: &ModelEntry) -> Option<Vec<(String, bool)>> {
     if let Some(files) = &m.files {
         return Some(files.iter().map(|f| (f.path.clone(), false)).collect());
     }
@@ -276,6 +281,16 @@ fn walk_no_links<'a>(
     Ok(cur)
 }
 
+/// `path` itself is not a symlink / reparse point (a missing path passes).
+pub(crate) fn check_not_link(path: &Path) -> Result<(), DownloadError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(md) if link_like(&md) => Err(DownloadError::InvalidPath),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(DownloadError::Io),
+    }
+}
+
 #[cfg(windows)]
 fn link_like(md: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
@@ -347,6 +362,46 @@ fn free_space_of(_: &Path) -> Option<u64> {
     None
 }
 
+/// Size and checksum of a file fetched by [`fetch_report`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchReport {
+    pub size: u64,
+    /// Lowercase hex sha256.
+    pub sha256: String,
+}
+
+/// Maintainer tooling (S3-5): download `url` through the same HTTPS-only, redirect-checked,
+/// size-capped downloader into `root` (an existing, empty scratch directory) and report its
+/// size and sha256. The file is left at `root/probe.bin`; the caller removes `root`. Nothing is
+/// verified against a registry value (there is none yet): the maintainer reviews the output.
+pub fn fetch_report(
+    downloader: &Downloader,
+    url: &str,
+    root: &Path,
+    max_bytes: u64,
+    progress: &(dyn Fn(u64, Option<u64>) + Sync),
+) -> Result<FetchReport, DownloadError> {
+    const REL: &str = "probe.bin";
+    downloader.check_url(url)?;
+    let job = Job {
+        id: "probe".to_string(),
+        root: root.to_path_buf(),
+        files: vec![PlannedFile {
+            rel: REL.to_string(),
+            url: url.to_string(),
+            sha256: None,
+            declared: Some(max_bytes),
+            // No slack: `max_bytes` is a hard cap.
+            exact_size: true,
+        }],
+        cancel: Arc::new(AtomicBool::new(false)),
+    };
+    downloader.run(&job, progress)?;
+    let dest = resolve_inside(root, REL)?;
+    let (size, sha256) = fetch::file_sha256(&dest)?;
+    Ok(FetchReport { size, sha256 })
+}
+
 /// Reported to the observer (the glue turns these into events).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DownloadNotice {
@@ -371,10 +426,12 @@ struct Active {
     cancel: Arc<AtomicBool>,
 }
 
-/// What a worker thread needs.
+/// What a worker thread needs. `root` is the folder everything happens in (the models
+/// directory, or the updates directory for ADR 0005): files land below it, bookkeeping lives in
+/// `root/.downloads`.
 pub(crate) struct Job {
     pub id: String,
-    pub models: PathBuf,
+    pub root: PathBuf,
     pub files: Vec<PlannedFile>,
     pub cancel: Arc<AtomicBool>,
 }
@@ -519,7 +576,7 @@ impl ModelManager {
         }
         let job = Job {
             id: id.to_string(),
-            models: inner.dir.clone(),
+            root: inner.dir.clone(),
             files,
             cancel,
         };
@@ -532,6 +589,27 @@ impl ModelManager {
             return Err(DownloadError::Io);
         }
         Ok(())
+    }
+
+    /// A download is running.
+    pub fn is_downloading(&self) -> bool {
+        self.active_id().is_some()
+    }
+
+    /// Stop whatever is downloading and wait (at most `wait`) until its worker has cleaned up.
+    /// `true` when nothing is running afterwards. Used before the downloaded models are erased.
+    pub fn cancel_active_and_wait(&self, wait: std::time::Duration) -> bool {
+        if let Some(a) = lock(&self.inner.active).as_ref() {
+            a.cancel.store(true, Ordering::SeqCst);
+        }
+        let start = std::time::Instant::now();
+        while self.active_id().is_some() {
+            if start.elapsed() >= wait {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        true
     }
 
     /// Ask the running download of `id` to stop. Its partial files are deleted. No-op when

@@ -25,6 +25,8 @@ const COMMANDS: &[&str] = &[
     "get_audit_entries",
     "export_audit_log",
     "clear_audit_log",
+    "data_overview",
+    "data_delete",
     "kill_agent",
     "approval_ready",
     "approval_displayed",
@@ -32,6 +34,16 @@ const COMMANDS: &[&str] = &[
     "debug_fake_task",
     "agent_start_task",
     "agent_status",
+    "update_status",
+    "update_check",
+    "update_download",
+    "update_cancel",
+    "update_install",
+    "wizard_state",
+    "wizard_event",
+    "wizard_probe_machine",
+    "wizard_probe_mic",
+    "wizard_probe_ollama",
 ];
 
 fn main() {

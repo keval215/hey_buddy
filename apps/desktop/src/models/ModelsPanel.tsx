@@ -28,8 +28,11 @@ import { swapErrorText } from "../settings/form";
 export function ModelsPanel({
   profile,
   refreshKey = 0,
+  onlyIds,
 }: {
   profile: string;
+  /** Show only these registry ids (the first-run wizard lists the active profile's models). */
+  onlyIds?: string[];
   /** Bump to re-read the table (the models folder changed). */
   refreshKey?: number;
 }) {
@@ -99,7 +102,9 @@ export function ModelsPanel({
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => {
+          {rows
+            .filter((r) => onlyIds === undefined || onlyIds.includes(r.id))
+            .map((r) => {
             const p = view.progress[r.id];
             const pct = percent(p);
             const err = view.errors[r.id];

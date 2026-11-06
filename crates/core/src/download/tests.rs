@@ -1184,3 +1184,131 @@ fn symlinked_downloads_or_work_dir_is_refused() {
         Err(DownloadError::InvalidPath)
     );
 }
+
+// ------------------------------------------------------------ generalised jobs (ADR 0005)
+
+/// A one-file job rooted at `root` in the update shape: required sha256, exact size.
+fn update_job(root: &Path, url: String, data: &[u8], declared: usize) -> Job {
+    Job {
+        id: "update".into(),
+        root: root.to_path_buf(),
+        files: vec![PlannedFile {
+            rel: "installer.exe".into(),
+            url,
+            sha256: Some(sha(data)),
+            declared: Some(declared as u64),
+            exact_size: true,
+        }],
+        cancel: Arc::new(AtomicBool::new(false)),
+    }
+}
+
+fn run_job(dl: &Downloader, job: &Job) -> Result<(), DownloadError> {
+    dl.run(job, &|_, _| {})
+}
+
+fn plain(data: &[u8]) -> Route {
+    Route {
+        body: data.to_vec(),
+        etag: None,
+        mode: Mode::Normal,
+    }
+}
+
+#[test]
+fn a_job_is_rooted_at_any_folder_not_just_the_models_dir() {
+    let srv = Server::start();
+    let data = body(30_000, 5);
+    srv.route("/i", plain(&data));
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("updates");
+    let dl = Downloader::for_tests(true).with_hosts(vec!["127.0.0.1".into()]);
+    run_job(&dl, &update_job(&root, srv.url("/i"), &data, data.len())).unwrap();
+    assert_eq!(std::fs::read(root.join("installer.exe")).unwrap(), data);
+    no_temp_left(&root);
+}
+
+#[test]
+fn update_jobs_have_no_size_slack_and_a_required_checksum() {
+    let srv = Server::start();
+    let data = body(30_000, 5);
+    let mut longer = data.clone();
+    longer.push(1);
+    srv.route("/longer", plain(&longer));
+    srv.route("/other", plain(&body(30_000, 6)));
+    let tmp = tempfile::tempdir().unwrap();
+    let dl = Downloader::for_tests(true);
+    // One byte more than declared is refused (a model download would allow 1 MiB of slack).
+    let root = tmp.path().join("a");
+    let job = update_job(&root, srv.url("/longer"), &data, data.len());
+    assert_eq!(run_job(&dl, &job), Err(DownloadError::TooLarge));
+    assert!(!root.join("installer.exe").exists());
+    no_temp_left(&root);
+    // Same length, other bytes: checksum mismatch, nothing left.
+    let root = tmp.path().join("b");
+    let job = update_job(&root, srv.url("/other"), &data, data.len());
+    assert_eq!(run_job(&dl, &job), Err(DownloadError::ChecksumMismatch));
+    assert!(!root.join("installer.exe").exists());
+    no_temp_left(&root);
+    // The same one extra byte IS tolerated for a model-shaped (non-exact) file.
+    let root = tmp.path().join("c");
+    let mut job = update_job(&root, srv.url("/longer"), &longer, data.len());
+    job.files[0].exact_size = false;
+    assert_eq!(run_job(&dl, &job), Ok(()));
+}
+
+#[test]
+fn a_redirect_to_a_host_that_is_not_allowed_is_refused_and_never_followed() {
+    let srv = Server::start();
+    let data = body(10_000, 1);
+    // `localhost` is loopback (so the plain rules pass) but is not on the allowlist.
+    srv.route(
+        "/i",
+        Route {
+            body: Vec::new(),
+            etag: None,
+            mode: Mode::Redirect(format!("http://localhost:{}/evil", srv.port)),
+        },
+    );
+    srv.route("/evil", plain(&data));
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("updates");
+    let dl = Downloader::for_tests(true).with_hosts(vec!["127.0.0.1".into()]);
+    let job = update_job(&root, srv.url("/i"), &data, data.len());
+    assert_eq!(run_job(&dl, &job), Err(DownloadError::BadRedirect));
+    assert_eq!(srv.hits(), 1, "the disallowed target was never contacted");
+    assert!(!root.join("installer.exe").exists());
+    no_temp_left(&root);
+    // Without an allowlist (the model path) the same redirect is followed.
+    srv.route("/evil", plain(&data));
+    let root2 = tmp.path().join("models-like");
+    let dl = Downloader::for_tests(true);
+    run_job(&dl, &update_job(&root2, srv.url("/i"), &data, data.len())).unwrap();
+}
+
+#[test]
+fn the_host_allowlist_applies_to_the_first_url_ports_and_userinfo_too() {
+    let dl = Downloader::new().with_hosts(vec!["github.com".into(), "objects.example".into()]);
+    assert!(dl.check_url("https://github.com/a/b").is_ok());
+    assert!(dl.check_url("https://GITHUB.com/a").is_ok());
+    for bad in [
+        "https://evil.example/a",
+        "https://github.com.evil.example/a",
+        "https://sub.github.com/a",
+        "https://github.com:8443/a",
+        "https://user@github.com/a",
+        "http://github.com/a",
+        "https://xn--gthub-3ua.com/a",
+        "https://g\u{0456}thub.com/a",
+    ] {
+        assert_eq!(
+            dl.check_url(bad).unwrap_err(),
+            DownloadError::InvalidUrl,
+            "{bad}"
+        );
+    }
+    // No list: unchanged behaviour for model downloads.
+    assert!(Downloader::new()
+        .check_url("https://anything.example/x")
+        .is_ok());
+}

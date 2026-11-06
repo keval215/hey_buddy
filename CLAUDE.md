@@ -61,6 +61,7 @@ crates/firewall/       secure-field detection, blackout, lock-screen pause
 crates/llm/            LlmProvider trait, ollama + anthropic adapters
 crates/action/         agent Action vocabulary: validated TypedText/KeyCombo/LaunchId, canonical bytes, digest (pure)
 crates/policy/         (target, not yet created) tier gate, plan/step approvals, sealed ApprovedAction
+crates/update/         update manifest verifier + decide() + Windows installer launch (pure, no network; ADR 0005)
 crates/driver/         DesktopDriver trait, Driver<A: Actuator>, FakeActuator, limits (Windows actuator: S2-14d)
 crates/agent/          plan engine (ADR 0003): stdio protocol, sandbox launcher, MinimalEngine, ProcessEngine, `buddy-agent` bin; no path to policy/driver/firewall
 crates/core/           (package buddy-core) wiring: hotkey → capture → firewall → STT → LLM → TTS
@@ -76,6 +77,7 @@ docs/                  STEP1.md, adr/, agents/ (team memory)
 - App: `pnpm --filter desktop tauri dev` (no voice engines); real voice: `pnpm --filter desktop tauri dev --features real-voice`
   (cmake + clang, models in `<app data>/models` or `HEY_BUDDY_MODELS_DIR`, `ORT_DYLIB_PATH`; see `docs/manual-tests.md`)
 - Red-team suite (attacks must fail closed; `docs/redteam.md`): `bash tools/check-redteam.sh` (or `cargo test -p buddy-core --test redteam`)
+- Workflow safety (release is draft-only, no secrets, pinned actions): `python3 -I tools/check-workflows_test.py && python3 -I tools/check-workflows.py`
 - Core e2e (fakes): `cargo test -p buddy-core --test e2e`; `cargo clippy -p buddy-core --features real-voice` checks the real adapters compile
 
 (Update this list when tooling changes.)

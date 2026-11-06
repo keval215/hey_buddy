@@ -6,6 +6,22 @@ _Owner: orch. Newest first. Max 60 entries; archive older ones to
 Format:
 
 ```
+## H-S3-5..8 2026-11-05 S3-5/6/7/8 -> coder x4, reviewer x2
+Asked: registry tooling, data paths/delete, release pipeline, exit test.
+Result: both APPROVED/CHANGES REQUESTED -> round 2 accepted by orch. Flake root cause: test-rig clock helper advanced at the wrong request.
+
+## H-S3-4 2026-11-04 S3-4 -> coder x2 (+resume after container restart), reviewer
+Asked: first-run wizard.
+Result: round 1 CHANGES REQUESTED (MAJOR vision Off->Auto loosened), round 2 accepted (exhaustive monotonic property test).
+
+## H-S3-3 2026-11-04 S3-3 -> coder x2, reviewer
+Asked: update crate + manager + commands + UI.
+Result: round 1 CHANGES REQUESTED (MAJOR untested downgrade guard), round 2 accepted (25 mutants killed in review).
+
+## H-S3-1 2026-11-04 S3-1 -> coder x2, reviewer
+Asked: unsigned NSIS per-user installer + installer-check + icons.
+Result: round 1 CHANGES REQUESTED (MAJOR icacls scope), round 2 accepted by orch (13 installer-check tests). NSIS build/CI artifact UNTESTED.
+
 ## H-S2-23b 2026-11-04 S2-23b -> coder, reviewer
 Asked: runtime glue, Tauri commands, settings, exit-test doc, supervisor minors.
 Result: APPROVED round 1 (4 MINOR deferred to S2-22).

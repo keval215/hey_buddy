@@ -17,6 +17,7 @@ mod kill;
 mod overlay;
 mod preview;
 mod shell;
+mod updates;
 
 use std::sync::Arc;
 
@@ -48,11 +49,14 @@ fn main() {
             if let Ok(data) = app.path().app_data_dir() {
                 buddy.set_models_dir(buddy_core::download::models_dir(&data));
                 // The activity log (<data>/audit). If it cannot be written the agent stays off.
+                // Local diagnostic log: only when the user switched it on (default OFF).
+                buddy_core::logging::init(&data, buddy.get_settings().diagnostic_logs);
                 buddy.set_data_dir(data);
             }
             shell::setup(app.handle(), &buddy)?;
             engine::start(app.handle(), &buddy, &dir);
             agent::start(app.handle(), &buddy);
+            updates::setup(app.handle(), &buddy);
             Ok(())
         });
 
@@ -81,12 +85,24 @@ fn main() {
         commands::get_audit_entries,
         commands::export_audit_log,
         commands::clear_audit_log,
+        commands::data_overview,
+        commands::data_delete,
         commands::kill_agent,
         commands::approval_ready,
         commands::approval_displayed,
         commands::approval_respond,
         commands::agent_start_task,
         commands::agent_status,
+        commands::update_status,
+        commands::update_check,
+        commands::update_download,
+        commands::update_cancel,
+        commands::update_install,
+        commands::wizard_state,
+        commands::wizard_event,
+        commands::wizard_probe_machine,
+        commands::wizard_probe_mic,
+        commands::wizard_probe_ollama,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -111,12 +127,24 @@ fn main() {
         commands::get_audit_entries,
         commands::export_audit_log,
         commands::clear_audit_log,
+        commands::data_overview,
+        commands::data_delete,
         commands::kill_agent,
         commands::approval_ready,
         commands::approval_displayed,
         commands::approval_respond,
         commands::agent_start_task,
         commands::agent_status,
+        commands::update_status,
+        commands::update_check,
+        commands::update_download,
+        commands::update_cancel,
+        commands::update_install,
+        commands::wizard_state,
+        commands::wizard_event,
+        commands::wizard_probe_machine,
+        commands::wizard_probe_mic,
+        commands::wizard_probe_ollama,
     ]);
 
     builder

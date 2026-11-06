@@ -4,14 +4,16 @@ use std::sync::Arc;
 
 use buddy_core::agent::{AgentRuntime, AgentStatusDto};
 use buddy_core::api::{
-    AuditClearDto, AuditExportDto, AuditPageDto, Decision, DenyListDto, DisplayDto, IssueCode,
-    LastRequestDto, ModelRow, PreviewDto, Settings, SettingsField, SettingsIssue, SettingsPatch,
-    SettingsResult, Status, SwapTarget,
+    AuditClearDto, AuditExportDto, AuditPageDto, DataDeleteDto, DataKind, DataOverviewDto,
+    Decision, DenyListDto, DisplayDto, IssueCode, LastRequestDto, ModelRow, PreviewDto, Settings,
+    SettingsField, SettingsIssue, SettingsPatch, SettingsResult, Status, SwapTarget,
 };
 use buddy_core::approval::{
     ApprovalBroker, ApprovalDecisionDto, ApprovalRequestDto, APPROVAL_WINDOW,
 };
 use buddy_core::kill::{KillController, KillReason};
+use buddy_core::update::{UpdateManager, UpdateStatusDto};
+use buddy_core::wizard::{MicProbeDto, WizardEvent, WizardView};
 use buddy_core::Buddy;
 use tauri::{AppHandle, Manager, State};
 
@@ -219,6 +221,40 @@ pub fn clear_audit_log(b: B, confirm: Option<bool>) -> Result<AuditClearDto, Str
         .map_err(|e| e.to_string())
 }
 
+/// Settings window only, read-only: counts and sizes of what the app has stored (no names, no
+/// paths, no content). Takes no parameter.
+#[tauri::command]
+pub async fn data_overview(window: tauri::Window, b: B<'_>) -> Result<DataOverviewDto, String> {
+    only_main_window(&window)?;
+    let b = b.inner().clone();
+    // Walks the folders (sizes): off the main thread.
+    tauri::async_runtime::spawn_blocking(move || b.data_overview())
+        .await
+        .map_err(|_| "io_error".to_string())
+}
+
+/// Settings window only, explicit and confirmed ("Your data"): erase one kind of stored data.
+/// `confirm` must be exactly the kind's token (`delete-audit-log`, ...), else `needs_confirm`.
+/// `busy` while a task, turn, download or update is running. No path parameter exists: the
+/// folders come from the shell. Fixed-token errors.
+#[tauri::command]
+pub async fn data_delete(
+    window: tauri::Window,
+    b: B<'_>,
+    mgr: State<'_, UpdateManager>,
+    kind: DataKind,
+    confirm: String,
+) -> Result<DataDeleteDto, String> {
+    only_main_window(&window)?;
+    let b = b.inner().clone();
+    let busy = mgr.is_busy();
+    // File work and the wait for a stopped download: off the main thread.
+    tauri::async_runtime::spawn_blocking(move || b.data_delete(kind, &confirm, busy))
+        .await
+        .map_err(|_| "io_error".to_string())?
+        .map_err(|e| e.to_string())
+}
+
 /// ANY app window (settings, overlay, preview, approval): STOP everything. It can only stop
 /// things, so it is safe to expose everywhere. Never blocks: the epoch moves at once and the
 /// kill worker does the rest. Returns nothing (no state leaks to a compromised page).
@@ -298,6 +334,149 @@ pub fn agent_status(window: tauri::Window, app: AppHandle, b: B) -> Result<Agent
     })
 }
 
+/// Update operations that start something are refused (`busy`) while a "Your data" deletion runs.
+fn refuse_while_deleting(b: &Buddy) -> Result<(), String> {
+    if b.is_deleting() {
+        Err("busy".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+/// Settings window only: what the Updates section shows. Local only: reads the session and two
+/// small files, never the network.
+#[tauri::command]
+pub async fn update_status(
+    window: tauri::Window,
+    mgr: State<'_, UpdateManager>,
+) -> Result<UpdateStatusDto, String> {
+    only_main_window(&window)?;
+    // Hashing the staged installer is heavy: off the main thread.
+    let mgr = mgr.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || mgr.status())
+        .await
+        .map_err(|_| "update_internal".to_string())
+}
+
+/// Settings window only, explicit click ("Check for updates"): ONE GET of the fixed release URL.
+/// An unconfigured build (no trusted key compiled in) answers `updates_not_configured` without
+/// any network call. Errors are fixed tokens. No path or URL parameter exists.
+#[tauri::command]
+pub async fn update_check(
+    window: tauri::Window,
+    b: B<'_>,
+    mgr: State<'_, UpdateManager>,
+) -> Result<UpdateStatusDto, String> {
+    only_main_window(&window)?;
+    refuse_while_deleting(&b)?;
+    mgr.check().await.map_err(|e| e.code().to_string())
+}
+
+/// Settings window only, explicit click ("Download"): fetch the offered installer in the
+/// background (needs a successful check). Progress arrives as `update_progress`, then
+/// `update_done` or `update_failed`.
+#[tauri::command]
+pub fn update_download(
+    window: tauri::Window,
+    b: B,
+    mgr: State<UpdateManager>,
+) -> Result<(), String> {
+    only_main_window(&window)?;
+    refuse_while_deleting(&b)?;
+    mgr.start_download().map_err(|e| e.code().to_string())
+}
+
+/// Settings window only: stop the running update download; its partial file is deleted.
+#[tauri::command]
+pub fn update_cancel(window: tauri::Window, mgr: State<UpdateManager>) -> Result<(), String> {
+    only_main_window(&window)?;
+    mgr.cancel();
+    Ok(())
+}
+
+/// Settings window only, SEPARATE explicit click ("Install and restart"): re-verify the staged
+/// installer (envelope signature + sha256 + size), start it with no arguments and exit this app.
+/// `expected_version` must be the version the user saw; `allow_downgrade` is the separate confirm
+/// for a downgrade away from a revoked version. On success the agent is stopped first (the kill
+/// switch) and the app exits; on any failure the app keeps running and the call returns a fixed
+/// token. No path, URL or argument parameter exists.
+#[tauri::command]
+pub async fn update_install(
+    window: tauri::Window,
+    app: AppHandle,
+    b: B<'_>,
+    mgr: State<'_, UpdateManager>,
+    expected_version: String,
+    allow_downgrade: bool,
+) -> Result<(), String> {
+    only_main_window(&window)?;
+    refuse_while_deleting(&b)?;
+    // Re-hashing and launching the installer is heavy: off the main thread.
+    let mgr = mgr.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || mgr.install(&expected_version, allow_downgrade))
+        .await
+        .map_err(|_| "update_internal".to_string())?
+        .map_err(|e| e.code().to_string())?;
+    // The installer is running: stop any agent run, then leave (the exit handler cancels any
+    // pending consent; the audit lines are already written).
+    if let Some(ctl) = app.try_state::<Arc<KillController>>() {
+        ctl.trip(KillReason::Shutdown);
+    }
+    app.exit(0);
+    Ok(())
+}
+
+/// Settings window only: the first-run wizard's saved progress and the facts it shows (the
+/// active profile, its model ids and Ollama tags). Local only: reads the settings, runs no probe,
+/// opens no microphone, makes no network call.
+#[tauri::command]
+pub fn wizard_state(window: tauri::Window, b: B) -> Result<WizardView, String> {
+    only_main_window(&window)?;
+    Ok(b.wizard_view())
+}
+
+/// Settings window only: a button press in the wizard (Next, Back, Skip, Retry, Finish, Rerun, or
+/// the informational hotkey result). The event is a typed enum; probe results are refused
+/// (`forbidden_event`). Runs nothing: no probe, no download. Confirming the safety step can only
+/// turn protections ON.
+#[tauri::command]
+pub fn wizard_event(window: tauri::Window, b: B, event: WizardEvent) -> Result<WizardView, String> {
+    only_main_window(&window)?;
+    b.wizard_event(&event).map_err(|e| e.code().to_string())
+}
+
+/// Settings window only, explicit click ("Check my computer"): read RAM and GPU, recommend a
+/// profile. Read-only system query; no network.
+#[tauri::command]
+pub async fn wizard_probe_machine(window: tauri::Window, b: B<'_>) -> Result<WizardView, String> {
+    only_main_window(&window)?;
+    let b = Arc::clone(b.inner());
+    // DXGI can take a moment: off the main thread.
+    tauri::async_runtime::spawn_blocking(move || b.wizard_probe_machine())
+        .await
+        .map_err(|_| "probe_failed".to_string())?
+        .map_err(|e| e.code().to_string())
+}
+
+/// Settings window only, explicit click ("Test microphone"): listen for at most 5 s and report a
+/// level (peak and RMS), nothing else. No audio is kept or written. Errors come back inside the
+/// result as fixed tokens.
+#[tauri::command]
+pub async fn wizard_probe_mic(window: tauri::Window, b: B<'_>) -> Result<MicProbeDto, String> {
+    only_main_window(&window)?;
+    b.wizard_probe_mic().await.map_err(|e| e.code().to_string())
+}
+
+/// Settings window only, explicit click ("Check"): ONE GET of Ollama's tag list on loopback
+/// (`127.0.0.1:11434`). Installs and starts nothing. No URL or path parameter exists.
+#[tauri::command]
+pub async fn wizard_probe_ollama(window: tauri::Window, b: B<'_>) -> Result<WizardView, String> {
+    only_main_window(&window)?;
+    b.wizard_probe_ollama()
+        .await
+        .map_err(|e| e.code().to_string())
+}
+
 /// The settings window's label.
 const MAIN_WINDOW: &str = "main";
 
@@ -364,8 +543,20 @@ mod tests {
         "get_audit_entries",
         "export_audit_log",
         "clear_audit_log",
+        "data_overview",
+        "data_delete",
         "agent_start_task",
         "agent_status",
+        "update_status",
+        "update_check",
+        "update_download",
+        "update_cancel",
+        "update_install",
+        "wizard_state",
+        "wizard_event",
+        "wizard_probe_machine",
+        "wizard_probe_mic",
+        "wizard_probe_ollama",
     ];
 
     /// Commands every window may call (they can only stop things).
@@ -548,6 +739,147 @@ mod tests {
         let approval = permissions(include_str!("../capabilities/approval.json"));
         assert!(!approval.contains(&allow("agent_start_task")));
         assert!(!approval.contains(&allow("agent_status")));
+    }
+
+    #[test]
+    fn update_commands_check_the_label_and_take_no_path_or_url() {
+        let src = include_str!("commands.rs");
+        for name in [
+            "update_status",
+            "update_check",
+            "update_download",
+            "update_cancel",
+            "update_install",
+        ] {
+            let at = src
+                .find(&format!("pub fn {name}("))
+                .or_else(|| src.find(&format!("pub async fn {name}(")))
+                .expect("command");
+            let body = &src[at..at + 700];
+            assert!(
+                body.contains("only_main_window(&window)?"),
+                "{name} must check the window label"
+            );
+            // The signature (up to the opening brace of the body) has no path / URL / argument.
+            let sig = &body[..body.find("{\n").expect("body")];
+            for banned in ["path", "url", "Path", "args", "PathBuf"] {
+                assert!(
+                    !sig.contains(banned),
+                    "{name} takes a {banned} parameter: {sig}"
+                );
+            }
+        }
+        // The only free-form input is the version string the user saw and the confirm flag.
+        let at = src.find("pub async fn update_install(").unwrap();
+        let sig = &src[at..at + 300];
+        assert!(sig.contains("expected_version: String") && sig.contains("allow_downgrade: bool"));
+        // Never in another window's capability, only in the settings window's.
+        let approval = permissions(include_str!("../capabilities/approval.json"));
+        for cmd in [
+            "update_check",
+            "update_download",
+            "update_cancel",
+            "update_install",
+            "update_status",
+        ] {
+            assert!(!approval.contains(&allow(cmd)), "{cmd} in approval.json");
+        }
+    }
+
+    #[test]
+    fn wizard_commands_check_the_label_take_no_path_or_url_and_probe_only_on_call() {
+        let src = include_str!("commands.rs");
+        let prod = src.split("#[cfg(test)]\nmod tests").next().unwrap();
+        for name in [
+            "wizard_state",
+            "wizard_event",
+            "wizard_probe_machine",
+            "wizard_probe_mic",
+            "wizard_probe_ollama",
+        ] {
+            let at = prod
+                .find(&format!("pub fn {name}("))
+                .or_else(|| prod.find(&format!("pub async fn {name}(")))
+                .expect("command");
+            let body = &prod[at..at + 400];
+            assert!(
+                body.contains("only_main_window(&window)?"),
+                "{name} must check the window label"
+            );
+            let sig = &body[..body.find(") ->").expect("signature")];
+            for banned in ["path", "url", "Path", "String", "args"] {
+                assert!(!sig.contains(banned), "{name} takes {banned}: {sig}");
+            }
+        }
+        // The probes are reached from their commands only; nothing at startup calls them.
+        let main = include_str!("main.rs");
+        for banned in [".wizard_probe", ".wizard_event(", ".wizard_view"] {
+            assert!(!main.contains(banned), "main.rs calls {banned}");
+        }
+        assert_eq!(prod.matches(".wizard_probe_mic()").count(), 1);
+        assert_eq!(prod.matches(".wizard_probe_ollama()").count(), 1);
+        assert_eq!(prod.matches(".wizard_probe_machine()").count(), 1);
+        // The wizard is for the settings window only.
+        for cap in [
+            include_str!("../capabilities/approval.json"),
+            include_str!("../capabilities/overlay.json"),
+            include_str!("../capabilities/preview.json"),
+        ] {
+            assert!(!cap.contains("wizard"));
+        }
+    }
+
+    #[test]
+    fn data_commands_check_the_label_and_take_no_path() {
+        let src = include_str!("commands.rs");
+        let prod = src.split("#[cfg(test)]\nmod tests").next().unwrap();
+        for name in ["data_overview", "data_delete"] {
+            let at = prod
+                .find(&format!("pub fn {name}("))
+                .or_else(|| prod.find(&format!("pub async fn {name}(")))
+                .expect("command");
+            let body = &prod[at..at + 700];
+            let first = body
+                .find("only_main_window(&window)?")
+                .expect("label check");
+            // The label check comes before anything else happens.
+            assert!(!body[..first].contains("b."), "{name}: check must be first");
+            let sig = &body[..body.find(") ->").expect("signature")];
+            for banned in ["path", "url", "Path", "PathBuf", "args"] {
+                assert!(!sig.contains(banned), "{name} takes {banned}: {sig}");
+            }
+        }
+        // The kind is the typed enum and the confirmation is a plain string token.
+        assert!(prod.contains("kind: DataKind,\n    confirm: String,"));
+        for cap in [
+            include_str!("../capabilities/approval.json"),
+            include_str!("../capabilities/overlay.json"),
+            include_str!("../capabilities/preview.json"),
+        ] {
+            assert!(!cap.contains("data-delete") && !cap.contains("data-overview"));
+        }
+    }
+
+    #[test]
+    fn no_update_check_runs_at_startup() {
+        // Nothing in the app shell calls the manager's network entry points on its own: the only
+        // callers are the commands (user clicks). The UI client calls them only from handlers.
+        let main = include_str!("main.rs");
+        for banned in [".check()", ".start_download()", ".install("] {
+            assert!(!main.contains(banned), "main.rs calls {banned}");
+        }
+        // The production part of this file (before the test module).
+        let at = include_str!("commands.rs")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap();
+        assert!(
+            at.contains("pub async fn update_check("),
+            "the scan is alive"
+        );
+        assert_eq!(at.matches("mgr.check().await").count(), 1);
+        assert_eq!(at.matches("mgr.start_download()").count(), 1);
+        assert_eq!(at.matches("mgr.install(").count(), 1);
     }
 
     #[test]

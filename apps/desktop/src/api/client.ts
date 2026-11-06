@@ -30,6 +30,13 @@ import type { SettingsPatch } from "../ipc/SettingsPatch";
 import type { Status } from "../ipc/Status";
 import type { TurnError } from "../ipc/TurnError";
 import type { TurnState } from "../ipc/TurnState";
+import type { DataDeleteDto } from "../ipc/DataDeleteDto";
+import type { DataKind } from "../ipc/DataKind";
+import type { DataOverviewDto } from "../ipc/DataOverviewDto";
+import type { UpdateStatusDto } from "../ipc/UpdateStatusDto";
+import type { MicProbeDto } from "../ipc/MicProbeDto";
+import type { WizardEvent } from "../ipc/WizardEvent";
+import type { WizardView } from "../ipc/WizardView";
 
 export const EVT = {
   turnState: "turn:state",
@@ -47,6 +54,9 @@ export const EVT = {
   downloadDone: "download_done",
   downloadFailed: "download_failed",
   agentTaskDone: "agent:task_done",
+  updateProgress: "update_progress",
+  updateDone: "update_done",
+  updateFailed: "update_failed",
 } as const;
 
 export interface EventMap {
@@ -65,6 +75,9 @@ export interface EventMap {
   download_done: DownloadDone;
   download_failed: DownloadFailed;
   "agent:task_done": AgentTaskDto;
+  update_progress: DownloadProgress;
+  update_done: DownloadDone;
+  update_failed: DownloadFailed;
 }
 
 export function on<K extends keyof EventMap>(
@@ -144,6 +157,41 @@ export const api = {
    * still needs its approvals.
    */
   agentStartTask: (transcript: string) => invoke<void>("agent_start_task", { transcript }),
+  /** Settings window only. Local state of the Updates section; never the network. */
+  updateStatus: () => invoke<UpdateStatusDto>("update_status"),
+  /**
+   * Settings window only, explicit click ONLY (never called at startup or on a timer): one GET
+   * of the fixed release URL; `updates_not_configured` without any network call in this build.
+   * Rejects with a fixed token.
+   */
+  updateCheck: () => invoke<UpdateStatusDto>("update_check"),
+  /** Explicit click: fetch the offered installer; progress arrives as update_* events. */
+  updateDownload: () => invoke<void>("update_download"),
+  updateCancel: () => invoke<void>("update_cancel"),
+  /**
+   * SEPARATE explicit click: re-verify and start the staged installer, then the app exits.
+   * `expectedVersion` is the version the user saw; `allowDowngrade` is the downgrade confirm.
+   */
+  updateInstall: (expectedVersion: string, allowDowngrade: boolean) =>
+    invoke<void>("update_install", { expectedVersion, allowDowngrade }),
+  /** Settings window only. Read-only counts and sizes of what the app stored locally. */
+  dataOverview: () => invoke<DataOverviewDto>("data_overview"),
+  /**
+   * Settings window only, explicit and confirmed (see `data/logic.ts`): erase one kind of data.
+   * `confirm` must equal the kind's token or the core refuses (`needs_confirm`). No path.
+   */
+  dataDelete: (kind: DataKind, confirm: string) =>
+    invoke<DataDeleteDto>("data_delete", { kind, confirm }),
+  /** Settings window only. First-run wizard progress; local read, runs no probe. */
+  wizardState: () => invoke<WizardView>("wizard_state"),
+  /** A wizard button (Next, Back, Skip, Retry, Finish, Rerun, or the hotkey result). Runs nothing. */
+  wizardEvent: (event: WizardEvent) => invoke<WizardView>("wizard_event", { event }),
+  /** Explicit click ONLY: read RAM and GPU (local, no network). */
+  wizardProbeMachine: () => invoke<WizardView>("wizard_probe_machine"),
+  /** Explicit click ONLY: listen up to 5 s and report a level; nothing is recorded. */
+  wizardProbeMic: () => invoke<MicProbeDto>("wizard_probe_mic"),
+  /** Explicit click ONLY: one GET of Ollama's model list on loopback. */
+  wizardProbeOllama: () => invoke<WizardView>("wizard_probe_ollama"),
   /** Dev builds only; the command does not exist in release. */
   debugPoint: (x: number, y: number, label: string) =>
     invoke<void>("debug_point", { x, y, label }),

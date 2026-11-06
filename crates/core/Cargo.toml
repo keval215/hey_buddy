@@ -26,6 +26,8 @@ audit = { path = "../audit" }
 # The desktop driver (S2-17/23): core is the only crate that wires driver + agent + policy together.
 driver = { path = "../driver" }
 policy = { path = "../policy" }
+# The pure update verifier and installer launch (ADR 0005). Only core and the desktop app list it.
+update = { path = "../update" }
 voice = { path = "../voice" }
 capture = { path = "../capture" }
 firewall = { path = "../firewall" }
@@ -41,6 +43,8 @@ secrecy = "0.10"
 tokio = { version = "1", default-features = false, features = ["sync", "time", "rt", "macros", "net"] }
 futures = { version = "0.3", default-features = false, features = ["std", "alloc"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
+# Debug log file (S3-6): the fmt layer only (already in the lock file through the dev-dependency).
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 sha2 = "0.10"
 # Unguessable approval ids (S2-16). Already in the tree via firewall and policy.
 getrandom = "0.3"
@@ -52,6 +56,14 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # Free disk space (statvfs) on unix; Windows uses a one-function kernel32 declaration.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Machine check for the first-run wizard (S3-4): GlobalMemoryStatusEx + DXGI adapter list. Same
+# crate and version as capture/firewall (already in the lock file); only features.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Graphics_Dxgi",
+  "Win32_System_SystemInformation",
+] }
 
 [dev-dependencies]
 # HostileEngine, TestSandbox, FakeEngine (L-006: never reaches the desktop tree).
@@ -65,6 +77,7 @@ tempfile = "3"
 llm = { path = "../llm", features = ["fakes"] }
 voice = { path = "../voice", features = ["fakes"] }
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "time", "test-util", "sync"] }
-tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 png = "0.18"
 base64 = "0.23"
+# Runtime-generated ed25519 test keys for the update manager tests (never committed keys).
+ring = { version = "0.17", default-features = false }

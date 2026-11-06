@@ -33,6 +33,12 @@ pub trait EventSink: Send + Sync {
     fn download_done(&self, _ev: DownloadDone) {}
     /// `download_failed`. Default: dropped.
     fn download_failed(&self, _ev: DownloadFailed) {}
+    /// `update_progress` (throttled; ids are `update`). Default: dropped.
+    fn update_progress(&self, _ev: DownloadProgress) {}
+    /// `update_done`. Default: dropped.
+    fn update_done(&self, _ev: DownloadDone) {}
+    /// `update_failed`. Default: dropped.
+    fn update_failed(&self, _ev: DownloadFailed) {}
     /// `agent:task_done` (S2-23b): how an agent task ended, as fixed tokens and counts, plus the
     /// short read answers. Default: dropped.
     fn agent_task(&self, _ev: crate::agent::AgentTaskDto) {}

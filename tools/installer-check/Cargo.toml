@@ -1,0 +1,10 @@
+[package]
+name = "installer-check"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Offline assertions on the Windows installer config, manifest and built artifacts (S3-1)"
+
+[dependencies]
+serde_json = "1"

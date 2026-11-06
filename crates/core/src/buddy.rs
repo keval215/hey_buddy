@@ -24,16 +24,17 @@ use voice::{SttProvider, TtsProvider};
 use crate::activity::ActivityProbe;
 use crate::agent::AgentTrigger;
 use crate::api::{
-    AuditClearDto, AuditExportDto, AuditPageDto, Decision, DenyListDto, DisplayDto, DownloadDone,
-    DownloadFailed, DownloadProgress, EngineSlotName, EngineSwapEvent, FirewallStatus,
-    LastRequestDto, ModelRow, Phase, PointEvent, Settings, SettingsPatch, SettingsResult, Status,
-    SwapTarget, TurnState,
+    AuditClearDto, AuditExportDto, AuditPageDto, DataDeleteDto, DataKind, DataOverviewDto,
+    Decision, DenyListDto, DisplayDto, DownloadDone, DownloadFailed, DownloadProgress,
+    EngineSlotName, EngineSwapEvent, FirewallStatus, LastRequestDto, ModelRow, Phase, PointEvent,
+    Settings, SettingsPatch, SettingsResult, Status, SwapTarget, TurnState,
 };
 use crate::audit_log::{page_dto, validate_export_path, AuditCmdError, DEFAULT_PAGE};
 use crate::consent::{
     last_request_dto, provider_allowed, ConsentError, ConsentGate, PreviewSink, PreviewStore,
     LAST_KEY,
 };
+use crate::data_paths::{DataError, DataLocations};
 use crate::deny_edit::{DenyEditError, DenyEditor};
 use crate::download::{
     DownloadError, DownloadNotice, DownloadObserver, Downloader, ModelManager, SharedDir,
@@ -47,6 +48,11 @@ use crate::point::sanitize_label;
 use crate::settings::{builtin_registry, SettingsError, SettingsStore};
 use crate::setup::BANKING_NOTICE;
 use crate::turn::{self, EngineDeps, ProviderSource, TurnControl, TurnCtx};
+use crate::wizard::{
+    self, ollama_info, safe_defaults_patch, transition, LoopbackOllamaProbe, MachineProbe,
+    MicProbe, MicProbeDto, OllamaProbe, WizardError, WizardEvent, WizardStep, WizardView,
+    MIC_TIMEOUT,
+};
 
 /// Result of a settings update; the glue re-registers the hotkey when `hotkey_changed`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +87,27 @@ struct Inner {
     hotkey_registered: bool,
     /// The kill-switch shortcut (or another kill trigger) is registered with the OS.
     kill_hotkey_registered: bool,
+    /// The wizard's microphone check holds the microphone. A hotkey press during it is refused
+    /// (set and checked under the same lock as `phase`, so the two cannot interleave).
+    mic_probing: bool,
+}
+
+/// Clears `Inner::mic_probing` when the wizard's microphone check ends, however it ends.
+struct MicProbeGuard<'a>(&'a Mutex<Inner>);
+
+impl Drop for MicProbeGuard<'_> {
+    fn drop(&mut self) {
+        lock(self.0).mic_probing = false;
+    }
+}
+
+/// Clears `Buddy::deleting` when a data deletion ends, however it ends.
+struct DeletingGuard<'a>(&'a AtomicBool);
+
+impl Drop for DeletingGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 /// Why `request_engine_swap` refused. Fixed tokens (the `Display` text), no content.
@@ -129,6 +156,9 @@ const AUDIT_NOTICE: &str =
 const MAX_KEY_LEN: usize = 512;
 
 pub struct Buddy {
+    /// A "Your data" deletion is running: downloads, agent tasks and update operations are
+    /// refused (`busy`) until it ends (set before the busy checks, cleared by `DeletingGuard`).
+    deleting: AtomicBool,
     settings: Mutex<SettingsStore>,
     inner: Mutex<Inner>,
     pub(crate) capture: Arc<dyn CaptureSource>,
@@ -153,6 +183,9 @@ pub struct Buddy {
     /// The deny-list editor; `None` until the shell calls `set_config_dir` (then the engine's
     /// own list is used unchanged).
     deny_editor: Mutex<Option<DenyEditor>>,
+    /// The two folders the app writes into (set by the shell); what "Your data" shows and erases.
+    config_dir: Mutex<Option<PathBuf>>,
+    data_dir: Mutex<Option<PathBuf>>,
     /// Latest failed swap per slot, shown as a status notice until the next request.
     swap_failures: Arc<Mutex<BTreeMap<EngineSlotName, String>>>,
     /// The turn engine's dependencies; `None` = voice engines not built.
@@ -172,6 +205,16 @@ pub struct Buddy {
     activity: Mutex<Option<Arc<dyn ActivityProbe>>>,
     /// Where `agent_mode` voice requests go (S2-23b); `None` = no agent runtime.
     agent_trigger: Mutex<Option<Arc<dyn AgentTrigger>>>,
+    /// The first-run wizard's probes (S3-4). Building them does no I/O; each runs only from its
+    /// `wizard_probe_*` method (a user click).
+    wizard_probes: Mutex<WizardProbes>,
+}
+
+struct WizardProbes {
+    machine: Arc<dyn MachineProbe>,
+    ollama: Arc<dyn OllamaProbe>,
+    /// `None`: use the turn engine's audio input when there is one.
+    mic: Option<Arc<dyn MicProbe>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -225,6 +268,7 @@ impl Buddy {
             EngineSlot::new(observer(EngineSlotName::Tts)),
         );
         Self {
+            deleting: AtomicBool::new(false),
             settings: Mutex::new(settings),
             inner: Mutex::new(Inner {
                 turn_id: 0,
@@ -232,6 +276,7 @@ impl Buddy {
                 firewall: FirewallStatus::default(),
                 hotkey_registered: false,
                 kill_hotkey_registered: false,
+                mic_probing: false,
             }),
             capture: Arc::from(capture),
             store,
@@ -247,6 +292,8 @@ impl Buddy {
             default_models_dir: Mutex::new(None),
             models_cell: Arc::default(),
             deny_editor: Mutex::new(None),
+            config_dir: Mutex::new(None),
+            data_dir: Mutex::new(None),
             swap_failures,
             engine: Mutex::new(None),
             current: Mutex::new(None),
@@ -257,6 +304,11 @@ impl Buddy {
             kill_registration_reported: AtomicBool::new(false),
             activity: Mutex::new(None),
             agent_trigger: Mutex::new(None),
+            wizard_probes: Mutex::new(WizardProbes {
+                machine: wizard::platform_machine_probe(),
+                ollama: Arc::new(LoopbackOllamaProbe::new()),
+                mic: None,
+            }),
         }
     }
 
@@ -350,6 +402,9 @@ impl Buddy {
         id: &str,
         accept_unknown_checksum: bool,
     ) -> Result<(), DownloadError> {
+        if self.is_deleting() {
+            return Err(DownloadError::Busy);
+        }
         self.model_manager()
             .ok_or(DownloadError::Unavailable)?
             .start(id, accept_unknown_checksum)
@@ -543,6 +598,7 @@ impl Buddy {
     /// Loads the list; a broken file falls back to the built-in list and is reported in the
     /// status notices.
     pub fn set_config_dir(&self, dir: PathBuf) {
+        *lock(&self.config_dir) = Some(dir.clone());
         *lock(&self.deny_editor) = Some(DenyEditor::load(dir));
     }
 
@@ -608,6 +664,7 @@ impl Buddy {
     /// `false` and the sink fails every `intent`, so the agent cannot act (fail closed).
     pub fn set_data_dir(&self, dir: PathBuf) {
         self.audit_attempted.store(true, Ordering::SeqCst);
+        *lock(&self.data_dir) = Some(dir.clone());
         let _ = self.audit.attach(&dir);
     }
 
@@ -676,6 +733,95 @@ impl Buddy {
         Ok(AuditClearDto { removed })
     }
 
+    // ------------------------------------------------------------ your data (S3-6)
+
+    fn data_locations(&self) -> DataLocations {
+        DataLocations {
+            config_dir: lock(&self.config_dir).clone(),
+            data_dir: lock(&self.data_dir).clone(),
+        }
+    }
+
+    /// `data_overview` command: counts and sizes per kind. Read-only, local, no names.
+    pub fn data_overview(&self) -> DataOverviewDto {
+        let loc = self.data_locations();
+        let kinds = loc.overview(builtin_registry());
+        let custom_models_dir = match (&loc.data_dir, self.models_dir()) {
+            (Some(d), Some(m)) => m != d.join("models"),
+            _ => false,
+        };
+        DataOverviewDto {
+            kinds,
+            custom_models_dir,
+            diagnostic_logs: lock(&self.settings).settings().diagnostic_logs,
+        }
+    }
+
+    /// `data_delete` command (explicit, confirmed user action). `confirm` must be exactly
+    /// `kind.confirm_token()`. Refused with `busy` while a task, turn, update operation or (for
+    /// everything except the models themselves) a download is running; deleting the models
+    /// stops a running download first. `update_busy` comes from the update manager (the shell
+    /// owns it).
+    pub fn data_delete(
+        &self,
+        kind: DataKind,
+        confirm: &str,
+        update_busy: bool,
+    ) -> Result<DataDeleteDto, DataError> {
+        if confirm != kind.confirm_token() {
+            return Err(DataError::NeedsConfirm);
+        }
+        // Claim the deletion FIRST so a download, task or update operation that starts from now
+        // on is refused; whatever started before is caught by the checks below. (A start that
+        // passed its own check just before this flag was set can still slip in: the window is a
+        // few instructions, and its files are only ever removed by name, never followed.)
+        if self.deleting.swap(true, Ordering::SeqCst) {
+            return Err(DataError::Busy);
+        }
+        let _deleting = DeletingGuard(&self.deleting);
+        if self.agent_busy() || lock(&self.current).is_some() || update_busy {
+            return Err(DataError::Busy);
+        }
+        let mgr = self.model_manager();
+        if kind == DataKind::Models {
+            if let Some(m) = &mgr {
+                if !m.cancel_active_and_wait(std::time::Duration::from_secs(5)) {
+                    return Err(DataError::Busy);
+                }
+            }
+        } else if self.downloading() {
+            return Err(DataError::Busy);
+        }
+        match kind {
+            DataKind::AuditLog => match self.audit.clear(true) {
+                Ok(n) => Ok(DataDeleteDto {
+                    kind,
+                    removed: n,
+                    failed: 0,
+                    restart_needed: false,
+                }),
+                Err(audit::LogError::Io) => Ok(DataDeleteDto {
+                    kind,
+                    removed: 0,
+                    failed: 1,
+                    restart_needed: false,
+                }),
+                Err(_) => Err(DataError::Unavailable),
+            },
+            _ => self.data_locations().delete(kind, builtin_registry()),
+        }
+    }
+
+    /// True while a "Your data" deletion runs (starts of downloads, tasks and update operations
+    /// are refused meanwhile).
+    pub fn is_deleting(&self) -> bool {
+        self.deleting.load(Ordering::SeqCst)
+    }
+
+    fn downloading(&self) -> bool {
+        self.model_manager().is_some_and(|m| m.is_downloading())
+    }
+
     // ------------------------------------------------------------ consent / preview
 
     /// Where the panel is shown (the glue installs this; the default cannot show anything and
@@ -696,6 +842,145 @@ impl Buddy {
         decision: Decision,
     ) -> Result<(), ConsentError> {
         self.consent.decide(request_id, decision)
+    }
+
+    // ------------------------------------------------------------ first-run wizard (S3-4)
+
+    /// Replace the wizard's probes (tests; the shell keeps the defaults). `mic: None` keeps
+    /// using the turn engine's audio input.
+    pub fn set_wizard_probes(
+        &self,
+        machine: Arc<dyn MachineProbe>,
+        ollama: Arc<dyn OllamaProbe>,
+        mic: Option<Arc<dyn MicProbe>>,
+    ) {
+        *lock(&self.wizard_probes) = WizardProbes {
+            machine,
+            ollama,
+            mic,
+        };
+    }
+
+    fn wizard_view_of(&self, state: wizard::WizardState) -> WizardView {
+        let profile = lock(&self.settings).settings().profile;
+        let ollama_tags = crate::providers::ollama_models(&profile)
+            .map(|(t, v)| std::iter::once(t).chain(v).collect())
+            .unwrap_or_default();
+        WizardView {
+            model_ids: wizard::profile_model_ids(&profile),
+            state,
+            profile,
+            ollama_tags,
+        }
+    }
+
+    /// Tests only: put saved wizard progress back.
+    #[cfg(test)]
+    pub(crate) fn set_wizard_for_test(&self, st: wizard::WizardState) {
+        lock(&self.settings).set_wizard(st).unwrap();
+    }
+
+    /// `wizard_state` command: the saved progress. Reads settings only; probes nothing.
+    pub fn wizard_view(&self) -> WizardView {
+        let state = lock(&self.settings).wizard();
+        self.wizard_view_of(state)
+    }
+
+    /// Apply one event and save the result. The only settings change this can make is the
+    /// safe-defaults patch, and only when the user confirms the safety step.
+    fn wizard_apply(&self, ev: &WizardEvent) -> Result<WizardView, WizardError> {
+        let current = lock(&self.settings).wizard();
+        let t = transition(&current, ev);
+        if t.apply_safe_defaults {
+            let now = self.get_settings();
+            self.update_settings(&safe_defaults_patch(&now))
+                .map_err(|_| WizardError::Io)?;
+        }
+        if t.state != current {
+            lock(&self.settings)
+                .set_wizard(t.state.clone())
+                .map_err(|_| WizardError::Io)?;
+        }
+        Ok(self.wizard_view_of(t.state))
+    }
+
+    /// `wizard_event` command. Events that carry a probe result are refused here: only the
+    /// `wizard_probe_*` methods may produce them.
+    pub fn wizard_event(&self, ev: &WizardEvent) -> Result<WizardView, WizardError> {
+        if ev.is_probe_result() {
+            return Err(WizardError::ForbiddenEvent);
+        }
+        self.wizard_apply(ev)
+    }
+
+    fn require_step(&self, step: WizardStep) -> Result<(), WizardError> {
+        if lock(&self.settings).wizard().step == step {
+            Ok(())
+        } else {
+            Err(WizardError::WrongStep)
+        }
+    }
+
+    /// `wizard_probe_machine` command (a click on the machine step): read RAM and GPU.
+    pub fn wizard_probe_machine(&self) -> Result<WizardView, WizardError> {
+        self.require_step(WizardStep::MachineCheck)?;
+        let probe = lock(&self.wizard_probes).machine.clone();
+        self.wizard_apply(&WizardEvent::MachineResult(probe.probe()))
+    }
+
+    /// `wizard_probe_ollama` command (a click on "Check"): one loopback request.
+    pub async fn wizard_probe_ollama(&self) -> Result<WizardView, WizardError> {
+        self.require_step(WizardStep::Ollama)?;
+        let probe = lock(&self.wizard_probes).ollama.clone();
+        let wanted = self.wizard_view().ollama_tags;
+        let info = ollama_info(probe.tags().await, &wanted);
+        self.wizard_apply(&WizardEvent::OllamaResult(info))
+    }
+
+    /// `wizard_probe_mic` command (a click on "Test microphone"): listen briefly, report a
+    /// level. Refused while a voice turn runs (the microphone is in use).
+    pub async fn wizard_probe_mic(&self) -> Result<MicProbeDto, WizardError> {
+        self.require_step(WizardStep::Microphone)?;
+        // Claim the microphone atomically with the idle check; a push-to-talk press while the
+        // check runs is refused (see `on_hotkey_pressed`).
+        let _guard = {
+            let mut i = lock(&self.inner);
+            if i.phase != Phase::Idle || i.mic_probing {
+                return Err(WizardError::Busy);
+            }
+            i.mic_probing = true;
+            MicProbeGuard(&self.inner)
+        };
+        let probe: Arc<dyn MicProbe> = match lock(&self.wizard_probes).mic.clone() {
+            Some(p) => p,
+            None => match self.engine_deps() {
+                Some(d) => Arc::new(wizard::AudioInputProbe::new(d.audio_in.clone())),
+                None => return self.mic_failed(WizardError::MicUnavailable),
+            },
+        };
+        let level = match tokio::time::timeout(MIC_TIMEOUT, probe.level()).await {
+            Ok(Ok(l)) => l,
+            Ok(Err(e)) => return self.mic_failed(e),
+            Err(_) => return self.mic_failed(WizardError::MicTimeout),
+        };
+        let view = self.wizard_apply(&WizardEvent::MicResult(level.heard()))?;
+        Ok(MicProbeDto {
+            peak: level.peak.clamp(0.0, 1.0),
+            rms: level.rms.clamp(0.0, 1.0),
+            error: None,
+            view,
+        })
+    }
+
+    /// A failed microphone check is a result (not heard), reported with its token.
+    fn mic_failed(&self, e: WizardError) -> Result<MicProbeDto, WizardError> {
+        let view = self.wizard_apply(&WizardEvent::MicResult(false))?;
+        Ok(MicProbeDto {
+            peak: 0.0,
+            rms: 0.0,
+            error: Some(e.code().to_string()),
+            view,
+        })
     }
 
     /// Cancel every pending preview (window closed, app quitting, turn cancelled).
@@ -854,6 +1139,14 @@ impl Buddy {
             if i.phase == Phase::Listening {
                 return;
             }
+            if i.mic_probing {
+                drop(i);
+                sink.error(simple_turn_error(
+                    "busy",
+                    "The microphone is being tested. Try again in a moment.",
+                ));
+                return;
+            }
         }
         if let Some(old) = self.cancel_current() {
             sink.turn_state(old);
@@ -874,6 +1167,16 @@ impl Buddy {
         self.consent.cancel_all();
         let ev = {
             let mut i = lock(&self.inner);
+            if i.mic_probing {
+                // The microphone check started after the test above.
+                drop(i);
+                self.engines_idle();
+                sink.error(simple_turn_error(
+                    "busy",
+                    "The microphone is being tested. Try again in a moment.",
+                ));
+                return;
+            }
             i.turn_id = i.turn_id.wrapping_add(1);
             i.phase = Phase::Listening;
             let turn_id = i.turn_id;

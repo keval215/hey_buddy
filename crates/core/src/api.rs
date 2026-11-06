@@ -27,6 +27,12 @@ pub const EVT_DOWNLOAD_PROGRESS: &str = "download_progress";
 pub const EVT_DOWNLOAD_DONE: &str = "download_done";
 /// A model download ended without a file (payload [`DownloadFailed`]).
 pub const EVT_DOWNLOAD_FAILED: &str = "download_failed";
+/// Update download progress (payload [`DownloadProgress`] with id `update`; settings window only).
+pub const EVT_UPDATE_PROGRESS: &str = "update_progress";
+/// The update installer is downloaded and verified (payload [`DownloadDone`]).
+pub const EVT_UPDATE_DONE: &str = "update_done";
+/// The update download ended without a file (payload [`DownloadFailed`], fixed token in `code`).
+pub const EVT_UPDATE_FAILED: &str = "update_failed";
 /// Sent only to the `preview` window.
 pub const EVT_TURN_PREVIEW: &str = "turn:preview";
 /// Sent only to the `preview` window: the pending preview ended (decided, timed out, cancelled).
@@ -246,6 +252,9 @@ pub struct Settings {
     pub agent_enabled: bool,
     /// Voice requests go to the agent instead of the chat (default OFF; needs `agent_enabled`).
     pub agent_mode: bool,
+    /// Write a local, size-capped, content-free diagnostic log under `<app data>/logs` (default
+    /// OFF; takes effect at the next start). Never uploaded.
+    pub diagnostic_logs: bool,
 }
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+Space";
@@ -268,6 +277,7 @@ impl Default for Settings {
             observe_mode: true,
             agent_enabled: false,
             agent_mode: false,
+            diagnostic_logs: false,
         }
     }
 }
@@ -307,6 +317,8 @@ pub struct SettingsPatch {
     pub agent_enabled: Option<bool>,
     #[ts(optional)]
     pub agent_mode: Option<bool>,
+    #[ts(optional)]
+    pub diagnostic_logs: Option<bool>,
 }
 
 /// Which setting an issue is about (`File` = the settings file itself).
@@ -670,4 +682,58 @@ pub struct AuditExportDto {
 pub struct AuditClearDto {
     /// How many log files were removed.
     pub removed: u32,
+}
+
+/// What "Your data" can show and erase (S3-6). One value per group of files the app writes;
+/// `docs/data.md` lists every file in each group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum DataKind {
+    /// `settings.json` (includes first-run wizard progress).
+    Settings,
+    /// `deny_list.json` (your additions to / removals from the app deny list).
+    DenyList,
+    /// The agent activity log (`audit/`).
+    AuditLog,
+    /// Downloaded model files in the default models folder.
+    Models,
+    /// Downloaded update installers (`updates/`).
+    Updates,
+    /// The optional diagnostic log files (`logs/`).
+    Logs,
+}
+
+/// One row of `data_overview`: counts and sizes only, never names, paths or content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DataKindDto {
+    pub kind: DataKind,
+    /// Files the app can see for this kind.
+    pub files: u32,
+    #[ts(type = "number")]
+    pub bytes: u64,
+}
+
+/// Result of `data_overview` (read-only, local).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DataOverviewDto {
+    pub kinds: Vec<DataKindDto>,
+    /// A models folder other than the default is in use: its files are never deleted by the app.
+    pub custom_models_dir: bool,
+    /// Diagnostic logging is switched on (it starts at the next app start).
+    pub diagnostic_logs: bool,
+}
+
+/// Result of `data_delete`. Fixed numbers only. `failed > 0` means some items could not be
+/// removed (or were refused because they are links); the rest was removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DataDeleteDto {
+    pub kind: DataKind,
+    pub removed: u32,
+    pub failed: u32,
+    /// The running app still holds the old value in memory (settings, deny list): restart it.
+    pub restart_needed: bool,
 }

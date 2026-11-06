@@ -464,7 +464,7 @@ impl AgentRuntime {
         if transcript.trim().is_empty() {
             return Err(StartError::BadRequest);
         }
-        if self.supervisor.is_running() {
+        if self.supervisor.is_running() || self.buddy.is_deleting() {
             return Err(StartError::Busy);
         }
         let me = Arc::clone(self);

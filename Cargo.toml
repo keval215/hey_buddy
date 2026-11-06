@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/*", "tools/bench", "apps/desktop/src-tauri"]
+members = ["crates/*", "tools/bench", "tools/installer-check", "tools/registry-check", "tools/registry-verify", "tools/update-sign", "apps/desktop/src-tauri"]
 # src-tauri needs system webview libs on Linux; build it explicitly with -p desktop.
 default-members = ["crates/*", "tools/bench"]
 

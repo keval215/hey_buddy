@@ -10,11 +10,16 @@ import type { SettingsPatch } from "./ipc/SettingsPatch";
 import { ModelsPanel } from "./models/ModelsPanel";
 import { RequestFields } from "./request/RequestView";
 import { AuditLogPanel } from "./settings/AuditLogPanel";
+import { DataPanel } from "./data/DataPanel";
 import { DenyListPanel } from "./settings/DenyListPanel";
+import { UpdatePanel } from "./updates/UpdatePanel";
+import { Wizard } from "./wizard/Wizard";
+import { shouldAutoShow } from "./wizard/logic";
 import type { Status } from "./ipc/Status";
 import {
   AGENT_ENABLED_NOTE,
   AGENT_MODE_NOTE,
+  DIAGNOSTIC_LOGS_NOTE,
   LOCAL_ONLY_OFF_NOTE,
   OBSERVE_MODE_NOTE,
   agentOutcomeText,
@@ -70,6 +75,15 @@ export default function App() {
   const [lastTask, setLastTask] = useState<AgentTaskDto | null>(null);
   const [taskText, setTaskText] = useState("");
   const [taskError, setTaskError] = useState<string | null>(null);
+  // The first-run wizard: opens by itself until it has been finished once (a local read only).
+  const [wizardOpen, setWizardOpen] = useState(false);
+
+  useEffect(() => {
+    void api
+      .wizardState()
+      .then((v) => setWizardOpen(shouldAutoShow(v.state)))
+      .catch(() => setWizardOpen(false));
+  }, []);
 
   useEffect(() => {
     void api.getSettings().then((s) => {
@@ -130,6 +144,26 @@ export default function App() {
   }, [current, draft]);
 
   if (!draft || !current) return <main className="p-4">Loading…</main>;
+  if (wizardOpen) {
+    return (
+      <Wizard
+        settings={current}
+        onSettings={(r) => {
+          setCurrent(r.settings);
+          setDraft(r.settings);
+          setModelsRefresh((n) => n + 1);
+        }}
+        onClose={() => {
+          setWizardOpen(false);
+          // The safety confirm may have changed settings: show the real ones.
+          void api.getSettings().then((s) => {
+            setCurrent(s);
+            setDraft(s);
+          });
+        }}
+      />
+    );
+  }
   const dirty = !isEmptyPatch(buildPatch(current, draft));
   const hkProblem = draft.hotkey.trim() === current.hotkey ? null : hotkeyProblem(draft.hotkey);
   const killProblem =
@@ -245,6 +279,25 @@ export default function App() {
         </button>
       </Section>
 
+      <Section title="Setup">
+        <div className="text-neutral-500">
+          The setup guide checks your computer, microphone and Ollama, and helps you pick models
+          and a hotkey. It never turns a protection off.
+        </div>
+        <button
+          type="button"
+          className="rounded border px-3 py-1"
+          onClick={() =>
+            void api
+              .wizardEvent("Rerun")
+              .then(() => setWizardOpen(true))
+              .catch((e) => setError(errorText(e)))
+          }
+        >
+          Run setup again
+        </button>
+      </Section>
+
       <Section title="Models folder">
         <label className="block">
           Folder
@@ -346,6 +399,15 @@ export default function App() {
           Send what I say to the agent instead of the chat
         </label>
         <div className="text-neutral-500">{AGENT_MODE_NOTE}</div>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={draft.diagnostic_logs}
+            onChange={(e) => setDraft({ ...draft, diagnostic_logs: e.target.checked })}
+          />
+          Keep a local diagnostic log
+        </label>
+        <div className="text-neutral-500">{DIAGNOSTIC_LOGS_NOTE}</div>
         <div role="status">{agentStatusText(agent)}</div>
         {current.agent_enabled && (
           <div className="flex items-center gap-2">
@@ -410,6 +472,10 @@ export default function App() {
       <DenyListPanel />
 
       <AuditLogPanel ready={status?.audit_ready ?? false} />
+
+      <UpdatePanel />
+
+      <DataPanel />
 
       <section className="border-t pt-3 text-neutral-700">
         <div>Status: {phaseText(phase)}</div>

@@ -338,10 +338,16 @@ impl Env {
             c.trip(KillReason::Hotkey);
         })
     }
-    fn advance_when_pending(&self, by: Duration) -> thread::JoinHandle<()> {
-        let (b, clock) = (self.broker.clone(), self.rig.clock.clone());
+    /// Advance the manual clock once the `nth` request (1-based) is shown AND still pending, so
+    /// an earlier, already-answered request can never trigger the jump.
+    fn advance_when_pending(&self, nth: usize, by: Duration) -> thread::JoinHandle<()> {
+        let (b, h, clock) = (
+            self.broker.clone(),
+            self.human.clone(),
+            self.rig.clock.clone(),
+        );
         thread::spawn(move || {
-            wait_until(|| b.pending_count() > 0);
+            wait_until(|| h.seen().len() >= nth && b.pending_count() > 0);
             clock.advance(by);
         })
     }
@@ -750,7 +756,7 @@ async fn plan_approval_denied_ends_the_task_and_audits() {
 async fn plan_approval_expired_ends_the_task() {
     let e = env();
     e.human.script(&[Act::Silent]);
-    let t = e.advance_when_pending(Duration::from_secs(130));
+    let t = e.advance_when_pending(1, Duration::from_secs(130));
     let r = e.run(&notepad_plan()).await;
     t.join().unwrap();
     assert_eq!(r.outcome, TaskOutcome::Expired(Stage::LiveOffer), "{r:?}");
@@ -807,7 +813,7 @@ async fn submit_is_its_own_approval_and_plan_approval_alone_stops_before_it() {
 async fn step_approval_expired_and_kill_during_step_approval() {
     let e = env();
     e.human.script(&[Act::Approve, Act::Silent]);
-    let t = e.advance_when_pending(Duration::from_secs(40));
+    let t = e.advance_when_pending(2, Duration::from_secs(40));
     let r = e.run(&form_plan()).await;
     t.join().unwrap();
     assert_eq!(

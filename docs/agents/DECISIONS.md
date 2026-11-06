@@ -66,3 +66,7 @@ Status: accepted (user)
 ## D-009 BindFacts for the agent supervisor — 2026-11-04 — PROVISIONAL (pending user review)
 Decision: `UnknownFacts` (only reads run) is the default. `ReverifiedAtExecute` (bind-time not-elevated/not-secure claims, enforced by Firewall::revalidate + LiveTarget::verify_focus before every input, fail closed) may be chosen by the wiring only together with the real Windows actuator (S2-14d) and the manual Windows check. `AgentDriver` impls must keep both re-checks. Scheduled origin = Read-only; a plan with any Never step is refused whole (stricter than ADR).
 Status: provisional — pending user review
+
+## D-010 ADR 0005 auto-update — 2026-11-04 — PROVISIONAL (pending user review)
+Decision: user-clicked check only (no polling) of one fixed GitHub Releases `latest/download/update-manifest.json` (HTTPS, host-allowlisted redirects). DSSE-style envelope, ed25519 via `ring` (already in tree) over PAE(payloadType, exact bytes); embedded keys only (2 offline planned), stateless rotation via endorsement. Pure crate `update` (no IO/network, CI tree guard); HTTP+download in buddy-core via generalised S2-4 downloader. Install = separate click: private-ACL dir copy, hash via deny-write handle held across CreateProcessW (no args). TRUSTED_KEYS empty => `updates_not_configured`, no network call. Downgrade only if current revoked + confirm. Open Qs for user: ADR §13. See docs/adr/0005-auto-update.md.
+Status: provisional — pending user review

@@ -16,6 +16,7 @@ use crate::api::{
 };
 use crate::models_path::validate_models_dir;
 use crate::route::effective_vision_mode;
+use crate::wizard::WizardState;
 
 /// Fixed-text errors (no paths, no content).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -187,6 +188,24 @@ struct Stored {
     observe_mode: bool,
     agent_enabled: bool,
     agent_mode: bool,
+    /// Local diagnostic log file (S3-6), default OFF; read at startup.
+    diagnostic_logs: bool,
+    /// First-run wizard progress (S3-4). Read leniently: a bad value becomes the fail-closed
+    /// default (see [`SettingsStore::load`]).
+    #[serde(deserialize_with = "lenient_wizard")]
+    wizard: WizardState,
+}
+
+fn lenient_wizard<'de, D: serde::Deserializer<'de>>(d: D) -> Result<WizardState, D::Error> {
+    Ok(WizardState::from_value(serde_json::Value::deserialize(d)?))
+}
+
+/// The file has a `wizard` entry the wizard module does not accept.
+fn wizard_entry_invalid(bytes: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()
+        .and_then(|mut v| v.get_mut("wizard").map(serde_json::Value::take))
+        .is_some_and(|w| WizardState::try_from_value(w).is_none())
 }
 
 impl Default for Stored {
@@ -204,6 +223,8 @@ impl Default for Stored {
             observe_mode: d.observe_mode,
             agent_enabled: d.agent_enabled,
             agent_mode: d.agent_mode,
+            diagnostic_logs: d.diagnostic_logs,
+            wizard: WizardState::default(),
         }
     }
 }
@@ -304,11 +325,31 @@ impl SettingsStore {
                 let parsed = serde_json::from_slice::<Stored>(&bytes).map_err(|_| ());
                 match parsed {
                     Ok(s) => {
-                        let (clean, issues) = s.sanitize(None);
+                        let (mut clean, issues) = s.sanitize(None);
+                        // A wizard entry we do not understand means the file was edited or
+                        // damaged: the wizard starts over AND the protections go back to their
+                        // safe values (fail closed). Tighten only: vision Always becomes Auto,
+                        // but Off stays Off. A `File`/`Corrupt` load issue tells the UI.
+                        let mut issues = issues;
+                        let reset = wizard_entry_invalid(&bytes);
+                        if reset {
+                            let d = Stored::default();
+                            clean.local_only = d.local_only;
+                            clean.observe_mode = d.observe_mode;
+                            if clean.vision_mode == VisionMode::Always {
+                                clean.vision_mode = VisionMode::Auto;
+                            }
+                            clean.agent_enabled = d.agent_enabled;
+                            clean.agent_mode = d.agent_mode;
+                            clean.diagnostic_logs = d.diagnostic_logs;
+                        }
                         if issues.iter().any(|i| i.field != SettingsField::ModelsDir) {
                             store.load_error = Some(ERR_SETTINGS_CORRUPT);
                         } else {
                             store.stored = clean;
+                            if reset {
+                                issues.push(issue(SettingsField::File, IssueCode::Corrupt));
+                            }
                             store.load_issues = issues;
                         }
                     }
@@ -330,6 +371,25 @@ impl SettingsStore {
         &self.load_issues
     }
 
+    /// The wizard's saved progress (the fail-closed default when none or unreadable).
+    pub fn wizard(&self) -> WizardState {
+        self.stored.wizard.clone()
+    }
+
+    /// Persist the wizard progress atomically. Nothing else in the file changes. An invalid
+    /// state is refused.
+    pub fn set_wizard(&mut self, w: WizardState) -> Result<(), SettingsError> {
+        if !w.is_valid() {
+            return Err(SettingsError::Io);
+        }
+        let mut next = self.stored.clone();
+        next.wizard = w;
+        let json = serde_json::to_vec_pretty(&next).map_err(|_| SettingsError::Io)?;
+        write_atomic(&self.path, &json).map_err(|_| SettingsError::Io)?;
+        self.stored = next;
+        Ok(())
+    }
+
     /// Current settings with the effective vision mode.
     pub fn settings(&self) -> Settings {
         Settings {
@@ -346,6 +406,7 @@ impl SettingsStore {
             observe_mode: self.stored.observe_mode,
             agent_enabled: self.stored.agent_enabled,
             agent_mode: self.stored.agent_mode,
+            diagnostic_logs: self.stored.diagnostic_logs,
         }
     }
 
@@ -389,6 +450,9 @@ impl SettingsStore {
         }
         if let Some(v) = patch.agent_mode {
             next.agent_mode = v;
+        }
+        if let Some(v) = patch.diagnostic_logs {
+            next.diagnostic_logs = v;
         }
         let (next, issues) = next.sanitize(Some(patch));
         let json = serde_json::to_vec_pretty(&next).map_err(|_| SettingsError::Io)?;
@@ -1115,6 +1179,7 @@ mod tests {
         "observe_mode", // dry run first (default ON); turning it off only skips that question, never a check
         "agent_enabled", // opt-in to the agent (default OFF); the readiness checks still apply
         "agent_mode",   // route voice requests to the agent (default OFF)
+        "diagnostic_logs", // local, size-capped, content-free log file (default OFF)
     ];
 
     /// Words that would name a safety switch. Checked on top of the allowlist.
@@ -1157,7 +1222,11 @@ mod tests {
             shown, want,
             "Settings fields changed: update ALLOWED_FIELDS consciously"
         );
-        let stored: Vec<String> = field_names(serde_json::to_value(Stored::default()).unwrap());
+        // `wizard` is first-run progress (S3-4): stored, but never settable through a patch
+        // (only `SettingsStore::set_wizard`, which takes a validated state).
+        let mut stored: Vec<String> = field_names(serde_json::to_value(Stored::default()).unwrap());
+        assert!(stored.contains(&"wizard".to_string()));
+        stored.retain(|f| f != "wizard");
         for f in &stored {
             assert!(want.contains(f), "stored field {f} is not allow-listed");
         }
@@ -1174,6 +1243,7 @@ mod tests {
                 observe_mode: Some(true),
                 agent_enabled: Some(false),
                 agent_mode: Some(false),
+                diagnostic_logs: Some(false),
             })
             .unwrap(),
         );

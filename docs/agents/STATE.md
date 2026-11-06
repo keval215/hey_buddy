@@ -68,14 +68,14 @@ Branches: step2a/hardening -> step2b/agent-harness -> step3/packaging -> step4/f
 
 | Ticket | Title | Status | Rounds | Notes |
 |---|---|---|---|---|
-| S3-1 | Windows installer build (unsigned) | TODO | 0 | after Step 2 |
-| S3-2 | [ARCH] Auto-update design -> ADR 0005 | TODO | 0 | provisional |
-| S3-3 | Update manifest parser + signature verifier (no real keys) | TODO | 0 |  |
-| S3-4 | First-run wizard | TODO | 0 |  |
-| S3-5 | Registry data tooling (real urls/checksums) | TODO | 0 | filling values = BLOCKED-ON-USER |
-| S3-6 | Data locations, logs, delete my data | TODO | 0 |  |
-| S3-7 | Release pipeline (draft only) | TODO | 0 |  |
-| S3-8 | Packaging exit test + checklist | TODO | 0 |  |
+| S3-1 | Windows installer build (unsigned) | DONE | 2 | round 2 accepted by orch; NSIS/CI build untested |
+| S3-2 | [ARCH] Auto-update design -> ADR 0005 | DONE | 0 | D-010 provisional |
+| S3-3 | Update manifest parser + signature verifier (no real keys) | DONE | 2 | round 2 accepted; TRUSTED_KEYS empty; Windows launch untested |
+| S3-4 | First-run wizard | DONE | 2 | round 2 accepted; Windows probes untested |
+| S3-5 | Registry data tooling (real urls/checksums) | DONE | 2 | accepted by orch (round 2) |
+| S3-6 | Data locations, logs, delete my data | DONE | 2 | accepted by orch (round 2) |
+| S3-7 | Release pipeline (draft only) | DONE | 2 | accepted by orch (round 2) |
+| S3-8 | Packaging exit test + checklist | DONE | 2 | accepted by orch (round 2) |
 | S4-1 | [ARCH] OCR engine + image redaction -> ADR 0006 | TODO | 0 | provisional |
 | S4-2 | PII detector (pure) | TODO | 0 |  |
 | S4-3 | OCR adapters + fakes | TODO | 0 | real adapter BLOCKED-ON-USER to verify |
@@ -111,6 +111,9 @@ Branches: step2a/hardening -> step2b/agent-harness -> step3/packaging -> step4/f
 - S2-17+23a DONE (review APPROVED round 1, 5 MINOR deferred to S2-23b): AgentSupervisor in core/agent (38 tests), D-009. Minors to fix in S2-23b: kill check after attach before engine.plan; vacuous fingerprint check; target_denied doc; per-phase kill tests + deny-listed foreground app + limits tests; audit sink identity; bounded-wait tests; doc on AgentDriver SAFE-IF.
 - S2-23b DONE (APPROVED, 4 MINOR -> fold into S2-22): AgentRuntime glue, agent_start_task/agent_status (main window only), settings (observe_mode ON, agent_enabled/agent_mode OFF), ReadAnswer TTS, exit-test doc in manual-tests.md. Minors: foreground-filter test vacuous (mutation survives); gate audit_sink() writable accessor -> replace by `uses_audit_sink` predicate; limit stop may speak 'Stopped.' twice; agent_enabled read only at task start (document). Untested on Windows: WindowsAgentDriver, platform_agent, WinActuator, sandbox, approval window, real planning, TTS, whole exit test.
 - S2-22+22b DONE (APPROVED): red-team suite 88 tests (docs/redteam.md, tools/check-redteam.sh, CI step); F-1 purchase lexicon, F-1b width/confusable fold (in-house, escalate-only), F-2 drift `changed`. Known table gaps: Armenian/IPA lookalikes, micro sign. Mixed-script label = submit-level (own approval).
+- S3-3 DONE: crates/update (pure), core::update manager, 5 settings-window commands, Updates UI, tools/update-sign, CI step (TRUSTED_KEYS empty tripwire: S3-7 must update when real keys added). Deviations from ADR 0005 §9 listed in docs/update.md. BLOCKED-ON-USER: generate 2 offline keys, OWNER_TODO, verify GitHub CDN host, SmartScreen/Smart App Control behaviour. Env note: `rm -rf` is denied for orch/coders; scratchpad copies (mut, mt) remain (~16 GB), avoid new heavy scratch copies.
+- S3-4 DONE: core/wizard pure state machine + probes (machine/mic/ollama) + 5 commands + React wizard; safety confirm is monotonic (only tightens); VRAM threshold 3.5 GiB / RAM 12 GiB (MIN_VRAM_MB const; user to confirm). Follow-ups: Retry event unused by UI; docs/models.md missing (S3-5).
+- STEP 3 COMPLETE on Linux (S3-1..S3-8). S3-5/6 DONE: registry-verify/registry-check tools (values stay TODO), data_paths, bounded diagnostic logs (default OFF), confirmed delete-my-data (state.json kept deliberately), `deleting` busy guard. S3-7/8 DONE: draft-only release.yml + tools/check-workflows (37 tests), RELEASING.md, Step 3 exit test, docs/pr/step3.md. Red-team flake fixed (deterministic clock advance). BLOCKED-ON-USER: update keys/OWNER_TODO/TRUSTED_KEYS + CI tripwire update, registry urls/sha256, installer+NSIS on Windows, SHA-pin release.yml actions before first release, cargo-cyclonedx/cargo-deny version VERIFY, SmartScreen/Smart App Control, CDN host, Tauri uninstall checkbox contents. Next: Step 4 on branch step4/firewall-v1 (from step3/packaging).
 - Remaining 2B plan (merged tickets to save overhead): [S2-10+S2-15] agent crate: protocol + EngineSandbox (Windows AppContainer/Job cfg) + MinimalEngine + Process/Fake/Hostile engines + gate-hook adapter; [S2-16] approval UI; [S2-17+18+19+20+21+23] core agent supervisor/runner (plan-then-execute wiring, injection defences, read-only task, dry-run/live, form demo, background limits, e2e on fakes, reuse controller.gate(), audit sink, kill controller); [S2-22] red-team suite.
 
 ## 2B execution order (dependency-driven, branch step2b/agent-harness)

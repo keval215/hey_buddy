@@ -117,6 +117,51 @@ jobs:
           if cargo tree -p audit -e normal | grep -E '(^|[^a-z_-])(tokio|reqwest|llm|capture|voice|driver|windows) '; then
             echo "audit crate has a forbidden dependency"; exit 1
           fi
+      - name: ADR 0005 - update crate stays pure; only core and the desktop app use it; installer launch and key generation stay where they belong (S3-3)
+        run: |
+          # 1. Pure and sync: no network stack, async runtime, model, capture, platform-service or app crate.
+          #    Host tree and all-targets tree (the Windows launcher dependency is target-gated).
+          cargo tree -p update -e normal | grep -qE '(^|[^a-z_-])ring ' # not vacuous
+          cargo tree -p update -e normal --target all | grep -qE '(^|[^a-z_-])windows ' # not vacuous
+          for tree in "cargo tree -p update -e normal" "cargo tree -p update -e normal --target all"; do
+            if $tree | grep -E '(^|[^a-z_-])(reqwest|hyper|tokio|futures|async-trait|llm|capture|voice|firewall|driver|policy|agent|buddy-core|tauri) '; then
+              echo "update crate has a forbidden dependency ($tree)"; exit 1
+            fi
+          done
+          # 2. Only crates/core, the desktop app and the maintainer tool may list `update` in a
+          #    Cargo.toml (also as a renamed or path dependency).
+          hits=$(grep -rlE '^[[:space:]]*update[[:space:]]*=|package[[:space:]]*=[[:space:]]*"update"|path[[:space:]]*=[[:space:]]*"[^"]*(crates/|\.\./)update/?"' --include=Cargo.toml apps crates tools \
+            | grep -vE '^(crates/core|crates/update|apps/desktop/src-tauri|tools/update-sign)/Cargo.toml$' || true)
+          if [ -n "$hits" ]; then
+            echo "update listed in Cargo.toml outside crates/core, apps/desktop and tools/update-sign:"; echo "$hits"; exit 1
+          fi
+          grep -qE '^update[[:space:]]*=' crates/core/Cargo.toml # not vacuous
+          # 3. CreateProcessW only in the three reviewed files.
+          hits=$(grep -rn 'CreateProcessW' --include='*.rs' apps crates tools \
+            | grep -vE '^(crates/update/src/launch/windows|crates/driver/src/platform/windows|crates/agent/src/sandbox/windows)\.rs:' \
+            | grep -vE ':[0-9]+:[[:space:]]*//' || true)  # comments may name it
+          if [ -n "$hits" ]; then
+            echo "CreateProcessW outside the reviewed files:"; echo "$hits"; exit 1
+          fi
+          grep -q 'CreateProcessW' crates/update/src/launch/windows.rs # not vacuous
+          # 4. The launcher never uses the shell, an elevation verb or a command interpreter.
+          if grep -rniE 'ShellExecute|runas|cmd\.exe|powershell' --include='*.rs' crates/update; then
+            echo "shell / elevation / interpreter use in crates/update"; exit 1
+          fi
+          test -f crates/update/src/launch/windows.rs # the grep above is not vacuous
+          # 5. Key generation and private keys only in test code (and the offline maintainer tool).
+          hits=$(grep -rnE 'generate_pkcs8|from_pkcs8|Ed25519KeyPair|PRIVATE KEY' --include='*.rs' --include='*.toml' --include='*.json' --include='*.yml' apps crates tools \
+            | grep -vE '^(crates/update/src/tests\.rs|crates/core/src/update/tests\.rs|tools/update-sign/)' \
+            | grep -vE '^\.github/' || true)
+          if [ -n "$hits" ]; then
+            echo "private-key code outside test modules and tools/update-sign:"; echo "$hits"; exit 1
+          fi
+          grep -q 'generate_pkcs8' crates/update/src/tests.rs # not vacuous
+          # ... and those test modules are cfg(test) only.
+          grep -B1 -E '^mod tests;$' crates/update/src/lib.rs | grep -q '^#\[cfg(test)\]$'
+          grep -B1 -E '^mod tests;$' crates/core/src/update/mod.rs | grep -q '^#\[cfg(test)\]$'
+          # 6. The embedded key list is empty until the maintainer adds reviewed public keys (S3-7).
+          grep -qE 'pub const TRUSTED_KEYS: &\[TrustedKey\] = &\[\];' crates/update/src/config.rs
       - name: ADR 0004 - driver dependency graph (no llm, capture, voice, core, engine, network, tauri, platform crates) and nothing below it depends on it
         run: |
           # The Windows actuator (S2-14d) sits behind cfg(windows), so the Linux tree never lists it.
@@ -185,7 +230,7 @@ jobs:
           if grep -rnE 'GetClipboardData|OpenClipboard' --include='*.rs' crates/firewall crates/driver crates/action crates/policy; then
             echo "clipboard read found"; exit 1
           fi
-      - name: compile_fail doctests report the pinned error codes (policy, driver)
+      - name: compile_fail doctests report the pinned error codes (policy, driver, update)
         run: bash tools/check-doctest-codes.sh
       - name: ADR 0003 - ApprovedAction is minted only in crates/policy/src/gate.rs
         run: |
@@ -242,6 +287,22 @@ jobs:
           if cargo tree -p desktop -e features | grep -E 'feature "fakes"'; then
             echo "fakes feature enabled in desktop tree"; exit 1
           fi
+      - name: Installer config and manifest assertions (S3-1, static, offline)
+        run: |
+          out=$(cargo run -q -p installer-check)
+          echo "$out"
+          echo "$out" | grep -q 'installer-check: OK' # not vacuous
+      - name: Workflow safety checks and their unit tests (S3-7; release is draft-only, no secrets, pinned actions)
+        run: |
+          python3 -I tools/check-workflows_test.py
+          out=$(python3 -I tools/check-workflows.py)
+          echo "$out"
+          echo "$out" | grep -qE 'check-workflows: OK \([2-9] files\)' # not vacuous (ci.yml and release.yml at least)
+      - name: Model registry check (S3-5, static, offline; values stay TODO until a maintainer fills them)
+        run: |
+          out=$(cargo run -q -p registry-check -- models/registry.json)
+          echo "$out"
+          echo "$out" | grep -qE 'registry-check: OK \([1-9][0-9]+ entries' # not vacuous (at least 10)
       - name: Licence check
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
@@ -267,5 +328,19 @@ jobs:
       - name: Build frontend (Tauri embeds dist)
         run: pnpm --filter desktop build
       - run: cargo check --workspace
+      # Kept on purpose: builds the app with the BASE config (no installer overlay, no buddy-agent
+      # resource), proving a plain `tauri build` still works. The installer step below rebuilds with
+      # the overlay.
       - name: Tauri build
         run: pnpm --filter desktop tauri build --no-bundle
+      - name: Build unsigned NSIS installer + SHA256SUMS + assertions (S3-1; no signing, no secrets)
+        shell: pwsh
+        run: ./tools/build-installer.ps1
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hey_buddy-installer
+          path: |
+            dist/installer/*-setup.exe
+            dist/installer/SHA256SUMS
+          if-no-files-found: error
